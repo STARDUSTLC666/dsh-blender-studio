@@ -2,6 +2,13 @@
 
 [返回简介](README.md) · [完整说明](docs/REFERENCE.zh.md) · [Live Bridge 指南](docs/BRIDGE.md) · [验证说明](docs/VALIDATION.md)
 
+## [0.1.1] - 2026-11-24
+
+- **工作台交互可发现性修复**：为已归档工程卡片与素材/成品导出行操作区显式标记 `data-always-visible="true"`，使「恢复工程 / 下载 / 移除 / 在舞台查看」按钮无需悬停即可始终可见且可点击。
+- **2×2 四视角质检取景优化**：将自动四视角质检拼图（`contact_sheet`）正视图、3/4 视角与俯视角的相机距离放宽约 `1.3×`，为主体模型顶部与底座四周留出更充裕的安全构图边距。
+- **Windows CI 测试稳定性**：在 Python AST 校验测试中强制开启 UTF-8 编码解码（`PYTHONUTF8=1` 与二进制 UTF-8 stdin/文件读取），消除 Windows CI 下 `cp1252` 编码报错。
+- **Maintenance Release (`0.1.1`)**: keeps row action buttons (`Restore` / `Download` / `Remove` / `View on Stage`) always visible (`data-always-visible="true"`) on non-clickable archived project cards and asset/export rows; widens 2×2 four-angle QC contact-sheet auto-camera framing (~1.3× distance margin) for clean headroom across Front, 3/4, and Top quadrants; and enforces UTF-8 decoding in Python AST tests for Windows CI.
+
 ## 0.1.0 (2026-11-24)
 
 - **混合双轨 3D 创作与渲染引擎（Hybrid Architecture，`dsh-blender-studio`）**：

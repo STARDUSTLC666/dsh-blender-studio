@@ -79,6 +79,13 @@ const SAMPLE_PROJECT = {
   },
 }
 
+const SAMPLE_ARCHIVED_PROJECT = {
+  ...SAMPLE_PROJECT,
+  id: '22222222-3333-4444-8555-666666666666',
+  archived: true,
+  title: '归档 3D 展台示例',
+}
+
 const SAMPLE_ENV = {
   ready: true,
   active: {
@@ -289,7 +296,7 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
         ok: true,
         value: {
           projects: [SAMPLE_PROJECT],
-          archivedProjects: [],
+          archivedProjects: [SAMPLE_ARCHIVED_PROJECT],
           environment: SAMPLE_ENV,
           templates: [
             { id: 'product-studio', zh: '产品棚拍展台', en: 'Product Studio', recommendedEngine: 'EEVEE' },
@@ -428,6 +435,26 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
   assert.equal(rootSection.getAttribute('data-dsh-font'), 'songkai')
   assert.equal(dom.window.localStorage.getItem('dsh-stardust:ui-font'), 'songkai')
 
+  // 2b. Regression check (v0.1.1): Archived project cards keep .dsh-row-actions always visible
+  const libTabs = [...container.querySelectorAll('.dsh-header [role="tab"]')]
+  const archivesTab = libTabs.find((el) => /已归档|Archived/.test(el.textContent || ''))
+  assert.ok(archivesTab, 'Archived library tab exists')
+  await act(async () => {
+    archivesTab.click()
+  })
+  const archivedCardActions = container.querySelector('.bl-project-card.dsh-row .dsh-row-actions')
+  assert.ok(archivedCardActions, 'Archived project card renders .dsh-row-actions')
+  assert.equal(
+    archivedCardActions.getAttribute('data-always-visible'),
+    'true',
+    'Archived project card .dsh-row-actions must set data-always-visible="true" so Restore is clickable without hover',
+  )
+  const projectsTab = libTabs.find((el) => /3D 工程|Projects/.test(el.textContent || ''))
+  assert.ok(projectsTab, 'Active Projects library tab exists')
+  await act(async () => {
+    projectsTab.click()
+  })
+
   // 3. Open the project from the library -> OP-DSH 3D Studio Console + Canvas 3D viewport
   const openBtn = container.querySelector('button.w-row-button')
   assert.ok(openBtn, 'project row button present in library')
@@ -499,6 +526,18 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
   assert.match(container.textContent || '', /studio_soft\.hdr/)
   assert.match(container.textContent || '', /Poly Haven/)
   assert.ok(container.querySelector('a[href*="kind=source"]'), 'Source ZIP backup link renders')
+  const assetArtifactActions = [...container.querySelectorAll('.bl-ae-row .dsh-row-actions')]
+  assert.ok(
+    assetArtifactActions.length >= 2,
+    `Expected both asset and artifact rows to render .dsh-row-actions (found ${assetArtifactActions.length})`,
+  )
+  for (const actionsEl of assetArtifactActions) {
+    assert.equal(
+      actionsEl.getAttribute('data-always-visible'),
+      'true',
+      'Asset/artifact row .dsh-row-actions must set data-always-visible="true"',
+    )
+  }
 
   // 8. Bridge & Environment tab
   const bridgeTab = headerTabs.find((el) => /桥接与环境|Bridge/.test(el.textContent || ''))

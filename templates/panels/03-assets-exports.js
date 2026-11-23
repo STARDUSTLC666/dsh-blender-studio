@@ -212,7 +212,7 @@ function BlenderAssetsExportsPanel({
                 ),
                 h(
                   'div',
-                  { className: 'dsh-row-actions', 'data-window-drag-exclude': '' },
+                  { className: 'dsh-row-actions', 'data-always-visible': 'true', 'data-window-drag-exclude': '' },
                   h(
                     'a',
                     {
@@ -514,7 +514,7 @@ function BlenderAssetsExportsPanel({
                 ),
                 h(
                   'div',
-                  { className: 'dsh-row-actions', 'data-window-drag-exclude': '' },
+                  { className: 'dsh-row-actions', 'data-always-visible': 'true', 'data-window-drag-exclude': '' },
                   isImage || isVideo
                     ? h(
                         W.Button,
