@@ -1,0 +1,1810 @@
+// 02-studio.js — OP-DSH 3D Studio Console, self-contained HTML5 Canvas 3D software renderer,
+// multi-view artifact switcher (Stage / Still / 4-View QC / Animation), Outliner, bpy Script Editor & Form mode.
+
+const CAMERA_PRESET_ANGLES = {
+  three_quarter: { yaw: 0.68, pitch: 0.44, zoom: 1.0, ortho: false },
+  front: { yaw: 0.0, pitch: 0.12, zoom: 1.05, ortho: false },
+  isometric: { yaw: 0.785, pitch: 0.615, zoom: 1.02, ortho: true },
+  top: { yaw: 0.0, pitch: 1.38, zoom: 0.96, ortho: false },
+  closeup: { yaw: 0.46, pitch: 0.30, zoom: 1.48, ortho: false },
+  turntable: { yaw: 0.62, pitch: 0.38, zoom: 1.0, ortho: false },
+};
+
+const LIGHTING_PALETTES = {
+  studio_3point: { bgTop: '#2b3240', bgBot: '#1d222c', key: '#fff7e6', fill: '#93c5fd', rim: '#f8fafc', ambient: 0.34, keyDir: [0.65, -0.55, 0.78] },
+  soft_daylight: { bgTop: '#334155', bgBot: '#232c3a', key: '#ffffff', fill: '#bae6fd', rim: '#fef3c7', ambient: 0.48, keyDir: [0.45, -0.35, 0.90] },
+  dramatic_rim: { bgTop: '#232634', bgBot: '#171a24', key: '#fdba74', fill: '#475569', rim: '#38bdf8', ambient: 0.20, keyDir: [0.85, -0.25, 0.55] },
+  neon_cyber: { bgTop: '#24223b', bgBot: '#181c2b', key: '#f472b6', fill: '#38bdf8', rim: '#a78bfa', ambient: 0.28, keyDir: [0.72, -0.60, 0.58] },
+  clay_overcast: { bgTop: '#363c48', bgBot: '#272c36', key: '#f1f5f9', fill: '#cbd5e1', rim: '#e2e8f0', ambient: 0.52, keyDir: [0.25, -0.25, 0.94] },
+};
+
+function parseHexRgb(hex) {
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(hex || '').trim());
+  if (!m) return [59, 130, 246];
+  return [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)];
+}
+
+function shadeFaceColor(baseRgb, intensity, materialPreset, rimFactor) {
+  let factor = Math.max(0.14, Math.min(1.55, intensity));
+  let alpha = 0.96;
+  let specBoost = 0;
+  if (materialPreset === 'toon_cel') {
+    factor = factor > 0.85 ? 1.15 : factor > 0.5 ? 0.82 : 0.46;
+  } else if (materialPreset === 'brushed_metal') {
+    specBoost = Math.pow(Math.max(0, intensity - 0.52), 2) * 115 + rimFactor * 36;
+    factor = 0.38 + factor * 0.72;
+  } else if (materialPreset === 'ceramic_gloss') {
+    specBoost = Math.pow(Math.max(0, intensity - 0.68), 3) * 145 + rimFactor * 24;
+  } else if (materialPreset === 'frosted_glass') {
+    alpha = 0.62;
+    specBoost = 32 + rimFactor * 48;
+  } else if (materialPreset === 'clay_matte') {
+    factor = 0.42 + factor * 0.58;
+  }
+  const r = Math.max(0, Math.min(255, Math.round(baseRgb[0] * factor + specBoost)));
+  const g = Math.max(0, Math.min(255, Math.round(baseRgb[1] * factor + specBoost)));
+  const b = Math.max(0, Math.min(255, Math.round(baseRgb[2] * factor + specBoost)));
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function makeBoxFaces(cx, cy, cz, sx, sy, sz, rgb, wireColor, layer = 2) {
+  const hx = sx / 2;
+  const hy = sy / 2;
+  const hz = sz / 2;
+  const v = [
+    [cx - hx, cy - hy, cz - hz],
+    [cx + hx, cy - hy, cz - hz],
+    [cx + hx, cy + hy, cz - hz],
+    [cx - hx, cy + hy, cz - hz],
+    [cx - hx, cy - hy, cz + hz],
+    [cx + hx, cy - hy, cz + hz],
+    [cx + hx, cy + hy, cz + hz],
+    [cx - hx, cy + hy, cz + hz],
+  ];
+  const quads = [
+    [4, 5, 6, 7], // top +Z
+    [0, 3, 2, 1], // bottom -Z
+    [0, 1, 5, 4], // front -Y
+    [2, 3, 7, 6], // back +Y
+    [1, 2, 6, 5], // right +X
+    [3, 0, 4, 7], // left -X
+  ];
+  return quads.map(idx => ({ pts: idx.map(i => v[i]), rgb, wire: wireColor, layer }));
+}
+
+function makeCylinderFaces(cx, cy, cz, rTop, rBot, hVal, segs, rgb, wireColor, layer = 2) {
+  const faces = [];
+  const z0 = cz - hVal / 2;
+  const z1 = cz + hVal / 2;
+  const topRing = [];
+  const botRing = [];
+  for (let i = 0; i < segs; i++) {
+    const a = (i / segs) * Math.PI * 2;
+    const ca = Math.cos(a);
+    const sa = Math.sin(a);
+    topRing.push([cx + ca * rTop, cy + sa * rTop, z1]);
+    botRing.push([cx + ca * rBot, cy + sa * rBot, z0]);
+  }
+  for (let i = 0; i < segs; i++) {
+    const n = (i + 1) % segs;
+    faces.push({ pts: [botRing[i], botRing[n], topRing[n], topRing[i]], rgb, wire: wireColor, layer });
+  }
+  faces.push({ pts: topRing.slice(), rgb, wire: wireColor, layer });
+  faces.push({ pts: botRing.slice().reverse(), rgb, wire: wireColor, layer });
+  return faces;
+}
+
+function makeUvSphereFaces(cx, cy, cz, radius, rings, segs, rgb, wireColor, layer = 2) {
+  const faces = [];
+  const pt = (lat, lon) => [
+    cx + radius * Math.cos(lat) * Math.cos(lon),
+    cy + radius * Math.cos(lat) * Math.sin(lon),
+    cz + radius * Math.sin(lat),
+  ];
+  for (let r = 0; r < rings; r++) {
+    const lat0 = -Math.PI / 2 + (r / rings) * Math.PI;
+    const lat1 = -Math.PI / 2 + ((r + 1) / rings) * Math.PI;
+    for (let s = 0; s < segs; s++) {
+      const lon0 = (s / segs) * Math.PI * 2;
+      const lon1 = ((s + 1) / segs) * Math.PI * 2;
+      faces.push({
+        pts: [pt(lat0, lon0), pt(lat0, lon1), pt(lat1, lon1), pt(lat1, lon0)],
+        rgb,
+        wire: wireColor,
+        layer,
+      });
+    }
+  }
+  return faces;
+}
+
+function buildTemplateGeometry(template, accentRgb, phase) {
+  const neutralLight = [212, 220, 232];
+  const neutralMid = [148, 163, 184];
+  const neutralDark = [82, 95, 115];
+  const warmWood = [194, 152, 114];
+  const mintLeaf = [74, 222, 128];
+  const wire = 'rgba(248,250,252,0.16)';
+  const faces = [];
+
+  if (template === 'product-studio') {
+    faces.push(...makeCylinderFaces(0, 0, 0.14, 1.55, 1.68, 0.28, 18, neutralMid, wire, 0));
+    faces.push(...makeCylinderFaces(0, 0, 0.36, 1.15, 1.24, 0.18, 18, neutralLight, wire, 1));
+    faces.push(...makeCylinderFaces(0, 0, 1.05, 0.56, 0.62, 1.22, 16, accentRgb, wire, 2));
+    faces.push(...makeUvSphereFaces(0, 0, 1.82 + Math.sin(phase * Math.PI * 2) * 0.06, 0.44, 7, 12, neutralLight, wire, 3));
+    const orbAngle = phase * Math.PI * 2;
+    faces.push(...makeUvSphereFaces(Math.cos(orbAngle) * 1.18, Math.sin(orbAngle) * 1.18, 1.25, 0.17, 5, 8, accentRgb, wire, 3));
+  } else if (template === 'logo-3d') {
+    faces.push(...makeBoxFaces(0, 0, 0.14, 3.1, 1.35, 0.28, neutralDark, wire, 0));
+    faces.push(...makeBoxFaces(-0.92, 0, 1.02, 0.62, 0.44, 1.48, accentRgb, wire, 2));
+    faces.push(...makeBoxFaces(0, 0, 1.16, 0.72, 0.48, 1.76, neutralLight, wire, 2));
+    faces.push(...makeBoxFaces(0.92, 0, 0.94, 0.62, 0.44, 1.32, accentRgb, wire, 2));
+    faces.push(...makeBoxFaces(0, -0.34, 0.46, 2.55, 0.18, 0.26, accentRgb, wire, 3));
+  } else if (template === 'isometric-room') {
+    faces.push(...makeBoxFaces(0, 0, 0.07, 3.0, 3.0, 0.14, neutralMid, wire, 0));
+    faces.push(...makeBoxFaces(-1.43, 0, 1.12, 0.14, 3.0, 2.0, neutralLight, wire, 0));
+    faces.push(...makeBoxFaces(0, 1.43, 1.12, 3.0, 0.14, 2.0, [196, 206, 220], wire, 0));
+    // Desk & monitor
+    faces.push(...makeBoxFaces(-0.55, 0.72, 0.74, 1.4, 0.72, 0.1, warmWood, wire, 2));
+    faces.push(...makeBoxFaces(-1.15, 0.45, 0.42, 0.1, 0.1, 0.62, neutralDark, wire, 1));
+    faces.push(...makeBoxFaces(0.05, 0.45, 0.42, 0.1, 0.1, 0.62, neutralDark, wire, 1));
+    faces.push(...makeBoxFaces(-0.55, 0.88, 1.14, 0.78, 0.08, 0.48, accentRgb, wire, 3));
+    // Chair / ottoman
+    faces.push(...makeBoxFaces(-0.45, -0.25, 0.36, 0.56, 0.56, 0.44, accentRgb, wire, 2));
+    // Planter + foliage
+    faces.push(...makeBoxFaces(0.92, 0.88, 0.34, 0.52, 0.52, 0.46, warmWood, wire, 2));
+    faces.push(...makeUvSphereFaces(0.92, 0.88, 0.84, 0.38, 6, 10, mintLeaf, wire, 3));
+    // Wall shelf
+    faces.push(...makeBoxFaces(-1.2, -0.3, 1.56, 0.32, 1.1, 0.08, warmWood, wire, 2));
+  } else if (template === 'motion-data') {
+    faces.push(...makeBoxFaces(0, 0, 0.07, 3.3, 2.5, 0.14, neutralDark, wire, 0));
+    const baseHeights = [
+      [0.55, 1.15, 0.88, 1.55],
+      [0.95, 1.85, 1.42, 1.12],
+      [0.68, 1.28, 1.98, 0.86],
+    ];
+    for (let r = 0; r < 3; r++) {
+      for (let c = 0; c < 4; c++) {
+        const wave = 1 + 0.18 * Math.sin(phase * Math.PI * 2 + c * 0.75 + r * 0.9);
+        const hBar = baseHeights[r][c] * wave;
+        const x = (c - 1.5) * 0.72;
+        const y = (r - 1.0) * 0.72;
+        const mix = (c + r) % 2 === 0 ? accentRgb : [
+          Math.min(255, Math.round(accentRgb[0] * 0.7 + 75)),
+          Math.min(255, Math.round(accentRgb[1] * 0.7 + 80)),
+          Math.min(255, Math.round(accentRgb[2] * 0.7 + 90)),
+        ];
+        faces.push(...makeBoxFaces(x, y, 0.14 + hBar / 2, 0.44, 0.44, hBar, mix, wire, 2));
+      }
+    }
+  } else if (template === 'grease-pencil-2d') {
+    const layers = [
+      { y: 0.9, w: 2.8, h: 1.7, z: 1.0, rgb: neutralMid, layer: 1 },
+      { y: 0.0, w: 2.35, h: 1.45, z: 1.05, rgb: accentRgb, layer: 2 },
+      { y: -0.82, w: 1.75, h: 1.12, z: 0.92, rgb: neutralLight, layer: 3 },
+    ];
+    for (const layer of layers) {
+      faces.push(...makeBoxFaces(0, layer.y, layer.z, layer.w, 0.05, layer.h, layer.rgb, 'rgba(15,23,42,0.55)', layer.layer));
+    }
+    faces.push(...makeBoxFaces(0, 0.04, 0.06, 3.0, 2.1, 0.12, neutralDark, wire, 0));
+  } else {
+    faces.push(...makeBoxFaces(0, 0.15, 0.04, 3.2, 2.8, 0.08, neutralDark, wire, 0));
+    faces.push(...makeBoxFaces(0, 1.5, 1.08, 3.2, 0.08, 2.0, neutralMid, wire, 0));
+    faces.push(...makeBoxFaces(0, 0, 0.68, 1.05, 1.05, 1.05, accentRgb, 'rgba(255,255,255,0.28)', 2));
+  }
+
+  return faces;
+}
+
+function BlenderStageCanvas({
+  fields,
+  orbit,
+  setOrbit,
+  framePhase,
+  t,
+}) {
+  const canvasRef = useRef(null);
+  const dragRef = useRef(null);
+  const ratioCss = fields.aspect === 'portrait' ? '9 / 16' : fields.aspect === 'square' ? '1 / 1' : '16 / 9';
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || typeof canvas.getContext !== 'function') return undefined;
+    if (String(canvas.getContext).includes('notImplemented')) return undefined;
+    let ctx = null;
+    try {
+      ctx = canvas.getContext('2d');
+    } catch {
+      return undefined;
+    }
+    if (!ctx) return undefined;
+
+    const rect = typeof canvas.getBoundingClientRect === 'function' ? canvas.getBoundingClientRect() : null;
+    const cssW = Math.max(240, Math.round(rect?.width || 560));
+    const cssH = Math.max(180, Math.round(rect?.height || 315));
+    const dpr = Math.min(2, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
+    if (canvas.width !== Math.round(cssW * dpr) || canvas.height !== Math.round(cssH * dpr)) {
+      canvas.width = Math.round(cssW * dpr);
+      canvas.height = Math.round(cssH * dpr);
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const w = cssW;
+    const hVal = cssH;
+    const cx = w / 2;
+    const cy = hVal * 0.56;
+    const palette = LIGHTING_PALETTES[fields.lightingPreset] || LIGHTING_PALETTES.studio_3point;
+
+    // 1. Backdrop (soft studio slate gradient or alpha checkerboard)
+    if (fields.transparentBg) {
+      const tile = 14;
+      for (let y = 0; y < hVal; y += tile) {
+        for (let x = 0; x < w; x += tile) {
+          ctx.fillStyle = ((x / tile + y / tile) & 1) === 0 ? '#272d38' : '#202530';
+          ctx.fillRect(x, y, tile, tile);
+        }
+      }
+    } else {
+      const grad = ctx.createLinearGradient(0, 0, 0, hVal);
+      grad.addColorStop(0, palette.bgTop);
+      grad.addColorStop(1, palette.bgBot);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, hVal);
+    }
+
+    // Camera math (Z-up Blender right-handed space: camera looks from -Y toward +Y; +X right, +Z up)
+    const yaw = orbit.yaw;
+    const pitch = orbit.pitch;
+    const cosY = Math.cos(yaw);
+    const sinY = Math.sin(yaw);
+    const cosP = Math.cos(pitch);
+    const sinP = Math.sin(pitch);
+    const targetZ = 0.82;
+    const camDist = 6.2 / Math.max(0.45, Math.min(2.6, orbit.zoom));
+    const scaleBase = Math.min(w, hVal) * (orbit.ortho ? 0.22 * orbit.zoom : 0.98);
+
+    function toCamera(p) {
+      const x = p[0];
+      const y = p[1];
+      const z = p[2] - targetZ;
+      // Rotate world around Z so positive yaw orbits camera toward (+X, -Y)
+      const rx = x * cosY + y * sinY;
+      const ry = -x * sinY + y * cosY;
+      // Camera elevation above XY plane looking toward origin
+      const sx = rx;
+      const sy = ry * sinP + z * cosP;
+      const depth = camDist + ry * cosP - z * sinP;
+      return [sx, sy, depth];
+    }
+
+    function project(p) {
+      const [sx, sy, depth] = toCamera(p);
+      if (orbit.ortho) {
+        return { x: cx + sx * scaleBase, y: cy - sy * scaleBase, depth, visible: true };
+      }
+      if (depth <= 0.35) return { x: cx, y: cy, depth, visible: false };
+      const f = scaleBase / depth;
+      return { x: cx + sx * f, y: cy - sy * f, depth, visible: true };
+    }
+
+    // 2. Ground coordinate grid & Blender X/Y/Z axes
+    ctx.lineWidth = 1;
+    const gridN = 5;
+    for (let i = -gridN; i <= gridN; i++) {
+      const a = project([i * 0.75, -gridN * 0.75, 0]);
+      const b = project([i * 0.75, gridN * 0.75, 0]);
+      if (a.visible && b.visible) {
+        ctx.strokeStyle = i === 0 ? 'rgba(74,222,128,0.52)' : 'rgba(148,163,184,0.14)';
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+      }
+      const c = project([-gridN * 0.75, i * 0.75, 0]);
+      const d = project([gridN * 0.75, i * 0.75, 0]);
+      if (c.visible && d.visible) {
+        ctx.strokeStyle = i === 0 ? 'rgba(248,113,113,0.52)' : 'rgba(148,163,184,0.14)';
+        ctx.beginPath();
+        ctx.moveTo(c.x, c.y);
+        ctx.lineTo(d.x, d.y);
+        ctx.stroke();
+      }
+    }
+    const z0 = project([0, 0, 0]);
+    const z1 = project([0, 0, 2.35]);
+    if (z0.visible && z1.visible) {
+      ctx.strokeStyle = 'rgba(96,165,250,0.45)';
+      ctx.beginPath();
+      ctx.moveTo(z0.x, z0.y);
+      ctx.lineTo(z1.x, z1.y);
+      ctx.stroke();
+    }
+
+    // 3. Build & Z-sort template 3D faces
+    const accentRgb = parseHexRgb(fields.accentColor);
+    const rawFaces = buildTemplateGeometry(fields.template, accentRgb, framePhase);
+    const kDir = palette.keyDir;
+    const kLen = Math.hypot(kDir[0], kDir[1], kDir[2]) || 1;
+    const lx = kDir[0] / kLen;
+    const ly = kDir[1] / kLen;
+    const lz = kDir[2] / kLen;
+
+    const projectedFaces = [];
+    for (const face of rawFaces) {
+      const pts = face.pts;
+      if (pts.length < 3) continue;
+      // Normal in world coordinates
+      const u = [pts[1][0] - pts[0][0], pts[1][1] - pts[0][1], pts[1][2] - pts[0][2]];
+      const v = [pts[2][0] - pts[0][0], pts[2][1] - pts[0][1], pts[2][2] - pts[0][2]];
+      let nx = u[1] * v[2] - u[2] * v[1];
+      let ny = u[2] * v[0] - u[0] * v[2];
+      let nz = u[0] * v[1] - u[1] * v[0];
+      const nLen = Math.hypot(nx, ny, nz) || 1;
+      nx /= nLen;
+      ny /= nLen;
+      nz /= nLen;
+
+      const screenPts = [];
+      let avgDepth = 0;
+      let allVisible = true;
+      for (const pt of pts) {
+        const pr = project(pt);
+        if (!pr.visible) {
+          allVisible = false;
+          break;
+        }
+        screenPts.push(pr);
+        avgDepth += pr.depth;
+      }
+      if (!allVisible) continue;
+      avgDepth /= screenPts.length;
+
+      const ndotl = Math.abs(nx * lx + ny * ly + nz * lz);
+      const fillLight = Math.max(0, -nx * 0.45 + ny * 0.35 + nz * 0.35) * 0.28;
+      const rim = Math.max(0, 1 - Math.abs(nz));
+      const intensity = palette.ambient + ndotl * 0.78 + fillLight;
+      projectedFaces.push({
+        screenPts,
+        depth: avgDepth,
+        layer: face.layer ?? 2,
+        fill: shadeFaceColor(face.rgb, intensity, fields.materialPreset, rim),
+        wire: fields.materialPreset === 'toon_cel' ? 'rgba(15,23,42,0.72)' : face.wire,
+      });
+    }
+
+    projectedFaces.sort((a, b) => (a.layer - b.layer) || (b.depth - a.depth));
+    for (const poly of projectedFaces) {
+      ctx.beginPath();
+      ctx.moveTo(poly.screenPts[0].x, poly.screenPts[0].y);
+      for (let i = 1; i < poly.screenPts.length; i++) {
+        ctx.lineTo(poly.screenPts[i].x, poly.screenPts[i].y);
+      }
+      ctx.closePath();
+      ctx.fillStyle = poly.fill;
+      ctx.fill();
+      if (poly.wire) {
+        ctx.strokeStyle = poly.wire;
+        ctx.lineWidth = fields.materialPreset === 'toon_cel' ? 1.35 : 0.75;
+        ctx.stroke();
+      }
+    }
+
+    // 4. Template overlay accents (3D headline for logo-3d, Grease Pencil strokes)
+    if (fields.template === 'logo-3d' && fields.headline?.trim()) {
+      const anchor = project([0, -0.58, 1.32]);
+      if (anchor.visible) {
+        ctx.save();
+        ctx.font = '700 ' + Math.max(13, Math.round(Math.min(w, hVal) * 0.068)) + 'px "Cascadia Code", "Segoe UI", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = 'rgba(15,23,42,0.58)';
+        ctx.fillText(fields.headline.trim(), anchor.x + 2, anchor.y + 3);
+        ctx.fillStyle = '#f8fafc';
+        ctx.fillText(fields.headline.trim(), anchor.x, anchor.y);
+        ctx.restore();
+      }
+    } else if (fields.template === 'grease-pencil-2d') {
+      const p1 = project([-0.68, -0.86, 0.92]);
+      const p2 = project([0, -0.86, 1.18 + Math.sin(framePhase * Math.PI * 2) * 0.12]);
+      const p3 = project([0.68, -0.86, 0.88]);
+      if (p1.visible && p2.visible && p3.visible) {
+        ctx.save();
+        ctx.strokeStyle = '#1e293b';
+        ctx.lineWidth = 2.6;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.quadraticCurveTo(p2.x, p2.y, p3.x, p3.y);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // 5. Three-Point Light Rig Markers
+    const lights = [
+      { pos: [2.2, -1.9, 2.45], color: palette.key, label: 'KEY' },
+      { pos: [-2.1, -1.4, 1.65], color: palette.fill, label: 'FILL' },
+      { pos: [0.4, 2.35, 2.15], color: palette.rim, label: 'RIM' },
+    ];
+    ctx.font = '600 9.5px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    for (const lt of lights) {
+      const lp = project(lt.pos);
+      if (!lp.visible) continue;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(226,232,240,0.34)';
+      ctx.setLineDash([2, 3]);
+      const base = project([lt.pos[0], lt.pos[1], 0]);
+      if (base.visible) {
+        ctx.beginPath();
+        ctx.moveTo(lp.x, lp.y);
+        ctx.lineTo(base.x, base.y);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      ctx.fillStyle = lt.color;
+      ctx.beginPath();
+      ctx.arc(lp.x, lp.y, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(15,23,42,0.7)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(226,232,240,0.82)';
+      ctx.fillText(lt.label, lp.x, lp.y - 9);
+      ctx.restore();
+    }
+
+    // 6. Camera viewfinder safe-frame brackets
+    const padX = Math.round(w * 0.06);
+    const padY = Math.round(hVal * 0.08);
+    const arm = 14;
+    ctx.strokeStyle = 'rgba(232,93,42,0.58)';
+    ctx.lineWidth = 1.4;
+    const corners = [
+      [padX, padY, 1, 1],
+      [w - padX, padY, -1, 1],
+      [padX, hVal - padY, 1, -1],
+      [w - padX, hVal - padY, -1, -1],
+    ];
+    for (const [x, y, dx, dy] of corners) {
+      ctx.beginPath();
+      ctx.moveTo(x + dx * arm, y);
+      ctx.lineTo(x, y);
+      ctx.lineTo(x, y + dy * arm);
+      ctx.stroke();
+    }
+
+    // 7. Interactive XYZ Orientation Gizmo (bottom-right)
+    const gx = w - 38;
+    const gy = hVal - 36;
+    const gLen = 18;
+    const axes = [
+      { vec: [1, 0, 0], color: '#f87171', name: 'X' },
+      { vec: [0, 1, 0], color: '#4ade80', name: 'Y' },
+      { vec: [0, 0, 1], color: '#60a5fa', name: 'Z' },
+    ].map(ax => {
+      const rx = ax.vec[0] * cosY + ax.vec[1] * sinY;
+      const ry = -ax.vec[0] * sinY + ax.vec[1] * cosY;
+      const sy = ry * sinP + ax.vec[2] * cosP;
+      const depth = ry * cosP - ax.vec[2] * sinP;
+      return { ...ax, x: gx + rx * gLen, y: gy - sy * gLen, depth };
+    });
+    axes.sort((a, b) => b.depth - a.depth);
+    ctx.fillStyle = 'rgba(15,23,42,0.42)';
+    ctx.beginPath();
+    ctx.arc(gx, gy, 24, 0, Math.PI * 2);
+    ctx.fill();
+    for (const ax of axes) {
+      ctx.strokeStyle = ax.color;
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(gx, gy);
+      ctx.lineTo(ax.x, ax.y);
+      ctx.stroke();
+      ctx.fillStyle = ax.color;
+      ctx.beginPath();
+      ctx.arc(ax.x, ax.y, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#0f172a';
+      ctx.font = '700 8px ui-monospace, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(ax.name, ax.x, ax.y + 0.5);
+    }
+
+    return undefined;
+  }, [fields.template, fields.accentColor, fields.lightingPreset, fields.materialPreset, fields.transparentBg, fields.headline, fields.aspect, orbit.yaw, orbit.pitch, orbit.zoom, orbit.ortho, framePhase]);
+
+  function onPointerDown(event) {
+    if (event.button !== undefined && event.button !== 0) return;
+    dragRef.current = { x: event.clientX, y: event.clientY, yaw: orbit.yaw, pitch: orbit.pitch };
+    try { event.currentTarget.setPointerCapture?.(event.pointerId); } catch { /* ignore */ }
+  }
+
+  function onPointerMove(event) {
+    if (!dragRef.current) return;
+    const dx = event.clientX - dragRef.current.x;
+    const dy = event.clientY - dragRef.current.y;
+    setOrbit(prev => ({
+      ...prev,
+      yaw: dragRef.current.yaw + dx * 0.011,
+      pitch: Math.max(-0.12, Math.min(1.48, dragRef.current.pitch + dy * 0.011)),
+    }));
+  }
+
+  function onPointerUp(event) {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    try { event.currentTarget.releasePointerCapture?.(event.pointerId); } catch { /* ignore */ }
+  }
+
+  function onWheel(event) {
+    event.preventDefault();
+    const factor = event.deltaY > 0 ? 0.92 : 1.08;
+    setOrbit(prev => ({ ...prev, zoom: Math.max(0.55, Math.min(2.3, Number((prev.zoom * factor).toFixed(3)))) }));
+  }
+
+  function onKeyDown(event) {
+    if (event.key === 'ArrowLeft') { event.preventDefault(); setOrbit(p => ({ ...p, yaw: p.yaw - 0.16 })); }
+    else if (event.key === 'ArrowRight') { event.preventDefault(); setOrbit(p => ({ ...p, yaw: p.yaw + 0.16 })); }
+    else if (event.key === 'ArrowUp') { event.preventDefault(); setOrbit(p => ({ ...p, pitch: Math.min(1.48, p.pitch + 0.12) })); }
+    else if (event.key === 'ArrowDown') { event.preventDefault(); setOrbit(p => ({ ...p, pitch: Math.max(-0.12, p.pitch - 0.12) })); }
+    else if (event.key === '+' || event.key === '=') { event.preventDefault(); setOrbit(p => ({ ...p, zoom: Math.min(2.3, p.zoom * 1.12) })); }
+    else if (event.key === '-') { event.preventDefault(); setOrbit(p => ({ ...p, zoom: Math.max(0.55, p.zoom * 0.88) })); }
+  }
+
+  return h(
+    'div',
+    {
+      className: 'bl-canvas-frame',
+      'data-aspect': fields.aspect,
+      style: { aspectRatio: ratioCss },
+    },
+    h('canvas', {
+      ref: canvasRef,
+      className: 'bl-stage-canvas',
+      'data-stage-canvas': 'true',
+      'data-window-drag-exclude': '',
+      tabIndex: 0,
+      role: 'img',
+      'aria-label': t(
+        '交互式 3D 草图舞台：按住拖拽旋转视角，滚轮缩放，方向键微调轨道',
+        'Interactive 3D Stage Canvas: drag to orbit, scroll to zoom, arrow keys to rotate',
+      ),
+      onPointerDown,
+      onPointerMove,
+      onPointerUp,
+      onPointerCancel: onPointerUp,
+      onWheel,
+      onKeyDown,
+    }),
+  );
+}
+
+function scanScriptQuickWarnings(code) {
+  const patterns = [
+    { re: /\bos\.system\s*\(/, label: 'os.system()' },
+    { re: /\bsubprocess\b/, label: 'subprocess' },
+    { re: /\bshutil\.rmtree\b/, label: 'shutil.rmtree' },
+    { re: /\b(urllib|requests|http\.client|socket)\b/, label: 'network/socket' },
+    { re: /\b(eval|exec|__import__)\s*\(/, label: 'dynamic exec/eval' },
+  ];
+  const found = [];
+  for (const p of patterns) {
+    if (p.re.test(String(code || ''))) found.push(p.label);
+  }
+  return found;
+}
+
+function BlenderStudioPanel({
+  project,
+  fields,
+  setFields,
+  dirty,
+  setDirty,
+  setError,
+  setNotice,
+  syncFields,
+  fieldsOf,
+  templates = FALLBACK_TEMPLATES,
+  environment,
+  editorMode,
+  setEditorMode,
+  stageView,
+  setStageView,
+  job,
+  running,
+  busy,
+  titleValid,
+  titleTouched,
+  setTitleTouched,
+  samplesValid,
+  framesValid,
+  colorValid,
+  scriptBytes,
+  scriptValid,
+  startJob,
+  openInBlenderGui,
+  onOpenExport,
+  setEditorTab,
+  perform,
+  controlId,
+  lang,
+  t,
+}) {
+  const [inspectorTab, setInspectorTab] = useState('params');
+  const [orbit, setOrbit] = useState(() => CAMERA_PRESET_ANGLES[fields.cameraPreset] || CAMERA_PRESET_ANGLES.three_quarter);
+  const [turntablePlaying, setTurntablePlaying] = useState(false);
+  const [currentFrame, setCurrentFrame] = useState(fields.frameStart || 1);
+  const [generatedPreview, setGeneratedPreview] = useState('');
+  const [loadingScript, setLoadingScript] = useState(false);
+  const [allowUnsafe, setAllowUnsafe] = useState(false);
+  const formSplit = W.useResizableSplit({ key: 'dsh-blender-studio:form-split', initial: 430, min: 300, max: 620 });
+
+  const frameStart = Number.isInteger(fields.frameStart) && fields.frameStart >= 1 ? fields.frameStart : 1;
+  const frameEnd = Number.isInteger(fields.frameEnd) && fields.frameEnd >= frameStart ? fields.frameEnd : Math.max(frameStart, 48);
+  const frameSpan = Math.max(1, frameEnd - frameStart);
+  const framePhase = Math.max(0, Math.min(1, (currentFrame - frameStart) / frameSpan));
+
+  useEffect(() => {
+    const preset = CAMERA_PRESET_ANGLES[fields.cameraPreset];
+    if (preset) setOrbit(preset);
+  }, [fields.cameraPreset]);
+
+  useEffect(() => {
+    setCurrentFrame(prev => Math.max(frameStart, Math.min(frameEnd, prev)));
+  }, [frameStart, frameEnd]);
+
+  useEffect(() => {
+    if (!turntablePlaying) return undefined;
+    let rafId = null;
+    let timerId = null;
+    let last = Date.now();
+    const tick = () => {
+      const now = Date.now();
+      const dt = Math.min(0.1, Math.max(0, (now - last) / 1000));
+      last = now;
+      setOrbit(prev => ({ ...prev, yaw: (prev.yaw + dt * 0.95) % (Math.PI * 2) }));
+      setCurrentFrame(prev => {
+        const next = prev + dt * (fields.fps || 24) * 0.5;
+        return next > frameEnd ? frameStart : next;
+      });
+      if (typeof requestAnimationFrame === 'function') rafId = requestAnimationFrame(tick);
+    };
+    if (typeof requestAnimationFrame === 'function') rafId = requestAnimationFrame(tick);
+    else timerId = setInterval(tick, 50);
+    return () => {
+      if (rafId !== null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(rafId);
+      if (timerId !== null) clearInterval(timerId);
+    };
+  }, [turntablePlaying, fields.fps, frameStart, frameEnd]);
+
+  function patchFields(patch) {
+    setFields(prev => ({ ...prev, ...patch }));
+    setDirty(true);
+  }
+
+  function applyTemplate(tplId) {
+    const tpl = (templates || FALLBACK_TEMPLATES).find(item => item.id === tplId);
+    const next = { template: tplId };
+    if (tpl && !project) {
+      next.engine = tpl.recommendedEngine || fields.engine;
+      next.cameraPreset = tpl.defaultCamera || fields.cameraPreset;
+      next.lightingPreset = tpl.defaultLighting || fields.lightingPreset;
+      next.materialPreset = tpl.defaultMaterial || fields.materialPreset;
+      next.frameEnd = tpl.defaultFrames || fields.frameEnd;
+    }
+    patchFields(next);
+  }
+
+  async function fetchGeneratedScript() {
+    if (!project) {
+      setError(t('请先保存工程，再预览后端生成的 bpy 脚本。', 'Save your project before fetching the generated bpy script.'));
+      return;
+    }
+    setLoadingScript(true);
+    try {
+      const res = await api({ action: 'generatedScript', id: project.id });
+      setGeneratedPreview(typeof res === 'string' ? res : res?.script || '');
+    } catch (e) {
+      setError(e);
+    } finally {
+      setLoadingScript(false);
+    }
+  }
+
+  const stillArtifact = latestArtifactOf(project, 'still');
+  const qcArtifact = latestArtifactOf(project, 'contact_sheet');
+  const animArtifact = latestArtifactOf(project, 'animation');
+  const activeArtifact =
+    stageView === 'still' ? stillArtifact : stageView === 'contact_sheet' ? qcArtifact : stageView === 'animation' ? animArtifact : null;
+  const activeStale = Boolean(activeArtifact && project && (dirty || activeArtifact.revision !== project.revision));
+
+  const quickWarnings = fields.scriptMode === 'custom' ? scanScriptQuickWarnings(fields.customScript) : [];
+  const bridgeConnected = Boolean(environment?.bridge?.connected);
+  const activeBlender = environment?.active;
+  const [baseW, baseH] = fields.aspect === 'portrait' ? [720, 1280] : fields.aspect === 'square' ? [1024, 1024] : [1280, 720];
+  const scaleFactor = (Number(fields.resolutionScale) || 100) / 100;
+  const outW = Math.round((baseW * scaleFactor) / 2) * 2;
+  const outH = Math.round((baseH * scaleFactor) / 2) * 2;
+
+  const sceneSummary = project?.sceneSummary || job?.sceneSummary || null;
+
+  function renderStageCard() {
+    return h(
+      'section',
+      {
+        className: 'bl-stage-monitor',
+        'data-tour': 'blender-stage',
+        'aria-label': t('OP-DSH 3D 渲染监看舞台', 'OP-DSH 3D Stage & Render Viewport'),
+      },
+      // Monitor HUD
+      h(
+        'div',
+        { className: 'bl-stage-hud' },
+        h(
+          'div',
+          { className: 'bl-stage-meta-group' },
+          h('span', { className: 'bl-stage-dot', 'data-live': turntablePlaying || job?.state === 'running' ? 'true' : 'false', 'aria-hidden': 'true' }),
+          h('span', { className: 'bl-stage-readout' }, outW + '×' + outH + ' · ' + fields.engine + ' · ' + fields.samples + ' spp'),
+          activeStale
+            ? h('span', { className: 'bl-stale-pill' }, t('旧修订 R' + activeArtifact.revision + ' · 需重渲', 'Stale R' + activeArtifact.revision))
+            : null,
+        ),
+        h(
+          'div',
+          { className: 'bl-stage-view-tabs', role: 'tablist', 'aria-label': t('视口显示模式', 'Viewport display mode') },
+          [
+            { id: 'stage', label: t('实时草图', '3D Stage') },
+            { id: 'still', label: t('最新静帧', 'Still'), has: !!stillArtifact },
+            { id: 'contact_sheet', label: t('四视角质检', '4-View QC'), has: !!qcArtifact },
+            { id: 'animation', label: t('动画回放', 'Animation'), has: !!animArtifact },
+          ].map(tab =>
+            h(
+              'button',
+              {
+                key: tab.id,
+                type: 'button',
+                role: 'tab',
+                className: 'bl-stage-view-btn',
+                'aria-selected': stageView === tab.id,
+                'data-has-artifact': tab.has ? 'true' : undefined,
+                onClick: () => setStageView(tab.id),
+              },
+              tab.label,
+              tab.has ? h('span', { className: 'bl-artifact-dot', 'aria-hidden': 'true' }) : null,
+            ),
+          ),
+        ),
+      ),
+
+      // Recessed Slate Monitor Bezel
+      h(
+        'div',
+        { className: 'bl-stage-bezel' },
+        stageView === 'stage'
+          ? h(BlenderStageCanvas, { fields, orbit, setOrbit, framePhase, t })
+          : activeArtifact
+          ? h(
+              'div',
+              { className: 'bl-artifact-viewer' },
+              stageView === 'animation' && String(activeArtifact.mime || '').startsWith('video/')
+                ? h('video', {
+                    key: activeArtifact.id,
+                    controls: true,
+                    preload: 'metadata',
+                    src: urlFor(project, 'artifact', { artifact: activeArtifact.id }),
+                    'aria-label': t('已渲染 3D 动画', 'Rendered 3D animation'),
+                  })
+                : h('img', {
+                    key: activeArtifact.id,
+                    src: urlFor(project, 'artifact', { artifact: activeArtifact.id }),
+                    alt: stageView === 'contact_sheet' ? t('四视角质检拼图', '4-View QC contact sheet') : t('Blender 渲染静帧', 'Blender still render'),
+                  }),
+              h(
+                'div',
+                { className: 'bl-artifact-caption' },
+                h(
+                  'span',
+                  null,
+                  'R' + activeArtifact.revision + ' · ' + activeArtifact.engine + ' · ' + activeArtifact.samples + ' spp · ' + formatBytes(activeArtifact.size),
+                ),
+                h(
+                  'a',
+                  {
+                    className: 'bl-stage-dl-link',
+                    href: urlFor(project, 'artifact', { artifact: activeArtifact.id, download: '1' }),
+                    download: '',
+                  },
+                  h(W.Icon, { name: 'download', size: 13 }),
+                  t('下载成品', 'Download'),
+                ),
+              ),
+            )
+          : h(
+              'div',
+              { className: 'bl-artifact-empty' },
+              h(W.Icon, { name: stageView === 'contact_sheet' ? 'grid' : stageView === 'animation' ? 'play' : 'camera', size: 28 }),
+              h(
+                'p',
+                null,
+                stageView === 'contact_sheet'
+                  ? t('尚未生成 2×2 四视角质检拼图（正视 / 3/4 / 俯视 / 主镜头）。', 'No 2×2 4-View QC contact sheet rendered yet.')
+                  : stageView === 'animation'
+                  ? t('尚未渲染 Turntable / 关键帧动画。', 'No animation rendered yet.')
+                  : t('尚未渲染单帧静帧预览图。', 'No still preview rendered yet.'),
+              ),
+              h(
+                W.Button,
+                {
+                  variant: 'primary',
+                  size: 'sm',
+                  icon: stageView === 'contact_sheet' ? 'grid' : stageView === 'animation' ? 'play' : 'camera',
+                  disabled: !project || running || dirty || !environment?.ready,
+                  onClick: () =>
+                    startJob(
+                      stageView === 'contact_sheet'
+                        ? 'contact_sheet'
+                        : stageView === 'animation'
+                        ? 'render_animation'
+                        : 'preview_still',
+                    ),
+                },
+                stageView === 'contact_sheet'
+                  ? t('立即渲染四视角质检', 'Render 4-View QC')
+                  : stageView === 'animation'
+                  ? t('立即渲染动画', 'Render Animation')
+                  : t('立即渲染静帧', 'Render Still'),
+              ),
+            ),
+      ),
+
+      // Interactive Orbit + Turntable Deck (shown in 3D Stage mode)
+      stageView === 'stage'
+        ? h(
+            'div',
+            { className: 'bl-orbit-deck', 'data-window-drag-exclude': '' },
+            h(
+              'div',
+              { className: 'bl-orbit-controls' },
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'bl-turntable-btn',
+                  'data-playing': turntablePlaying ? 'true' : 'false',
+                  onClick: () => setTurntablePlaying(p => !p),
+                },
+                turntablePlaying ? t('❚❚ 暂停转台', '❚❚ Pause') : t('▶ 转台预览', '▶ Turntable'),
+              ),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'bl-cam-mini-btn',
+                  'aria-pressed': Boolean(orbit.ortho),
+                  onClick: () => setOrbit(p => ({ ...p, ortho: !p.ortho })),
+                },
+                orbit.ortho ? t('正交', 'Ortho') : t('透视', 'Persp'),
+              ),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'bl-cam-mini-btn',
+                  'aria-label': t('放大视口', 'Zoom in'),
+                  onClick: () => setOrbit(p => ({ ...p, zoom: Math.min(2.3, Number((p.zoom * 1.15).toFixed(2))) })),
+                },
+                '+',
+              ),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'bl-cam-mini-btn',
+                  'aria-label': t('缩小视口', 'Zoom out'),
+                  onClick: () => setOrbit(p => ({ ...p, zoom: Math.max(0.55, Number((p.zoom * 0.87).toFixed(2))) })),
+                },
+                '−',
+              ),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'bl-cam-mini-btn',
+                  onClick: () => {
+                    setTurntablePlaying(false);
+                    setOrbit(CAMERA_PRESET_ANGLES[fields.cameraPreset] || CAMERA_PRESET_ANGLES.three_quarter);
+                  },
+                },
+                t('重置视角', 'Reset'),
+              ),
+            ),
+            h(
+              'div',
+              { className: 'bl-frame-scrubber' },
+              h('span', { className: 'bl-frame-readout' }, 'F ' + Math.round(currentFrame) + ' / ' + frameEnd),
+              h('input', {
+                type: 'range',
+                min: frameStart,
+                max: frameEnd,
+                step: 1,
+                value: Math.round(currentFrame),
+                'aria-label': t('时间帧滑杆', 'Animation frame scrubber'),
+                onChange: e => {
+                  setTurntablePlaying(false);
+                  setCurrentFrame(Number(e.target.value));
+                },
+              }),
+            ),
+          )
+        : null,
+
+      // Quick Action Strip
+      h(
+        'div',
+        { className: 'bl-stage-actions', 'data-window-drag-exclude': '' },
+        h(
+          W.Button,
+          {
+            variant: 'primary',
+            size: 'sm',
+            icon: 'camera',
+            disabled: !project || running || dirty || !environment?.ready,
+            title: !environment?.ready ? t('请先在「桥接与环境」配置 Blender', 'Configure Blender first') : dirty ? t('请先保存工程', 'Save changes first') : undefined,
+            onClick: () => startJob('preview_still'),
+          },
+          t('预览静帧', 'Preview'),
+        ),
+        h(
+          W.Button,
+          {
+            size: 'sm',
+            icon: 'grid',
+            disabled: !project || running || dirty || !environment?.ready,
+            onClick: () => startJob('contact_sheet'),
+          },
+          t('四视角自检', '4-View QC'),
+        ),
+        h(
+          W.Button,
+          {
+            size: 'sm',
+            icon: 'play',
+            disabled: !project || running || dirty || !environment?.ready,
+            onClick: () => startJob('render_animation'),
+          },
+          t('渲染动画', 'Animation'),
+        ),
+        h(
+          W.Button,
+          {
+            size: 'sm',
+            icon: 'download',
+            disabled: !project || running || dirty || !environment?.ready,
+            onClick: onOpenExport,
+          },
+          t('导出模型', 'Export 3D'),
+        ),
+        h(
+          W.Button,
+          {
+            size: 'sm',
+            variant: 'ghost',
+            icon: 'external',
+            disabled: !project || running || dirty || !environment?.ready,
+            onClick: openInBlenderGui,
+          },
+          t('在 Blender 打开', 'Open GUI'),
+        ),
+      ),
+    );
+  }
+
+  function renderParamsFields(compact) {
+    return h(
+      'div',
+      { className: 'bl-params-body' },
+      h(
+        'div',
+        { className: 'bl-field' },
+        h('label', { htmlFor: controlId + '-title' }, t('工程标题（必填）', 'Project title (required)')),
+        h(W.Input, {
+          id: controlId + '-title',
+          value: fields.title,
+          disabled: running,
+          maxLength: 72,
+          placeholder: t('例如：陶瓷智能耳机棚拍展台', 'e.g. Ceramic Earbuds Studio'),
+          'aria-invalid': titleTouched && !titleValid ? 'true' : 'false',
+          onBlur: () => setTitleTouched(true),
+          onChange: e => patchFields({ title: e.target.value }),
+        }),
+        titleTouched && !titleValid
+          ? h('span', { className: 'bl-field-error' }, t('请输入 1–72 个字符的工程标题。', 'Enter 1–72 characters.'))
+          : null,
+      ),
+
+      !compact
+        ? h(
+            'div',
+            { className: 'bl-field' },
+            h('label', { htmlFor: controlId + '-desc' }, t('场景描述 / 制作备忘', 'Scene description / notes')),
+            h('textarea', {
+              id: controlId + '-desc',
+              rows: 2,
+              maxLength: 600,
+              disabled: running,
+              value: fields.description,
+              placeholder: t('记录镜头构图、灯光氛围或客户需求…', 'Notes on framing, mood, or deliverables…'),
+              onChange: e => patchFields({ description: e.target.value }),
+            }),
+          )
+        : null,
+
+      h(
+        'div',
+        { className: 'bl-field' },
+        h('label', { htmlFor: controlId + '-headline' }, t('3D 主标题文本（Logo / 标牌）', '3D Headline text')),
+        h(W.Input, {
+          id: controlId + '-headline',
+          value: fields.headline,
+          disabled: running,
+          maxLength: 48,
+          placeholder: 'DSH 3D',
+          onChange: e => patchFields({ headline: e.target.value }),
+        }),
+      ),
+
+      h(
+        'div',
+        { className: 'bl-field' },
+        h('span', { className: 'bl-label' }, t('3D 场景模板', '3D Template')),
+        h(
+          'div',
+          { className: 'bl-pill-grid', role: 'group', 'aria-label': t('场景模板选择', 'Template selection') },
+          (templates || FALLBACK_TEMPLATES).map(tpl =>
+            h(
+              'button',
+              {
+                key: tpl.id,
+                type: 'button',
+                className: 'bl-tpl-pill',
+                'aria-pressed': fields.template === tpl.id,
+                disabled: running,
+                onClick: () => applyTemplate(tpl.id),
+              },
+              lang === 'en' ? tpl.en : tpl.zh,
+            ),
+          ),
+        ),
+      ),
+
+      h(
+        'div',
+        { className: 'bl-field' },
+        h('span', { className: 'bl-label' }, t('画幅比例 & 分辨率倍率', 'Aspect & Resolution Scale')),
+        h(
+          'div',
+          { className: 'bl-keycap-row', role: 'group', 'aria-label': t('画幅切换', 'Aspect ratio') },
+          [
+            { id: 'landscape', label: '16:9' },
+            { id: 'portrait', label: '9:16' },
+            { id: 'square', label: '1:1' },
+          ].map(opt =>
+            h(
+              'button',
+              {
+                key: opt.id,
+                type: 'button',
+                className: 'bl-mech-key',
+                'aria-pressed': fields.aspect === opt.id,
+                disabled: running,
+                onClick: () => patchFields({ aspect: opt.id }),
+              },
+              h('span', { className: 'bl-mech-led', 'aria-hidden': 'true' }),
+              opt.label,
+            ),
+          ),
+        ),
+        h(
+          'div',
+          { className: 'bl-scale-row', role: 'group', 'aria-label': t('分辨率倍率', 'Resolution scale') },
+          [50, 100, 150, 200].map(sc =>
+            h(
+              'button',
+              {
+                key: sc,
+                type: 'button',
+                className: 'bl-mini-chip',
+                'aria-pressed': Number(fields.resolutionScale) === sc,
+                disabled: running,
+                onClick: () => patchFields({ resolutionScale: sc }),
+              },
+              sc + '%',
+            ),
+          ),
+        ),
+      ),
+
+      h(
+        'div',
+        { className: 'bl-field' },
+        h('span', { className: 'bl-label' }, t('渲染引擎 & 采样数', 'Render Engine & Samples')),
+        h(
+          'div',
+          { className: 'bl-keycap-row', role: 'group', 'aria-label': t('渲染引擎', 'Render engine') },
+          ['EEVEE', 'CYCLES', 'WORKBENCH'].map(eng =>
+            h(
+              'button',
+              {
+                key: eng,
+                type: 'button',
+                className: 'bl-mech-key',
+                'aria-pressed': fields.engine === eng,
+                disabled: running,
+                onClick: () =>
+                  patchFields({
+                    engine: eng,
+                    samples: eng === 'CYCLES' ? Math.max(fields.samples, 64) : eng === 'WORKBENCH' ? 16 : 32,
+                  }),
+              },
+              h('span', { className: 'bl-mech-led', 'aria-hidden': 'true' }),
+              eng,
+            ),
+          ),
+        ),
+        h(
+          'div',
+          { className: 'bl-slider-row' },
+          h('input', {
+            type: 'range',
+            className: 'bl-tactile-slider',
+            min: 4,
+            max: 256,
+            step: 4,
+            disabled: running,
+            value: Math.min(256, Math.max(4, Number(fields.samples) || 32)),
+            'aria-label': t('渲染采样滑杆', 'Render samples slider'),
+            onChange: e => patchFields({ samples: Number(e.target.value) }),
+          }),
+          h('input', {
+            id: controlId + '-samples',
+            type: 'number',
+            className: 'bl-num-compact',
+            min: 4,
+            max: 1024,
+            step: 1,
+            disabled: running,
+            value: fields.samples,
+            'aria-label': t('采样数', 'Samples'),
+            'aria-invalid': !samplesValid ? 'true' : 'false',
+            onChange: e => patchFields({ samples: Number(e.target.value) }),
+          }),
+        ),
+      ),
+
+      h(
+        'div',
+        { className: 'bl-field' },
+        h('span', { className: 'bl-label' }, t('相机机位预设', 'Camera Preset')),
+        h(
+          'div',
+          { className: 'bl-pill-grid', role: 'group', 'aria-label': t('相机预设', 'Camera preset') },
+          CAMERA_PRESETS.map(cam =>
+            h(
+              'button',
+              {
+                key: cam.id,
+                type: 'button',
+                className: 'bl-tpl-pill',
+                'aria-pressed': fields.cameraPreset === cam.id,
+                disabled: running,
+                onClick: () => patchFields({ cameraPreset: cam.id }),
+              },
+              lang === 'en' ? cam.en : cam.zh,
+            ),
+          ),
+        ),
+      ),
+
+      h(
+        'div',
+        { className: 'bl-field-grid-2' },
+        h(
+          'div',
+          { className: 'bl-field' },
+          h('label', { htmlFor: controlId + '-lighting' }, t('布光预设', 'Lighting')),
+          h(
+            'select',
+            {
+              id: controlId + '-lighting',
+              value: fields.lightingPreset,
+              disabled: running,
+              onChange: e => patchFields({ lightingPreset: e.target.value }),
+            },
+            LIGHTING_PRESETS.map(opt => h('option', { key: opt.id, value: opt.id }, lang === 'en' ? opt.en : opt.zh)),
+          ),
+        ),
+        h(
+          'div',
+          { className: 'bl-field' },
+          h('label', { htmlFor: controlId + '-material' }, t('主材质预设', 'Material')),
+          h(
+            'select',
+            {
+              id: controlId + '-material',
+              value: fields.materialPreset,
+              disabled: running,
+              onChange: e => patchFields({ materialPreset: e.target.value }),
+            },
+            MATERIAL_PRESETS.map(opt => h('option', { key: opt.id, value: opt.id }, lang === 'en' ? opt.en : opt.zh)),
+          ),
+        ),
+      ),
+
+      h(
+        'div',
+        { className: 'bl-field-grid-2' },
+        h(
+          'div',
+          { className: 'bl-field' },
+          h('label', { htmlFor: controlId + '-accent' }, t('主题强调色', 'Accent Color')),
+          h(
+            'div',
+            { className: 'bl-color-row' },
+            h('input', {
+              type: 'color',
+              className: 'bl-color-swatch',
+              disabled: running,
+              value: colorValid ? fields.accentColor : '#3B82F6',
+              'aria-label': t('取色器', 'Color picker'),
+              onChange: e => patchFields({ accentColor: e.target.value.toUpperCase() }),
+            }),
+            h('input', {
+              id: controlId + '-accent',
+              type: 'text',
+              maxLength: 7,
+              disabled: running,
+              value: fields.accentColor,
+              'aria-invalid': !colorValid ? 'true' : 'false',
+              autoCorrect: 'off',
+              autoCapitalize: 'characters',
+              spellCheck: false,
+              onChange: e => patchFields({ accentColor: e.target.value.toUpperCase() }),
+            }),
+          ),
+        ),
+        h(
+          'div',
+          { className: 'bl-field bl-switch-wrap' },
+          h(W.Switch, {
+            label: t('透明背景 (Alpha)', 'Transparent BG'),
+            checked: Boolean(fields.transparentBg),
+            disabled: running,
+            onChange: checked => patchFields({ transparentBg: checked }),
+          }),
+        ),
+      ),
+
+      h(
+        'div',
+        { className: 'bl-field-grid-3' },
+        h(
+          'div',
+          { className: 'bl-field' },
+          h('label', { htmlFor: controlId + '-fstart' }, t('起始帧', 'Start')),
+          h('input', {
+            id: controlId + '-fstart',
+            type: 'number',
+            min: 1,
+            max: 100000,
+            disabled: running,
+            value: fields.frameStart,
+            'aria-invalid': !framesValid ? 'true' : 'false',
+            onChange: e => patchFields({ frameStart: Number(e.target.value) }),
+          }),
+        ),
+        h(
+          'div',
+          { className: 'bl-field' },
+          h('label', { htmlFor: controlId + '-fend' }, t('结束帧', 'End')),
+          h('input', {
+            id: controlId + '-fend',
+            type: 'number',
+            min: 1,
+            max: 100600,
+            disabled: running,
+            value: fields.frameEnd,
+            'aria-invalid': !framesValid ? 'true' : 'false',
+            onChange: e => patchFields({ frameEnd: Number(e.target.value) }),
+          }),
+        ),
+        h(
+          'div',
+          { className: 'bl-field' },
+          h('label', { htmlFor: controlId + '-fps' }, 'FPS'),
+          h(
+            'select',
+            {
+              id: controlId + '-fps',
+              value: fields.fps,
+              disabled: running,
+              onChange: e => patchFields({ fps: Number(e.target.value) }),
+            },
+            [24, 30, 60].map(v => h('option', { key: v, value: v }, v + ' fps')),
+          ),
+        ),
+      ),
+
+      project && dirty
+        ? h(
+            W.Button,
+            {
+              variant: 'ghost',
+              size: 'sm',
+              icon: 'close',
+              disabled: running,
+              onClick: () => {
+                syncFields(fieldsOf(project));
+                setDirty(false);
+                setError('');
+              },
+            },
+            t('放弃未保存修改', 'Discard changes'),
+          )
+        : null,
+    );
+  }
+
+  function renderOutlinerTab() {
+    return h(
+      'div',
+      { className: 'bl-outliner-body' },
+      h(
+        'div',
+        { className: 'bl-outliner-head' },
+        h('span', { className: 'w-muted' }, sceneSummary ? t('采集于 ', 'Captured ') + new Date(sceneSummary.capturedAt).toLocaleTimeString() : t('尚未采集真实场景树', 'No scene snapshot yet')),
+        h(
+          W.Button,
+          {
+            size: 'sm',
+            variant: 'primary',
+            icon: 'eye',
+            disabled: !project || running || dirty || !environment?.ready,
+            onClick: () => startJob('inspect_scene'),
+          },
+          t('检查场景', 'Inspect Scene'),
+        ),
+      ),
+      sceneSummary
+        ? h(
+            React.Fragment,
+            null,
+            h(
+              'div',
+              { className: 'bl-stat-grid' },
+              [
+                { k: t('对象', 'Objects'), v: sceneSummary.objectCount },
+                { k: t('网格', 'Meshes'), v: sceneSummary.meshCount },
+                { k: t('灯光', 'Lights'), v: sceneSummary.lightCount },
+                { k: t('相机', 'Cameras'), v: sceneSummary.cameraCount },
+                { k: t('总面数', 'Polys'), v: sceneSummary.totalPolygons },
+              ].map((s, idx) =>
+                h(
+                  'div',
+                  { key: idx, className: 'bl-stat-box' },
+                  h('span', { className: 'bl-stat-val' }, s.v ?? 0),
+                  h('span', { className: 'bl-stat-lbl' }, s.k),
+                ),
+              ),
+            ),
+            sceneSummary.activeCamera
+              ? h('p', { className: 'w-muted bl-outliner-meta' }, t('当前主相机：', 'Active camera: ') + sceneSummary.activeCamera + ' · Blender ' + (sceneSummary.blenderVersion || ''))
+              : null,
+            Array.isArray(sceneSummary.materials) && sceneSummary.materials.length > 0
+              ? h(
+                  'div',
+                  { className: 'bl-tag-wrap' },
+                  sceneSummary.materials.map((m, i) => h('span', { key: i, className: 'w-tag' }, m)),
+                )
+              : null,
+            h(
+              'ul',
+              { className: 'bl-object-list' },
+              (sceneSummary.objects || []).map((obj, idx) =>
+                h(
+                  'li',
+                  { key: obj.name + '-' + idx, className: 'bl-object-row' },
+                  h('span', { className: 'bl-obj-type' }, obj.type),
+                  h('strong', { className: 'bl-obj-name' }, obj.name),
+                  Array.isArray(obj.location)
+                    ? h(
+                        'span',
+                        { className: 'bl-obj-loc' },
+                        '[' + obj.location.map(n => Number(n).toFixed(1)).join(', ') + ']',
+                      )
+                    : null,
+                  obj.polygons !== undefined ? h('span', { className: 'bl-obj-poly' }, obj.polygons + 'p') : null,
+                ),
+              ),
+            ),
+          )
+        : h(
+            W.Empty,
+            { title: t('尚未检查场景对象', 'Scene not inspected yet'), icon: 'eye' },
+            t('点击上方「检查场景」，通过无头 Blender 解析所有网格、灯光、相机与多边形数量。', 'Click Inspect Scene above to extract real meshes, lights, cameras, and polygon counts.'),
+          ),
+    );
+  }
+
+  function renderScriptTab() {
+    return h(
+      'div',
+      { className: 'bl-script-body' },
+      h(
+        'div',
+        { className: 'bl-script-mode-row', role: 'group', 'aria-label': t('脚本驱动模式', 'Script mode') },
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'bl-mech-key',
+            'aria-pressed': fields.scriptMode === 'template',
+            disabled: running,
+            onClick: () => patchFields({ scriptMode: 'template' }),
+          },
+          h('span', { className: 'bl-mech-led', 'aria-hidden': 'true' }),
+          t('模板自动生成', 'Template'),
+        ),
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'bl-mech-key',
+            'aria-pressed': fields.scriptMode === 'custom',
+            disabled: running,
+            onClick: () => patchFields({ scriptMode: 'custom' }),
+          },
+          h('span', { className: 'bl-mech-led', 'aria-hidden': 'true' }),
+          t('自定义 bpy 脚本', 'Custom bpy'),
+        ),
+      ),
+
+      h(
+        'div',
+        { className: 'bl-script-toolbar' },
+        h(
+          W.Button,
+          {
+            size: 'sm',
+            icon: 'code',
+            disabled: !project || loadingScript,
+            onClick: fetchGeneratedScript,
+          },
+          loadingScript ? t('拉取中…', 'Loading…') : t('查看模板生成脚本', 'View generated script'),
+        ),
+        generatedPreview
+          ? h(
+              W.Button,
+              {
+                size: 'sm',
+                variant: 'ghost',
+                icon: 'copy',
+                disabled: running,
+                onClick: () => {
+                  patchFields({ scriptMode: 'custom', customScript: generatedPreview });
+                  setNotice(t('已载入至自定义 bpy 编辑区。', 'Copied generated script to custom editor.'));
+                },
+              },
+              t('复制为自定义脚本', 'Clone to custom'),
+            )
+          : null,
+      ),
+
+      generatedPreview && fields.scriptMode === 'template'
+        ? h('pre', { className: 'bl-script-readonly' }, generatedPreview)
+        : null,
+
+      h(
+        'div',
+        { className: 'bl-field' },
+        h(
+          'div',
+          { className: 'bl-script-head-meta' },
+          h('label', { htmlFor: controlId + '-custom-script' }, t('自定义 bpy Python 脚本', 'Custom bpy Python script')),
+          h('span', { className: 'w-muted' }, formatBytes(scriptBytes) + ' / 64 KB'),
+        ),
+        h('textarea', {
+          id: controlId + '-custom-script',
+          className: 'bl-code-editor',
+          rows: 11,
+          disabled: running,
+          spellCheck: false,
+          autoCorrect: 'off',
+          autoCapitalize: 'none',
+          'aria-invalid': !scriptValid ? 'true' : 'false',
+          placeholder: t('# 在此编写 Blender bpy 建模/材质脚本…\nimport bpy\nbpy.ops.mesh.primitive_monkey_add(location=(0, 0, 1.2))', '# Write Blender bpy scene script here…\nimport bpy\nbpy.ops.mesh.primitive_monkey_add(location=(0, 0, 1.2))'),
+          value: fields.customScript,
+          onChange: e => patchFields({ customScript: e.target.value, scriptMode: 'custom' }),
+        }),
+      ),
+
+      quickWarnings.length > 0
+        ? h(
+            W.Status,
+            { tone: 'warn' },
+            t('静态安全提醒：检测到潜在高危调用 ', 'Safety alert: detected restricted calls ') + '(' + quickWarnings.join(', ') + ').',
+          )
+        : null,
+
+      h(
+        'div',
+        { className: 'bl-script-run-row' },
+        h(W.Checkbox, {
+          checked: allowUnsafe,
+          disabled: running,
+          label: t('显式放行高危系统调用 (allowUnsafe)', 'Allow restricted calls (allowUnsafe)'),
+          onChange: setAllowUnsafe,
+        }),
+        h(
+          W.Button,
+          {
+            variant: 'primary',
+            size: 'sm',
+            icon: 'terminal',
+            disabled: !project || running || !environment?.ready || !scriptValid,
+            onClick: () =>
+              startJob('run_script', {
+                code: fields.scriptMode === 'custom' && fields.customScript.trim() ? fields.customScript : undefined,
+                allowUnsafe,
+              }),
+          },
+          t('安全检查并执行脚本', 'Validate & Run Script'),
+        ),
+      ),
+    );
+  }
+
+  function renderInspectorCard() {
+    return h(
+      'aside',
+      {
+        className: 'bl-inspector-card',
+        'data-tour': 'blender-inspector',
+        'data-dsh-card': '',
+        'aria-label': t('3D 参数与检视面板', '3D Inspector panel'),
+      },
+      h(
+        'div',
+        { className: 'bl-inspector-tabs', role: 'tablist', 'aria-label': t('检视器切换', 'Inspector tabs') },
+        [
+          { id: 'params', icon: 'sliders', label: t('参数', 'Params') },
+          { id: 'outliner', icon: 'eye', label: t('大纲', 'Outliner') },
+          { id: 'script', icon: 'code', label: t('bpy 脚本', 'Script') },
+        ].map(tab =>
+          h(
+            'button',
+            {
+              key: tab.id,
+              type: 'button',
+              role: 'tab',
+              className: 'bl-inspector-tab',
+              'aria-selected': inspectorTab === tab.id,
+              onClick: () => setInspectorTab(tab.id),
+            },
+            h(W.Icon, { name: tab.icon, size: 13 }),
+            h('span', null, tab.label),
+          ),
+        ),
+      ),
+      h(
+        'div',
+        { className: 'bl-inspector-content', role: 'tabpanel' },
+        inspectorTab === 'outliner'
+          ? renderOutlinerTab()
+          : inspectorTab === 'script'
+          ? renderScriptTab()
+          : renderParamsFields(true),
+      ),
+    );
+  }
+
+  return h(
+    'div',
+    { className: 'bl-studio-root', 'data-editor-mode': editorMode },
+    // Top OP-DSH Console Strip
+    h(
+      'div',
+      { className: 'bl-console-bar' },
+      h(
+        'div',
+        { className: 'bl-console-id' },
+        h('span', { className: 'bl-console-chip' }, 'OP-DSH · BLENDER'),
+        h(
+          'span',
+          {
+            className: 'bl-exec-chip',
+            'data-status': bridgeConnected ? 'bridge' : environment?.ready ? 'cli' : 'missing',
+            onClick: () => setEditorTab('bridge-env'),
+            role: 'button',
+            tabIndex: 0,
+            onKeyDown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setEditorTab('bridge-env'); } },
+          },
+          h('span', { className: 'bl-exec-dot', 'aria-hidden': 'true' }),
+          bridgeConnected
+            ? t('Live Bridge 已连接', 'Live Bridge Online')
+            : environment?.ready
+            ? t('CLI 离线渲染', 'Headless CLI Ready')
+            : t('未配置 Blender', 'Blender Not Found'),
+        ),
+        activeBlender
+          ? h('span', { className: 'w-tag bl-ver-badge' }, 'v' + activeBlender.version + ' · ' + (activeBlender.eeveeEngine === 'BLENDER_EEVEE_NEXT' ? 'EEVEE Next' : 'EEVEE'))
+          : null,
+      ),
+      h(
+        'div',
+        { className: 'bl-mode-switch', 'data-tour': 'blender-mode', role: 'group', 'aria-label': t('工作室与表单模式切换', 'Studio / Form switch') },
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'bl-mode-btn',
+            'data-studio-mode': 'studio',
+            'aria-pressed': editorMode === 'studio',
+            onClick: () => setEditorMode('studio'),
+          },
+          t('3D 工作室', 'Studio'),
+        ),
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'bl-mode-btn',
+            'data-studio-mode': 'form',
+            'aria-pressed': editorMode === 'form',
+            onClick: () => setEditorMode('form'),
+          },
+          t('表单', 'Form'),
+        ),
+      ),
+    ),
+
+    editorMode === 'studio'
+      ? h('div', { className: 'bl-studio-grid', 'data-studio-console': 'true' }, renderStageCard(), renderInspectorCard())
+      : h(
+          'div',
+          { className: 'bl-form-split dsh-split-pane', style: formSplit.paneStyle },
+          h(
+            'section',
+            { className: 'bl-form-pane dsh-split-leading', 'data-dsh-card': '' },
+            h('h3', { 'data-dsh-serif': '' }, t('3D 场景参数表单', '3D Scene Form')),
+            renderParamsFields(false),
+            h('hr', { className: 'bl-form-divider' }),
+            h('h3', { 'data-dsh-serif': '' }, t('bpy 脚本与大纲', 'bpy Script & Outliner')),
+            renderScriptTab(),
+          ),
+          h(W.SplitResizer, { ...formSplit.resizerProps, label: t('调整表单与预览宽度', 'Resize form and stage panes') }),
+          h('div', { className: 'bl-form-stage dsh-split-trailing' }, renderStageCard(), h('div', { className: 'bl-form-outliner', 'data-dsh-card': '' }, h('h3', { 'data-dsh-serif': '' }, t('场景大纲', 'Scene Outliner')), renderOutlinerTab())),
+        ),
+  );
+}
+
+const BLENDER_STUDIO_CSS = `
+.bl-studio-root{display:flex;flex-direction:column;gap:10px;min-width:0;padding-bottom:16px}
+.bl-console-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:2px 0}
+.bl-console-id{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.bl-console-chip{display:inline-flex;align-items:center;padding:2px 9px;border-radius:999px;border:var(--dsh-control-border-width,1px) solid var(--w-border);background:var(--w-bg);font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:11px;font-weight:700;letter-spacing:0.05em;color:var(--w-text)}
+.bl-exec-chip{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:999px;border:var(--dsh-control-border-width,1px) solid var(--w-border);background:var(--dsw-alias-settings-card-fill,var(--w-canvas));font-size:11.5px;font-weight:600;color:var(--w-text);cursor:pointer}
+.bl-exec-dot{width:7px;height:7px;border-radius:50%;flex:none;background:#94a3b8}
+.bl-exec-chip[data-status="bridge"] .bl-exec-dot{background:#10b981;box-shadow:0 0 6px rgba(16,185,129,0.75)}
+.bl-exec-chip[data-status="cli"] .bl-exec-dot{background:#3b82f6;box-shadow:0 0 5px rgba(59,130,246,0.55)}
+.bl-exec-chip[data-status="missing"] .bl-exec-dot{background:#f59e0b}
+.bl-ver-badge{font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:11px}
+.bl-mode-switch{display:inline-flex;align-items:center;gap:3px;padding:3px;border-radius:var(--dsw-radius-md,10px);border:var(--dsh-control-border-width,1px) solid var(--w-border);background:var(--w-bg)}
+.bl-mode-btn{border:0;border-radius:var(--dsw-radius-sm,7px);padding:4px 12px;font:inherit;font-size:12px;font-weight:600;background:transparent;color:var(--w-muted);cursor:pointer}
+.bl-mode-btn[aria-pressed="true"]{background:var(--w-canvas);color:var(--w-text);box-shadow:0 1px 3px rgba(15,23,42,0.12)}
+
+.bl-studio-grid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(300px,375px);gap:12px;align-items:start;min-width:0}
+.bl-stage-monitor{display:flex;flex-direction:column;gap:10px;padding:12px 14px;border-radius:var(--dsw-radius-lg,14px);background:#1f242d;color:#eef2f7;border:1px solid #343b49;box-shadow:inset 0 1px 0 rgba(255,255,255,0.06),0 8px 24px rgba(15,23,42,0.14);min-width:0}
+.bl-stage-hud{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;min-width:0}
+.bl-stage-meta-group{display:inline-flex;align-items:center;gap:7px;flex-wrap:wrap;min-width:0}
+.bl-stage-dot{width:8px;height:8px;border-radius:50%;background:#64748b;flex:none}
+.bl-stage-dot[data-live="true"]{background:#e85d2a;box-shadow:0 0 8px rgba(232,93,42,0.8)}
+.bl-stage-readout{font-family:var(--dsh-font-mono,ui-monospace,monospace);font-variant-numeric:tabular-nums;font-size:11.5px;color:#cbd5e1}
+.bl-stale-pill{padding:1px 7px;border-radius:999px;background:rgba(245,158,11,0.2);border:1px solid rgba(251,191,36,0.45);color:#fde68a;font-size:10.5px;font-weight:600}
+.bl-stage-view-tabs{display:inline-flex;gap:4px;flex-wrap:wrap}
+.bl-stage-view-btn{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;font:inherit;font-size:11.5px;font-weight:600;border-radius:6px;background:#2a313e;border:1px solid #3f4859;color:#cbd5e1;cursor:pointer}
+.bl-stage-view-btn[aria-selected="true"]{background:#e85d2a;border-color:#e85d2a;color:#ffffff}
+.bl-artifact-dot{width:6px;height:6px;border-radius:50%;background:#4ade80;display:inline-block}
+.bl-stage-view-btn[aria-selected="true"] .bl-artifact-dot{background:#ffffff}
+
+.bl-stage-bezel{display:flex;align-items:center;justify-content:center;padding:12px;border-radius:10px;background:#232833;border:1px solid #363e4d;min-height:410px;min-width:0;overflow:clip}
+.bl-canvas-frame{position:relative;width:100%;max-width:760px;max-height:430px;margin:0 auto;border-radius:8px;overflow:clip;border:1px solid rgba(255,255,255,0.10);box-shadow:0 8px 22px rgba(15,23,42,0.32)}
+.bl-canvas-frame[data-aspect="portrait"]{width:auto;height:400px;max-width:236px}
+.bl-canvas-frame[data-aspect="square"]{width:auto;height:390px;max-width:390px}
+.bl-stage-canvas{display:block;width:100%;height:100%;cursor:grab;touch-action:none;user-select:none}
+.bl-stage-canvas:active{cursor:grabbing}
+
+.bl-artifact-viewer{display:flex;flex-direction:column;align-items:center;gap:8px;width:100%}
+.bl-artifact-viewer img,.bl-artifact-viewer video{max-width:100%;max-height:420px;border-radius:8px;object-fit:contain;background:#1b2029}
+.bl-artifact-caption{width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:11px;color:#94a3b8;flex-wrap:wrap}
+.dbw .bl-stage-dl-link{display:inline-flex;align-items:center;gap:4px;color:#ffb092;text-decoration:none;font-weight:600}
+.dbw .bl-stage-dl-link:hover{color:#ffd2bf;text-decoration:underline}
+.bl-artifact-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:32px 18px;text-align:center;color:#94a3b8;font-size:13px}
+.bl-artifact-empty p{margin:0;max-width:42ch}
+
+.bl-orbit-deck{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:6px 8px;border-radius:8px;background:#272d38;border:1px solid #353e4e}
+.bl-orbit-controls{display:inline-flex;align-items:center;gap:5px;flex-wrap:wrap}
+.bl-turntable-btn{padding:4px 11px;border-radius:6px;border:1px solid #d65020;background:#e85d2a;color:#fff;font:inherit;font-size:11.5px;font-weight:700;cursor:pointer}
+.bl-turntable-btn[data-playing="true"]{background:#c9491b}
+.bl-cam-mini-btn{padding:3px 9px;border-radius:6px;border:1px solid #414b5e;background:#303746;color:#e2e8f0;font:inherit;font-size:11.5px;font-weight:600;cursor:pointer}
+.bl-cam-mini-btn[aria-pressed="true"]{background:#4176e6;border-color:#5b8def;color:#fff}
+.bl-frame-scrubber{display:inline-flex;align-items:center;gap:8px;flex:1 1 160px;min-width:140px;max-width:260px}
+.bl-frame-readout{font-family:var(--dsh-font-mono,ui-monospace,monospace);font-variant-numeric:tabular-nums;font-size:11px;color:#cbd5e1;white-space:nowrap}
+.bl-frame-scrubber input[type="range"]{flex:1;min-width:0;accent-color:#e85d2a;cursor:pointer}
+.bl-stage-actions{display:flex;flex-wrap:wrap;gap:6px;padding-top:4px;border-top:1px solid #313847}
+.bl-stage-actions .w-button{background:#2a313e;border-color:#424c60;color:#eef2f7}
+.bl-stage-actions .w-button.w-primary{background:#e85d2a;border-color:#d65020;color:#ffffff}
+
+.bl-inspector-card{display:flex;flex-direction:column;border:var(--dsh-control-border-width,1px) solid var(--w-border);border-radius:var(--dsw-radius-lg,14px);background:var(--dsw-alias-settings-card-fill,var(--w-canvas));overflow:clip;min-width:0}
+.bl-inspector-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:6px;background:var(--w-bg);border-bottom:var(--dsh-control-border-width,1px) solid var(--w-border)}
+.bl-inspector-tab{display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:6px 8px;border:0;border-radius:var(--dsw-radius-sm,8px);background:transparent;color:var(--w-muted);font:inherit;font-size:12px;font-weight:600;cursor:pointer;position:relative}
+.bl-inspector-tab[aria-selected="true"]{background:var(--w-canvas);color:var(--w-text);box-shadow:0 1px 3px rgba(15,23,42,0.08)}
+.bl-inspector-tab[aria-selected="true"]::after{content:"";position:absolute;inset:auto 16% 0;border-block-end:2.5px solid var(--w-accent)}
+.bl-inspector-content{padding:12px 14px 18px;display:flex;flex-direction:column;gap:10px;max-height:704px;overflow-y:auto;overscroll-behavior:contain;min-width:0}
+
+.bl-params-body{display:flex;flex-direction:column;gap:10px;min-width:0}
+.bl-field{display:flex;flex-direction:column;gap:5px;min-width:0}
+.bl-field label,.bl-label{margin:0;font-size:11.5px;font-weight:600;color:var(--w-muted)}
+.bl-field-error{font-size:11.5px;color:var(--dsw-alias-state-error-primary,#c83240)}
+.bl-pill-grid{display:flex;flex-wrap:wrap;gap:5px}
+.bl-tpl-pill{padding:4px 9px;font:inherit;font-size:11.5px;font-weight:600;border-radius:999px;background:var(--w-bg);border:var(--dsh-control-border-width,1px) solid var(--w-border);color:var(--w-text);cursor:pointer}
+.bl-tpl-pill[aria-pressed="true"]{background:var(--w-primary);border-color:var(--w-primary);color:var(--w-on-primary)}
+.bl-keycap-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.bl-mech-key{display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:6px 8px;font:inherit;font-size:11.5px;font-weight:650;border-radius:var(--dsw-radius-sm,8px);background:var(--w-bg);border:var(--dsh-control-border-width,1px) solid var(--w-border);color:var(--w-text);cursor:pointer;box-shadow:0 2px 0 var(--w-border)}
+.bl-mech-key[aria-pressed="true"]{background:var(--w-selected);border-color:var(--w-accent);color:var(--w-accent);box-shadow:inset 0 1px 2px rgba(15,23,42,0.1)}
+.bl-mech-led{width:6px;height:6px;border-radius:50%;background:var(--w-border);flex:none}
+.bl-mech-key[aria-pressed="true"] .bl-mech-led{background:#e85d2a;box-shadow:0 0 5px rgba(232,93,42,0.75)}
+.bl-scale-row{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;margin-top:4px}
+.bl-mini-chip{padding:3px 6px;border-radius:6px;border:var(--dsh-control-border-width,1px) solid var(--w-border);background:var(--w-bg);color:var(--w-muted);font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:11px;font-weight:600;cursor:pointer}
+.bl-mini-chip[aria-pressed="true"]{border-color:var(--w-accent);color:var(--w-accent);background:var(--w-selected)}
+.bl-slider-row{display:flex;align-items:center;gap:8px}
+.bl-tactile-slider{flex:1;min-width:0;accent-color:var(--w-accent);cursor:pointer}
+.bl-num-compact{width:76px!important;flex:none;text-align:right;font-family:var(--dsh-font-mono,ui-monospace,monospace)}
+.bl-field-grid-2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;align-items:end}
+.bl-field-grid-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.bl-color-row{display:flex;align-items:center;gap:6px}
+.bl-color-swatch{width:34px;height:34px;padding:2px;border:var(--dsh-control-border-width,1px) solid var(--w-border);border-radius:var(--dsw-radius-sm,8px);background:var(--w-bg);cursor:pointer;flex:none}
+.bl-switch-wrap{justify-content:center;padding-bottom:4px}
+
+.bl-outliner-body,.bl-script-body{display:flex;flex-direction:column;gap:10px;min-width:0}
+.bl-outliner-head,.bl-script-head-meta{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.bl-stat-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px}
+.bl-stat-box{display:flex;flex-direction:column;align-items:center;padding:6px 4px;border-radius:8px;background:var(--w-bg);border:var(--dsh-control-border-width,1px) solid var(--w-border)}
+.bl-stat-val{font-family:var(--dsh-font-mono,ui-monospace,monospace);font-weight:700;font-size:13px}
+.bl-stat-lbl{font-size:10px;color:var(--w-muted)}
+.bl-outliner-meta{margin:0;font-size:11.5px}
+.bl-tag-wrap{display:flex;flex-wrap:wrap;gap:4px}
+.bl-object-list{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:4px}
+.bl-object-row{display:flex;align-items:center;gap:7px;padding:6px 8px;border-radius:7px;background:var(--w-bg);border:var(--dsh-control-border-width,1px) solid var(--w-border);font-size:11.5px;min-width:0}
+.bl-obj-type{font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:9.5px;font-weight:700;padding:1px 5px;border-radius:4px;background:var(--w-selected);color:var(--w-accent);flex:none}
+.bl-obj-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bl-obj-loc,.bl-obj-poly{font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:10.5px;color:var(--w-muted);flex:none}
+
+.bl-script-mode-row{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.bl-script-toolbar{display:flex;gap:6px;flex-wrap:wrap}
+.bl-code-editor{font-family:var(--dsh-font-mono,ui-monospace,monospace)!important;font-size:12px!important;line-height:1.5;min-height:200px;resize:vertical}
+.bl-script-readonly{max-height:170px}
+.bl-script-run-row{display:flex;flex-direction:column;gap:8px}
+
+.bl-form-split{min-height:520px;align-items:start}
+.bl-form-pane{padding:14px 16px;border:var(--dsh-control-border-width,1px) solid var(--w-border);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-settings-card-fill,var(--w-canvas))}
+.bl-form-divider{border:0;border-top:var(--dsh-control-border-width,1px) solid var(--w-border);margin:14px 0}
+.bl-form-stage{display:flex;flex-direction:column;gap:12px;min-width:0}
+.bl-form-outliner{padding:14px 16px;border:var(--dsh-control-border-width,1px) solid var(--w-border);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-settings-card-fill,var(--w-canvas))}
+
+@container dsh-workbench (max-width:940px){
+  .bl-studio-grid{grid-template-columns:1fr}
+  .bl-inspector-content{max-height:none}
+}
+`;

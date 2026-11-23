@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none" role="img" aria-label="dsh-blender 3D studio icon">
+  <defs>
+    <linearGradient id="bgGrad" x1="28" y1="24" x2="228" y2="232" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#253047"/>
+      <stop offset="55%" stop-color="#1A2233"/>
+      <stop offset="100%" stop-color="#121826"/>
+    </linearGradient>
+    <linearGradient id="rimGrad" x1="36" y1="24" x2="220" y2="232" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7B93BC" stop-opacity="0.72"/>
+      <stop offset="50%" stop-color="#3A4A68" stop-opacity="0.45"/>
+      <stop offset="100%" stop-color="#F59E0B" stop-opacity="0.40"/>
+    </linearGradient>
+    <linearGradient id="topFace" x1="64" y1="54" x2="192" y2="128" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFB347"/>
+      <stop offset="55%" stop-color="#F27A1A"/>
+      <stop offset="100%" stop-color="#DE5D08"/>
+    </linearGradient>
+    <linearGradient id="leftFace" x1="60" y1="92" x2="128" y2="206" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#3B82D6"/>
+      <stop offset="100%" stop-color="#1C4E8F"/>
+    </linearGradient>
+    <linearGradient id="rightFace" x1="128" y1="128" x2="196" y2="188" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FBF7EF"/>
+      <stop offset="100%" stop-color="#D7CFC2"/>
+    </linearGradient>
+    <linearGradient id="coreGrad" x1="112" y1="114" x2="144" y2="146" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#67E8F9"/>
+      <stop offset="100%" stop-color="#2563EB"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded studio tile with ~10% transparent safe margin -->
+  <rect x="24" y="24" width="208" height="208" rx="48" fill="url(#bgGrad)"/>
+  <rect x="25.5" y="25.5" width="205" height="205" rx="46.5" stroke="url(#rimGrad)" stroke-width="3"/>
+
+  <!-- Subtle drafting coordinate lines -->
+  <g stroke="#94A3B8" stroke-opacity="0.14" stroke-width="1.5" stroke-linecap="round">
+    <line x1="128" y1="38" x2="128" y2="54"/>
+    <line x1="48" y1="176" x2="62" y2="168"/>
+    <line x1="208" y1="176" x2="194" y2="168"/>
+  </g>
+
+  <!-- Isometric 3D cube centered at (128, 128), outer radius 76 -->
+  <!-- Top face (orange) -->
+  <polygon points="128,52 193.8,90 128,128 62.2,90" fill="url(#topFace)"/>
+  <!-- Left face (cobalt blue) -->
+  <polygon points="62.2,90 128,128 128,204 62.2,166" fill="url(#leftFace)"/>
+  <!-- Right face (warm studio ceramic ivory) -->
+  <polygon points="193.8,90 128,128 128,204 193.8,166" fill="url(#rightFace)"/>
+
+  <!-- Facet crisp outer contour -->
+  <polygon points="128,52 193.8,90 193.8,166 128,204 62.2,166 62.2,90" fill="none" stroke="#FFFFFF" stroke-opacity="0.22" stroke-width="2.5" stroke-linejoin="round"/>
+
+  <!-- Specular inner Y-bevel highlight -->
+  <path d="M63.5,90.8 L128,128 L192.5,90.8 M128,128 L128,202.5" stroke="#FFFFFF" stroke-opacity="0.65" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Center optical prism / studio pivot core -->
+  <circle cx="128" cy="128" r="24" fill="#151D2C" stroke="#FFFDF9" stroke-width="4"/>
+  <circle cx="128" cy="128" r="13.5" fill="url(#coreGrad)"/>
+  <circle cx="123.5" cy="123.5" r="4" fill="#FFFFFF" fill-opacity="0.78"/>
+
+  <!-- Precision 3-axis vertex pips (Z-up orange/amber, X coral, Y mint) -->
+  <circle cx="128" cy="52" r="5" fill="#FFF7ED" stroke="#EA580C" stroke-width="2.5"/>
+  <circle cx="62.2" cy="166" r="4.5" fill="#EFF6FF" stroke="#2563EB" stroke-width="2.5"/>
+  <circle cx="193.8" cy="166" r="4.5" fill="#F0FDF4" stroke="#10B981" stroke-width="2.5"/>
+</svg>

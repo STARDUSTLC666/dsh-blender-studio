@@ -1,0 +1,7 @@
+# dsh-blender-studio 组合包补丁：把 Blender 3D 工作室与技能插件行插入 profile。
+# 插件加载即把 8 个 Blender 技能、6 个 Agent 工具与 3D 工作室工作台注册进宿主，无需手动配置。
+#
+- insert:
+    - id: blender-studio
+      name: 'dsh-blender-studio'
+      config: {}

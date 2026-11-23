@@ -1,0 +1,9 @@
+node_modules/
+.release/
+test/.tmp-*/
+test/.blender-fixture-*/
+*.log
+*.tgz
+*.tmp
+__pycache__/
+*.pyc
