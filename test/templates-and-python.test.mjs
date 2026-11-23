@@ -219,7 +219,7 @@ test('Python ast.parse verifies blender/dsh_blender_bridge.py and every generate
 
   const checker = [
     'import ast, json, sys',
-    'items = json.loads(sys.stdin.read())',
+    'items = json.loads(sys.stdin.buffer.read().decode("utf-8"))',
     'errors = []',
     'for item in items:',
     '    try:',
@@ -227,16 +227,21 @@ test('Python ast.parse verifies blender/dsh_blender_bridge.py and every generate
     '    except SyntaxError as exc:',
     '        errors.append(f"{item[\'name\']}:{exc.lineno}: {exc.msg}")',
     'if errors:',
-    '    sys.stderr.write("\\n".join(errors))',
+    '    sys.stderr.buffer.write(("\\n".join(errors)).encode("utf-8"))',
     '    sys.exit(1)',
-    'print(f"OK:{len(items)}")',
+    'sys.stdout.buffer.write(f"OK:{len(items)}\\n".encode("utf-8"))',
   ].join('\n')
 
   const res = spawnSync(pythonBin, ['-c', checker], {
-    input: JSON.stringify(scripts),
+    input: Buffer.from(JSON.stringify(scripts), 'utf8'),
     encoding: 'utf8',
     shell: false,
     maxBuffer: 16 * 1024 * 1024,
+    env: {
+      ...process.env,
+      PYTHONUTF8: '1',
+      PYTHONIOENCODING: 'utf-8',
+    },
   })
   assert.equal(res.status, 0, `Python ast.parse failed:\n${res.stderr}\n${res.stdout}`)
   assert.equal(res.stdout.trim(), `OK:${scripts.length}`)
