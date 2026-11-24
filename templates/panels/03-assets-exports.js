@@ -16,6 +16,7 @@ function BlenderAssetsExportsPanel({
   setEditorTab,
   setStageView,
   setArchiveReview,
+  onTrashRequest,
   onExportFormat,
   refresh,
   lang = 'zh',
@@ -631,14 +632,30 @@ function BlenderAssetsExportsPanel({
           t('下载可编辑工程源码备份 (.zip)', 'Download editable project backup (.zip)'),
         ),
         h(
-          W.Button,
-          {
-            icon: 'folder',
-            variant: 'ghost',
-            disabled: busy || dirty || activeJob,
-            onClick: () => setArchiveReview(true),
-          },
-          t('归档此工程', 'Archive project'),
+          'div',
+          { className: 'w-toolbar' },
+          h(
+            W.Button,
+            {
+              icon: 'folder',
+              variant: 'ghost',
+              disabled: busy || dirty || activeJob,
+              onClick: () => setArchiveReview(true),
+            },
+            t('归档此工程', 'Archive project'),
+          ),
+          onTrashRequest
+            ? h(
+                W.Button,
+                {
+                  icon: 'trash',
+                  variant: 'danger',
+                  disabled: busy || dirty || activeJob,
+                  onClick: () => onTrashRequest(project, false),
+                },
+                t('移入回收站', 'Move to Recycle Bin'),
+              )
+            : null,
         ),
       ),
     ),

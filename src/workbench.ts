@@ -29,7 +29,7 @@ import {
   type BlenderRunExecutor,
 } from './runner.js'
 import type { SkillBundleHealthReport, SkillsPluginContext } from './skill-bundle.js'
-import { BlenderStore } from './store.js'
+import { BlenderStore, type TrashPathFn } from './store.js'
 import { BLENDER_TEMPLATES, generateRunnerHarness, generateSceneScript } from './templates.js'
 import { registerBlenderTools } from './tools.js'
 import {
@@ -93,6 +93,7 @@ export interface BlenderWorkbenchOptions {
   extraCandidates?: BlenderCandidate[]
   launchGui?: (executablePath: string, blendFile?: string) => Promise<LaunchBlenderGuiResult>
   checkSkillsHealth?: () => Promise<SkillBundleHealthReport>
+  trashPath?: TrashPathFn
 }
 
 const MAX_JSON_BODY_BYTES = 512 * 1024 // 512 KB (custom scripts up to 256 KB + metadata)
@@ -235,7 +236,7 @@ export class BlenderWorkbench {
   private lastBridgeStatus?: BlenderBridgeStatus
 
   constructor(options: BlenderWorkbenchOptions = {}) {
-    this.store = options.store ?? new BlenderStore(options.root)
+    this.store = options.store ?? new BlenderStore(options.root, { trashPath: options.trashPath })
     this.environment =
       options.environment ??
       new BlenderEnvironment({
@@ -1245,6 +1246,31 @@ export class BlenderWorkbench {
             })
             try {
               value = await this.store.archive(blenderId(v.id), v.revision, v.action === 'restore')
+            } finally {
+              await unlock().catch(() => {})
+            }
+            break
+          }
+          case 'trash': {
+            if (v.confirmed !== true) {
+              throw new BlenderError('请明确确认移入系统回收站。', 'CONFIRM_REQUIRED', 400)
+            }
+            if (this.starting || [...this.jobs.values()].some(j => j.view.state === 'running')) {
+              throw new BlenderConflict('已有 Blender 任务正在运行，请先等待完成或取消任务后再移入系统回收站。')
+            }
+            const id = blenderId(v.id)
+            const archived = v.archived !== false
+            const slot = join(this.store.root, 'workbench-slot')
+            await this.store.init()
+            await mkdir(slot, { recursive: true })
+            const unlock = await lockfile.lock(slot, { retries: 0, stale: 30_000, update: 10_000 }).catch(error => {
+              if ((error as { code?: string }).code === 'ELOCKED') {
+                throw new BlenderConflict('已有 Blender 任务正在运行，请先等待完成或取消任务后再移入系统回收站。')
+              }
+              throw error
+            })
+            try {
+              value = await this.store.trash(id, v.revision, archived)
             } finally {
               await unlock().catch(() => {})
             }

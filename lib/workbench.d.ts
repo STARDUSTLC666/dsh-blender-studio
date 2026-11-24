@@ -3,7 +3,7 @@ import { BlenderEnvironment, type BlenderCandidate, type BlenderVersionProber } 
 import { PolyHavenClient } from './polyhaven.js';
 import { BlenderRunner, type BlenderRunExecutor } from './runner.js';
 import type { SkillBundleHealthReport, SkillsPluginContext } from './skill-bundle.js';
-import { BlenderStore } from './store.js';
+import { BlenderStore, type TrashPathFn } from './store.js';
 import { type BlenderBridgeStatus, type BlenderEnvironmentStatus, type BlenderExportFormat, type BlenderJob, type BlenderJobKind, type BlenderPipelineOptions, type BlenderSceneSummary, type BlenderSettings } from './types.js';
 export interface StartJobOptions {
     format?: BlenderExportFormat;
@@ -28,6 +28,7 @@ export interface BlenderWorkbenchOptions {
     extraCandidates?: BlenderCandidate[];
     launchGui?: (executablePath: string, blendFile?: string) => Promise<LaunchBlenderGuiResult>;
     checkSkillsHealth?: () => Promise<SkillBundleHealthReport>;
+    trashPath?: TrashPathFn;
 }
 export declare class BlenderWorkbench {
     readonly store: BlenderStore;

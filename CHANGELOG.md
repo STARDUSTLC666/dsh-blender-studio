@@ -2,6 +2,12 @@
 
 [返回简介](README.md) · [完整说明](docs/REFERENCE.zh.md) · [Live Bridge 指南](docs/BRIDGE.md) · [验证说明](docs/VALIDATION.md)
 
+## [0.2.2] - 2026-11-24
+
+- **系统回收站清理 3D 工程**：在活跃工程行、已归档工程行及「素材与成品」页新增 **「移入回收站」** 与确认弹窗（`trash`），采用零依赖跨平台系统原生回收站（Windows / macOS / Linux），包含修订号校验、运行中任务互斥与目录锁先释放保护。
+- **外部删目录自动消失与预扫清理**：切回窗口（`focus` / `visibilitychange`）与列表页 8 秒静默同步自动移除磁盘上已删除的 3D 工程；未扫到前点击打开自动刷新列表，未扫到前手动点击「移入回收站」0 报错直接清理列表条目。
+- **OS Recycle Bin & stale-folder auto-sync**: add confirmed **Move to Recycle Bin** (`trash`) on active/archived projects and Assets & Exports with revision & running-job guards; auto-hide externally deleted project folders on window focus/visibility return and 8s library sync, with clean zero-error pre-scan manual removal.
+
 ## [0.2.1] - 2026-11-24
 
 - **恢复归档工程视图复位**：从「已归档工程」恢复并打开项目时，自动将编辑页签重置回 **3D 工作室**，与新建、打开和复制工程体验保持一致，不再停留在上次切换的旧页签。

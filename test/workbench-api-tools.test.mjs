@@ -229,6 +229,7 @@ async function createWorkbenchFixture(t, extra = {}) {
     executor,
     fetchImpl,
     bridge: extra.bridge,
+    trashPath: extra.trashPath,
     launchGui: async (executable, blendFile) => {
       launchedGuis.push({ executable, blendFile })
       return { pid: 4242, executable, blendFile }
@@ -859,4 +860,57 @@ test('v0.2.0 HTTP API & Agent tools: duplicate, script checkpoints, 512 KB POST 
   const scriptRun = await scriptTool.execute({ action: 'run_bridge', code: 'import bpy\nprint("qc")' })
   const scriptRunText = scriptTool.output.render({}, scriptRun)[0].text
   assert.match(scriptRunText, /QC-3D/)
+})
+
+test('BlenderWorkbench trash action moves archived/active projects to Recycle Bin with confirmation, revision & running-job guards, and stale folders return 404 PROJECT_NOT_FOUND', async (t) => {
+  const trashed = []
+  const trashPath = async (targetPath) => {
+    trashed.push(targetPath)
+    await rm(targetPath, { recursive: true, force: true })
+    return { moved: true }
+  }
+  const { workbench, post, setBehavior } = await createWorkbenchFixture(t, { trashPath })
+  const p1 = (await (await post({ action: 'create', fields: defaultProjectFields({ title: 'Archived 3D Scene' }) })).json()).value
+  const p2 = (await (await post({ action: 'create', fields: defaultProjectFields({ title: 'Active 3D Scene' }) })).json()).value
+  const p3 = (await (await post({ action: 'create', fields: defaultProjectFields({ title: 'Externally Deleted Scene' }) })).json()).value
+
+  assert.equal((await post({ action: 'archive', id: p1.id, revision: p1.revision, confirmed: true })).status, 200)
+
+  // Reject unconfirmed, wrong revision, invalid id
+  assert.equal((await post({ action: 'trash', id: p1.id, revision: p1.revision, archived: true })).status, 400)
+  assert.equal((await post({ action: 'trash', id: p1.id, revision: p1.revision + 1, archived: true, confirmed: true })).status, 409)
+  assert.equal((await post({ action: 'trash', id: '../../outside', revision: 1, archived: true, confirmed: true })).status, 400)
+  assert.equal(trashed.length, 0)
+
+  // Archived project trash succeeds
+  const archivedDir = await workbench.store.path(p1.id, true)
+  const res1 = await post({ action: 'trash', id: p1.id, revision: p1.revision, archived: true, confirmed: true })
+  assert.equal(res1.status, 200)
+  assert.deepEqual(trashed, [archivedDir])
+  assert.equal((await workbench.store.list(true)).length, 0)
+
+  // Blocked while a Blender job is running, succeeds after cancellation
+  setBehavior('hang')
+  const runningJob = (await (await post({ action: 'preview_still', id: p2.id, revision: p2.revision })).json()).value
+  const blocked = await post({ action: 'trash', id: p2.id, revision: p2.revision, archived: false, confirmed: true })
+  assert.equal(blocked.status, 409)
+  workbench.cancelJob(runningJob.id)
+  await workbench.waitForJob(runningJob.id)
+
+  const activeDir = await workbench.store.path(p2.id, false)
+  const res2 = await post({ action: 'trash', id: p2.id, revision: p2.revision, archived: false, confirmed: true })
+  assert.equal(res2.status, 200)
+  assert.equal(trashed.at(-1), activeDir)
+
+  // Externally deleted project vanishes from list and returns 404 PROJECT_NOT_FOUND on stale open/trash
+  const goneDir = await workbench.store.path(p3.id, false)
+  await rm(goneDir, { recursive: true, force: true })
+  const staleGet = await post({ action: 'get', id: p3.id })
+  assert.equal(staleGet.status, 404)
+  assert.equal((await staleGet.json()).code, 'PROJECT_NOT_FOUND')
+  const staleTrash = await post({ action: 'trash', id: p3.id, revision: p3.revision, archived: false, confirmed: true })
+  assert.equal(staleTrash.status, 404)
+  const listed = await (await post({ action: 'list' })).json()
+  assert.deepEqual(listed.value.projects, [])
+  assert.equal(listed.value.corruptedCount, undefined)
 })

@@ -478,6 +478,7 @@ window.__ModuleLoader__.load({
       const [conflict, setConflict] = useState(false);
       const [archiveReview, setArchiveReview] = useState(false);
       const [archiveTarget, setArchiveTarget] = useState(null);
+      const [trashTarget, setTrashTarget] = useState(null);
       const [exportOpen, setExportOpen] = useState(false);
       const [exportFormat, setExportFormat] = useState('glb');
       const [titleTouched, setTitleTouched] = useState(false);
@@ -567,6 +568,31 @@ window.__ModuleLoader__.load({
       }, []);
 
       useEffect(() => {
+        if (project || creating || archiveTarget || trashTarget) return undefined;
+        let inflight = false;
+        let cancelled = false;
+        function syncLibrary() {
+          if (cancelled || inflight || busyRef.current || (typeof document !== 'undefined' && document.visibilityState === 'hidden')) return;
+          inflight = true;
+          refresh().catch(() => { /* silent background sync */ }).finally(() => { inflight = false; });
+        }
+        const onFocus = () => syncLibrary();
+        const onVisibility = () => {
+          if (typeof document === 'undefined' || document.visibilityState !== 'hidden') syncLibrary();
+        };
+        if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('focus', onFocus);
+        if (typeof document !== 'undefined' && document.addEventListener) document.addEventListener('visibilitychange', onVisibility);
+        const timer = typeof setInterval === 'function' ? setInterval(syncLibrary, 8000) : null;
+        timer?.unref?.();
+        return () => {
+          cancelled = true;
+          if (timer != null && typeof clearInterval === 'function') clearInterval(timer);
+          if (typeof window !== 'undefined' && window.removeEventListener) window.removeEventListener('focus', onFocus);
+          if (typeof document !== 'undefined' && document.removeEventListener) document.removeEventListener('visibilitychange', onVisibility);
+        };
+      }, [!!project, creating, !!archiveTarget, !!trashTarget]);
+
+      useEffect(() => {
         if (!job || job.state !== 'running') return undefined;
         const tick = setInterval(() => setElapsedTick(v => (v + 1) % 100000), 1000);
         return () => clearInterval(tick);
@@ -653,15 +679,27 @@ window.__ModuleLoader__.load({
       }
 
       async function openProject(id) {
-        const next = await api({ action: 'get', id });
-        setProject(next);
-        syncFields(fieldsOf(next));
-        setCreating(false);
-        setDirty(false);
-        setConflict(false);
-        setPending(null);
-        setArchiveReview(false);
-        setStageView('stage');
+        try {
+          const next = await api({ action: 'get', id });
+          setProject(next);
+          syncFields(fieldsOf(next));
+          setCreating(false);
+          setDirty(false);
+          setConflict(false);
+          setPending(null);
+          setArchiveReview(false);
+          setStageView('stage');
+        } catch (e) {
+          if (e?.status === 404 || e?.code === 'PROJECT_NOT_FOUND') {
+            await refresh().catch(() => {});
+            if (latest.current.project?.id === id) {
+              setProject(null);
+              setCreating(false);
+              setDirty(false);
+            }
+          }
+          throw e;
+        }
       }
 
       function navigate(target) {
@@ -766,7 +804,15 @@ window.__ModuleLoader__.load({
       async function duplicateProject(item) {
         if (!item) return;
         await perform(async () => {
-          const cloned = await api({ action: 'duplicate', id: item.id });
+          let cloned;
+          try {
+            cloned = await api({ action: 'duplicate', id: item.id });
+          } catch (e) {
+            if (e?.status === 404 || e?.code === 'PROJECT_NOT_FOUND') {
+              await refresh().catch(() => {});
+            }
+            throw e;
+          }
           await refresh();
           if (cloned?.id) {
             setProject(cloned);
@@ -858,7 +904,21 @@ window.__ModuleLoader__.load({
 
       async function archiveProject(target = project) {
         if (!target) return;
-        await api({ action: 'archive', id: target.id, revision: target.revision, confirmed: true });
+        try {
+          await api({ action: 'archive', id: target.id, revision: target.revision, confirmed: true });
+        } catch (e) {
+          if (e?.status === 404 || e?.code === 'PROJECT_NOT_FOUND') {
+            setArchiveReview(false);
+            setArchiveTarget(null);
+            if (project?.id === target.id) {
+              setProject(null);
+              setCreating(false);
+              setDirty(false);
+            }
+            await refresh().catch(() => {});
+          }
+          throw e;
+        }
         setArchiveReview(false);
         setArchiveTarget(null);
         if (project?.id === target.id) {
@@ -868,6 +928,41 @@ window.__ModuleLoader__.load({
         }
         await refresh();
         setNotice(t('工程已归档，素材与渲染成品全部保留。', 'Project archived. Assets and renders are preserved.'));
+      }
+
+      async function trashProject(target = trashTarget) {
+        if (!target?.project) return;
+        const row = target.project;
+        let alreadyMissing = false;
+        try {
+          await api({
+            action: 'trash',
+            id: row.id,
+            revision: row.revision,
+            archived: Boolean(target.archived),
+            confirmed: true,
+          });
+        } catch (e) {
+          if (e?.status === 404 || e?.code === 'PROJECT_NOT_FOUND') {
+            alreadyMissing = true;
+          } else {
+            throw e;
+          }
+        }
+        setTrashTarget(null);
+        setArchiveReview(false);
+        setArchiveTarget(null);
+        if (project?.id === row.id) {
+          setProject(null);
+          setCreating(false);
+          setDirty(false);
+        }
+        await refresh().catch(() => {});
+        setNotice(
+          alreadyMissing
+            ? t('原 3D 工程目录已不存在，已从列表清理。', '3D project folder was already missing on disk; removed the stale entry from the list.')
+            : t('3D 工程已移入系统回收站，可在系统回收站还原。', '3D project moved to the system Recycle Bin. Restore it from your OS Recycle Bin if needed.'),
+        );
       }
 
       async function copyTourPrompt(text) {
@@ -1359,9 +1454,15 @@ window.__ModuleLoader__.load({
                   onCreate: tplId => navigate(tplId ? { newTemplate: tplId } : 'new'),
                   onDuplicate: duplicateProject,
                   onArchiveRequest: item => setArchiveTarget(item),
+                  onTrashRequest: (item, isArchived) => setTrashTarget({ project: item, archived: Boolean(isArchived) }),
                   onRestore: item =>
                     perform(async () => {
-                      await api({ action: 'restore', id: item.id, revision: item.revision, confirmed: true });
+                      try {
+                        await api({ action: 'restore', id: item.id, revision: item.revision, confirmed: true });
+                      } catch (e) {
+                        if (e?.status === 404 || e?.code === 'PROJECT_NOT_FOUND') await refresh().catch(() => {});
+                        throw e;
+                      }
                       await refresh();
                       setEditorTab('studio');
                       await openProject(item.id);
@@ -1399,6 +1500,7 @@ window.__ModuleLoader__.load({
                 setEditorTab,
                 setStageView,
                 setArchiveReview,
+                onTrashRequest: (item, isArchived) => setTrashTarget({ project: item, archived: Boolean(isArchived) }),
                 onExportFormat: fmt => {
                   setExportFormat(fmt);
                   setExportOpen(true);
@@ -1609,6 +1711,44 @@ window.__ModuleLoader__.load({
                   },
                   t('取消', 'Cancel'),
                 ),
+              ),
+            )
+          : null,
+
+        // Move to OS Recycle Bin confirmation dialog
+        trashTarget
+          ? h(
+              W.Dialog,
+              {
+                className: 'dbw blender-dialog',
+                title: t('移入系统回收站', 'Move 3D project to Recycle Bin'),
+                closeLabel: t('取消', 'Cancel'),
+                busy: busy || activeJob,
+                onClose: () => setTrashTarget(null),
+              },
+              h('p', null, h('strong', null, trashTarget.project.title)),
+              h(
+                'p',
+                { className: 'w-muted' },
+                t(
+                  '将把该 3D 工程目录（含场景配置、上传素材副本与所有渲染/导出成品）移入系统回收站，可在系统回收站中还原。',
+                  'Moves this 3D project folder (scene settings, uploaded asset copies, and rendered/exported artifacts) to your OS Recycle Bin / Trash where it can be restored.',
+                ),
+              ),
+              h(
+                'div',
+                { className: 'w-toolbar' },
+                h(
+                  W.Button,
+                  {
+                    variant: 'danger',
+                    icon: 'trash',
+                    disabled: busy || dirty || activeJob,
+                    onClick: () => perform(() => trashProject(trashTarget)),
+                  },
+                  t('确认移入回收站', 'Move to Recycle Bin'),
+                ),
+                h(W.Button, { disabled: busy, onClick: () => setTrashTarget(null) }, t('取消', 'Cancel')),
               ),
             )
           : null,

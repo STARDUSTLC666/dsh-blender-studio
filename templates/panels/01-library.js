@@ -16,6 +16,7 @@ function BlenderLibraryPanel({
   onDuplicate,
   onArchiveRequest,
   onRestore,
+  onTrashRequest,
 }) {
   const saved = blenderLibraryPrefs.get(scope);
   const [query, setQuery] = useState(saved?.query || '');
@@ -282,6 +283,17 @@ function BlenderLibraryPanel({
                     },
                     t('恢复工程', 'Restore'),
                   ),
+                  h(
+                    W.Button,
+                    {
+                      size: 'sm',
+                      variant: 'danger',
+                      icon: 'trash',
+                      disabled: busy || dirty || activeJob,
+                      onClick: () => onTrashRequest?.(item, true),
+                    },
+                    t('移入回收站', 'Recycle Bin'),
+                  ),
                 ),
               );
             }
@@ -332,6 +344,17 @@ function BlenderLibraryPanel({
                     onClick: () => onArchiveRequest?.(item),
                   },
                   t('归档', 'Archive'),
+                ),
+                h(
+                  W.Button,
+                  {
+                    size: 'sm',
+                    variant: 'ghost',
+                    icon: 'trash',
+                    disabled: busy || dirty || activeJob,
+                    onClick: () => onTrashRequest?.(item, false),
+                  },
+                  t('移入回收站', 'Trash'),
                 ),
               ),
             });

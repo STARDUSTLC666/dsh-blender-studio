@@ -17,6 +17,9 @@ import { extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { strToU8, zip, type AsyncZippable } from 'fflate'
 import lockfile from 'proper-lockfile'
 import { generateSceneScript } from './templates.js'
+import { movePathToTrash } from './trash.js'
+
+export type TrashPathFn = typeof movePathToTrash
 import {
   ARTIFACT_MIME_MAP,
   BlenderConflict,
@@ -182,9 +185,11 @@ export interface AddAssetOptions {
 
 export class BlenderStore {
   readonly root: string
+  private readonly trashPath: TrashPathFn
 
-  constructor(root?: string) {
+  constructor(root?: string, options?: { trashPath?: TrashPathFn }) {
     this.root = resolve(root ?? join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'data', 'dsh-blender-studio'))
+    this.trashPath = options?.trashPath ?? movePathToTrash
   }
 
   async init(): Promise<void> {
@@ -563,6 +568,32 @@ export class BlenderStore {
       }
       await rename(source, target)
       return { ...project, archived: !restore }
+    } finally {
+      if (releaseSource) await releaseSource().catch(() => {})
+      await unlockProjects().catch(() => {})
+    }
+  }
+
+  async trash(id: string, revision: unknown, archived = true): Promise<BlenderProject> {
+    await this.init()
+    const unlockProjects = await lockfile.lock(join(this.root, 'projects'), {
+      retries: { retries: 8, minTimeout: 30, maxTimeout: 60 },
+    })
+    let releaseSource: (() => Promise<void>) | undefined
+    try {
+      const source = await this.path(id, archived)
+      releaseSource = await lockfile.lock(source, {
+        retries: { retries: 8, minTimeout: 30, maxTimeout: 60 },
+      })
+      const project = await this.get(id, archived)
+      if (revision !== project.revision) {
+        throw new BlenderConflict('工程已更新，请重新读取最新版本后再移入回收站。')
+      }
+      // Release per-project lock before handing directory to OS Recycle Bin (Windows lock safety).
+      await releaseSource()
+      releaseSource = undefined
+      await this.trashPath(source)
+      return project
     } finally {
       if (releaseSource) await releaseSource().catch(() => {})
       await unlockProjects().catch(() => {})
