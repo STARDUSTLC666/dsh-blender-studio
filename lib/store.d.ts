@@ -1,6 +1,7 @@
 import { type AsyncZippable } from 'fflate';
-import { movePathToTrash } from './trash.js';
+import { movePathToTrash, movePathsToTrash } from './trash.js';
 export type TrashPathFn = typeof movePathToTrash;
+export type TrashPathsFn = typeof movePathsToTrash;
 import { BlenderConflict, BlenderError, blenderId, type BlenderArtifact, type BlenderAsset, type BlenderAssetKind, type BlenderProject, type BlenderSceneSummary } from './types.js';
 export { BlenderConflict, BlenderError, blenderId };
 export declare function zipAsync(files: AsyncZippable): Promise<Uint8Array>;
@@ -16,10 +17,13 @@ export interface AddAssetOptions {
 }
 export declare class BlenderStore {
     readonly root: string;
-    private readonly trashPath;
+    private readonly customTrashPath?;
+    private readonly customTrashPaths?;
     constructor(root?: string, options?: {
         trashPath?: TrashPathFn;
+        trashPaths?: TrashPathsFn;
     });
+    private trashDirs;
     init(): Promise<void>;
     checkPath(targetPath: string): Promise<void>;
     path(id: string, archived?: boolean): Promise<string>;
@@ -42,6 +46,17 @@ export declare class BlenderStore {
     restoreCheckpoint(id: string, revision: unknown, checkpointId: string): Promise<BlenderProject>;
     archive(id: string, revision: unknown, restore?: boolean): Promise<BlenderProject>;
     trash(id: string, revision: unknown, archived?: boolean): Promise<BlenderProject>;
+    trashArchived(): Promise<{
+        trashedCount: number;
+        ids: string[];
+    }>;
+    trashCorrupted(items?: Array<{
+        id: string;
+        archived?: boolean;
+    }>): Promise<{
+        trashedCount: number;
+        ids: string[];
+    }>;
     duplicate(id: string, titleOverride?: string): Promise<BlenderProject>;
     addAsset(id: string, revision: unknown, name: string, bytes: Buffer, options?: AddAssetOptions): Promise<{
         project: BlenderProject;

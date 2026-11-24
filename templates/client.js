@@ -206,6 +206,7 @@ window.__ModuleLoader__.load({
         POLYHAVEN_NOT_FOUND: 'Requested Poly Haven asset or resolution was not found.',
         STORAGE_UNSAFE: 'Unsafe storage path rejected to protect your files.',
         PROJECT_CORRUPT: 'Project metadata could not be read safely.',
+        PROJECT_NOT_CORRUPT: 'This 3D project is healthy and cannot be removed as a damaged folder.',
         CONFIRM_REQUIRED: 'Confirmation is required for this action.',
         JOB_TIMEOUT: 'Blender job timed out and was terminated safely. Your project is preserved.',
         LOCK_LOST: 'Storage lock was lost; retry after refreshing.',
@@ -218,6 +219,8 @@ window.__ModuleLoader__.load({
         PLUGIN_DISPOSED: 'Plugin is unloading. Wait for reload and retry.',
       };
       if (code && byCode[code]) return byCode[code];
+      if (/网络共享路径/.test(message)) return 'Network share paths do not support the system Recycle Bin. Clean them up manually.';
+      if (/回收站/.test(message)) return 'Could not move the folder to the system Recycle Bin. Close any app using its files and try again.';
       if (error?.status === 409) return byCode.CONFLICT;
       return 'The operation did not complete. Check the job log or Bridge & Env status and retry.';
     }
@@ -438,6 +441,7 @@ window.__ModuleLoader__.load({
 .dbw>.dsh-header .w-header-actions{gap:5px}
 .dbw>.dsh-header .w-header-actions .w-button{padding-inline:9px}
 .dbw :focus-visible{outline:2px solid var(--w-accent);outline-offset:2px}
+.w-dialog-modal.blender-dialog,.dsh-fallback-modal-dialog.blender-dialog{width:min(560px,calc(100dvw - 32px));container-type:normal}
 [role="dialog"]:has(.dbw.w-page){width:min(1180px,calc(100dvw - 40px))!important;max-width:1180px!important}
 @container dsh-workbench (max-width:1060px){
   .dbw>.dsh-header{flex-wrap:wrap;height:auto;min-height:48px;padding-block:6px;row-gap:6px;column-gap:8px;overflow:visible}
@@ -462,6 +466,9 @@ window.__ModuleLoader__.load({
       const [projects, setProjects] = useState([]);
       const [archived, setArchived] = useState([]);
       const [corruptedCount, setCorruptedCount] = useState(0);
+      const [corruptedProjects, setCorruptedProjects] = useState([]);
+      const [corruptedDialog, setCorruptedDialog] = useState(false);
+      const [clearArchivedDialog, setClearArchivedDialog] = useState(false);
       const [environment, setEnvironment] = useState(null);
       const [templates, setTemplates] = useState(FALLBACK_TEMPLATES);
 
@@ -531,6 +538,7 @@ window.__ModuleLoader__.load({
         setProjects(activeList);
         setArchived(archivedList);
         setCorruptedCount(Number(data?.corruptedCount || 0));
+        setCorruptedProjects(Array.isArray(data?.corruptedProjects) ? data.corruptedProjects : []);
         setEnvironment(data?.environment || {
           ready: false,
           detected: [],
@@ -568,7 +576,7 @@ window.__ModuleLoader__.load({
       }, []);
 
       useEffect(() => {
-        if (project || creating || archiveTarget || trashTarget) return undefined;
+        if (project || creating || archiveTarget || trashTarget || corruptedDialog || clearArchivedDialog) return undefined;
         let inflight = false;
         let cancelled = false;
         function syncLibrary() {
@@ -590,7 +598,7 @@ window.__ModuleLoader__.load({
           if (typeof window !== 'undefined' && window.removeEventListener) window.removeEventListener('focus', onFocus);
           if (typeof document !== 'undefined' && document.removeEventListener) document.removeEventListener('visibilitychange', onVisibility);
         };
-      }, [!!project, creating, !!archiveTarget, !!trashTarget]);
+      }, [!!project, creating, !!archiveTarget, !!trashTarget, corruptedDialog, clearArchivedDialog]);
 
       useEffect(() => {
         if (!job || job.state !== 'running') return undefined;
@@ -965,6 +973,34 @@ window.__ModuleLoader__.load({
         );
       }
 
+      async function trashAllArchived() {
+        const result = await api({ action: 'trashArchived', confirmed: true });
+        setClearArchivedDialog(false);
+        await refresh().catch(() => {});
+        setNotice(
+          result?.trashedCount > 0
+            ? t(
+                `已将 ${result.trashedCount} 个已归档 3D 工程移入系统回收站，可在系统回收站还原。`,
+                `Moved ${result.trashedCount} archived 3D project(s) to the system Recycle Bin.`,
+              )
+            : t('没有需要清理的已归档工程。', 'No archived projects to clean up.'),
+        );
+      }
+
+      async function trashCorruptedFolders() {
+        const result = await api({ action: 'trashCorrupted', confirmed: true });
+        setCorruptedDialog(false);
+        await refresh().catch(() => {});
+        setNotice(
+          result?.trashedCount > 0
+            ? t(
+                `已将 ${result.trashedCount} 个损坏工程目录移入系统回收站，黄色提示已清除。`,
+                `Moved ${result.trashedCount} damaged project folder(s) to the system Recycle Bin.`,
+              )
+            : t('损坏工程目录已不存在，列表已自动同步。', 'Damaged project folders were already gone; list refreshed.'),
+        );
+      }
+
       async function copyTourPrompt(text) {
         try {
           if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
@@ -1259,6 +1295,21 @@ window.__ModuleLoader__.load({
                 `检测到 ${corruptedCount} 个损坏工程目录（原文件已隔离保留），其余工程不受影响。`,
                 `Detected ${corruptedCount} damaged project folder(s) (original files preserved). Other projects remain unaffected.`,
               ),
+              ' ',
+              h(
+                W.Button,
+                {
+                  size: 'sm',
+                  variant: 'ghost',
+                  icon: 'trash',
+                  disabled: busy || activeJob,
+                  onClick: () => {
+                    setError('');
+                    setCorruptedDialog(true);
+                  },
+                },
+                t('查看并移入回收站清理', 'Inspect & move to Recycle Bin'),
+              ),
             )
           : null,
 
@@ -1454,7 +1505,14 @@ window.__ModuleLoader__.load({
                   onCreate: tplId => navigate(tplId ? { newTemplate: tplId } : 'new'),
                   onDuplicate: duplicateProject,
                   onArchiveRequest: item => setArchiveTarget(item),
-                  onTrashRequest: (item, isArchived) => setTrashTarget({ project: item, archived: Boolean(isArchived) }),
+                  onTrashRequest: (item, isArchived) => {
+                    setError('');
+                    setTrashTarget({ project: item, archived: Boolean(isArchived) });
+                  },
+                  onClearArchivedRequest: () => {
+                    setError('');
+                    setClearArchivedDialog(true);
+                  },
                   onRestore: item =>
                     perform(async () => {
                       try {
@@ -1735,6 +1793,7 @@ window.__ModuleLoader__.load({
                   'Moves this 3D project folder (scene settings, uploaded asset copies, and rendered/exported artifacts) to your OS Recycle Bin / Trash where it can be restored.',
                 ),
               ),
+              error ? h(W.Status, { tone: 'error' }, blenderError(error, lang === 'en')) : null,
               h(
                 'div',
                 { className: 'w-toolbar' },
@@ -1749,6 +1808,107 @@ window.__ModuleLoader__.load({
                   t('确认移入回收站', 'Move to Recycle Bin'),
                 ),
                 h(W.Button, { disabled: busy, onClick: () => setTrashTarget(null) }, t('取消', 'Cancel')),
+              ),
+            )
+          : null,
+
+        // Clear all archived projects confirmation dialog
+        clearArchivedDialog
+          ? h(
+              W.Dialog,
+              {
+                className: 'dbw blender-dialog',
+                title: t('清空已归档 3D 工程', 'Clear all archived 3D projects'),
+                closeLabel: t('取消', 'Cancel'),
+                busy: busy || activeJob,
+                onClose: () => setClearArchivedDialog(false),
+              },
+              h(
+                'p',
+                null,
+                t(
+                  `确定将全部 ${archived.length} 个已归档 3D 工程一次性移入系统回收站吗？移入后仍可在系统回收站中还原。`,
+                  `Move all ${archived.length} archived 3D project(s) to the system Recycle Bin in one batch? You can restore them from your OS Recycle Bin later.`,
+                ),
+              ),
+              archived.length > 0
+                ? h(
+                    'ul',
+                    { className: 'dbw-checks' },
+                    archived.slice(0, 8).map(item => h('li', { key: item.id }, item.title)),
+                    archived.length > 8
+                      ? h('li', { key: 'more', className: 'w-muted' }, t(`以及其余 ${archived.length - 8} 个已归档工程…`, `and ${archived.length - 8} more archived project(s)…`))
+                      : null,
+                  )
+                : null,
+              error ? h(W.Status, { tone: 'error' }, blenderError(error, lang === 'en')) : null,
+              h(
+                'div',
+                { className: 'w-toolbar' },
+                h(
+                  W.Button,
+                  {
+                    variant: 'danger',
+                    icon: 'trash',
+                    disabled: busy || dirty || activeJob,
+                    onClick: () => perform(trashAllArchived),
+                  },
+                  t('确认全部移入回收站', 'Move all to Recycle Bin'),
+                ),
+                h(W.Button, { disabled: busy, onClick: () => setClearArchivedDialog(false) }, t('取消', 'Cancel')),
+              ),
+            )
+          : null,
+
+        // Corrupted project folders cleanup confirmation dialog
+        corruptedDialog
+          ? h(
+              W.Dialog,
+              {
+                className: 'dbw blender-dialog',
+                title: t('清理损坏工程目录', 'Clean up damaged project folders'),
+                closeLabel: t('取消', 'Cancel'),
+                busy: busy || activeJob,
+                onClose: () => setCorruptedDialog(false),
+              },
+              h(
+                'p',
+                null,
+                t(
+                  `共检测到 ${corruptedProjects.length || corruptedCount} 个损坏工程目录。移入系统回收站后黄色提醒将消除，且仍可在系统回收站找回原始文件。`,
+                  `Found ${corruptedProjects.length || corruptedCount} damaged project folder(s). Moving them to the OS Recycle Bin clears the warning while keeping the original files recoverable.`,
+                ),
+              ),
+              corruptedProjects.length > 0
+                ? h(
+                    'ul',
+                    { className: 'dbw-checks' },
+                    corruptedProjects.map(item =>
+                      h(
+                        'li',
+                        { key: (item.archived ? 'a:' : 'p:') + item.id },
+                        h('code', null, (item.archived ? 'archives/' : 'projects/') + item.id),
+                        ' — ',
+                        item.detail,
+                      ),
+                    ),
+                  )
+                : null,
+              error ? h(W.Status, { tone: 'error' }, blenderError(error, lang === 'en')) : null,
+              h(
+                'div',
+                { className: 'w-toolbar' },
+                h(
+                  W.Button,
+                  {
+                    variant: 'danger',
+                    icon: 'trash',
+                    disabled: busy || activeJob,
+                    onClick: () => perform(trashCorruptedFolders),
+                  },
+                  t('全部移入系统回收站', 'Move all to Recycle Bin'),
+                ),
+                h(W.Button, { disabled: busy, onClick: () => setCorruptedDialog(false) }, t('取消', 'Cancel')),
               ),
             )
           : null,

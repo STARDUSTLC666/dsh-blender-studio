@@ -17,6 +17,7 @@ function BlenderLibraryPanel({
   onArchiveRequest,
   onRestore,
   onTrashRequest,
+  onClearArchivedRequest,
 }) {
   const saved = blenderLibraryPrefs.get(scope);
   const [query, setQuery] = useState(saved?.query || '');
@@ -136,11 +137,25 @@ function BlenderLibraryPanel({
     },
     scope === 'archives'
       ? h(
-          'p',
-          { className: 'w-muted bl-archive-hint' },
-          t(
-            '归档工程保留全部素材、脚本与渲染成品，不占用 30 个活跃工程名额；恢复后可继续编辑。',
-            'Archived projects retain assets, scripts, and renders without counting toward the 30 active slots.',
+          'div',
+          { className: 'bl-archive-header' },
+          h(
+            'p',
+            { className: 'w-muted bl-archive-hint' },
+            t(
+              '归档工程保留全部素材、脚本与渲染成品，不占用 30 个活跃工程名额；恢复后可继续编辑。',
+              'Archived projects retain assets, scripts, and renders without counting toward the 30 active slots.',
+            ),
+          ),
+          h(
+            W.Button,
+            {
+              variant: 'danger',
+              icon: 'trash',
+              disabled: busy || dirty || activeJob,
+              onClick: () => onClearArchivedRequest?.(),
+            },
+            t('清空已归档（全部移入回收站）', 'Clear archived (Recycle Bin)'),
           ),
         )
       : null,
@@ -370,7 +385,8 @@ function BlenderLibraryPanel({
 
 const BLENDER_LIBRARY_CSS = `
 .bl-library{max-width:1040px;padding:6px 0 24px;min-width:0}
-.bl-archive-hint{margin:6px 0 4px}
+.bl-archive-header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:6px 0 4px}
+.bl-archive-hint{margin:0}
 .bl-library-controls{display:flex;gap:12px;align-items:end;flex-wrap:wrap;padding:10px 0}
 .bl-library-controls>label{display:grid;gap:5px;margin:0;min-width:0;color:var(--w-muted);font-size:12px}
 .bl-library-controls>label:first-child{flex:1 1 240px}

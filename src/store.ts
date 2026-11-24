@@ -17,9 +17,10 @@ import { extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { strToU8, zip, type AsyncZippable } from 'fflate'
 import lockfile from 'proper-lockfile'
 import { generateSceneScript } from './templates.js'
-import { movePathToTrash } from './trash.js'
+import { movePathToTrash, movePathsToTrash } from './trash.js'
 
 export type TrashPathFn = typeof movePathToTrash
+export type TrashPathsFn = typeof movePathsToTrash
 import {
   ARTIFACT_MIME_MAP,
   BlenderConflict,
@@ -185,11 +186,26 @@ export interface AddAssetOptions {
 
 export class BlenderStore {
   readonly root: string
-  private readonly trashPath: TrashPathFn
+  private readonly customTrashPath?: TrashPathFn
+  private readonly customTrashPaths?: TrashPathsFn
 
-  constructor(root?: string, options?: { trashPath?: TrashPathFn }) {
+  constructor(root?: string, options?: { trashPath?: TrashPathFn; trashPaths?: TrashPathsFn }) {
     this.root = resolve(root ?? join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'data', 'dsh-blender-studio'))
-    this.trashPath = options?.trashPath ?? movePathToTrash
+    this.customTrashPath = options?.trashPath
+    this.customTrashPaths = options?.trashPaths
+  }
+
+  private async trashDirs(dirs: string[]): Promise<void> {
+    if (dirs.length === 0) return
+    if (this.customTrashPaths) {
+      await this.customTrashPaths(dirs)
+      return
+    }
+    if (this.customTrashPath) {
+      for (const dir of dirs) await this.customTrashPath(dir)
+      return
+    }
+    await movePathsToTrash(dirs)
   }
 
   async init(): Promise<void> {
@@ -592,10 +608,107 @@ export class BlenderStore {
       // Release per-project lock before handing directory to OS Recycle Bin (Windows lock safety).
       await releaseSource()
       releaseSource = undefined
-      await this.trashPath(source)
+      await this.trashDirs([source])
       return project
     } finally {
       if (releaseSource) await releaseSource().catch(() => {})
+      await unlockProjects().catch(() => {})
+    }
+  }
+
+  async trashArchived(): Promise<{ trashedCount: number; ids: string[] }> {
+    await this.init()
+    const unlockProjects = await lockfile.lock(join(this.root, 'projects'), {
+      retries: { retries: 8, minTimeout: 30, maxTimeout: 60 },
+    })
+    try {
+      const { projects } = await this.listWithWarnings(true)
+      if (projects.length === 0) return { trashedCount: 0, ids: [] }
+      const dirs: string[] = []
+      const ids: string[] = []
+      for (const project of projects) {
+        const source = await this.path(project.id, true)
+        const releaseSource = await lockfile.lock(source, {
+          retries: { retries: 8, minTimeout: 30, maxTimeout: 60 },
+        })
+        await releaseSource()
+        dirs.push(source)
+        ids.push(project.id)
+      }
+      await this.trashDirs(dirs)
+      return { trashedCount: ids.length, ids }
+    } finally {
+      await unlockProjects().catch(() => {})
+    }
+  }
+
+  async trashCorrupted(items?: Array<{ id: string; archived?: boolean }>): Promise<{ trashedCount: number; ids: string[] }> {
+    await this.init()
+    const unlockProjects = await lockfile.lock(join(this.root, 'projects'), {
+      retries: { retries: 8, minTimeout: 30, maxTimeout: 60 },
+    })
+    try {
+      const candidates: Array<{ id: string; archived: boolean }> = []
+      const seen = new Set<string>()
+      const addCandidate = (id: string, archived: boolean) => {
+        const validId = blenderId(id)
+        const key = (archived ? 'a:' : 'p:') + validId
+        if (seen.has(key)) return
+        seen.add(key)
+        candidates.push({ id: validId, archived })
+      }
+      if (items !== undefined) {
+        if (!Array.isArray(items) || items.length > 100) {
+          throw new BlenderError('损坏工程列表格式无效。', 'BAD_REQUEST', 400)
+        }
+        for (const item of items) {
+          if (!item || typeof item !== 'object') {
+            throw new BlenderError('损坏工程项格式无效。', 'BAD_REQUEST', 400)
+          }
+          addCandidate((item as { id?: unknown }).id as string, Boolean((item as { archived?: unknown }).archived))
+        }
+      } else {
+        const [active, archived] = await Promise.all([this.listWithWarnings(false), this.listWithWarnings(true)])
+        for (const c of active.corrupted) addCandidate(c.id, false)
+        for (const c of archived.corrupted) addCandidate(c.id, true)
+      }
+
+      const dirs: string[] = []
+      const ids: string[] = []
+      for (const candidate of candidates) {
+        const dir = join(this.root, candidate.archived ? 'archives' : 'projects', candidate.id)
+        let info
+        try {
+          info = await lstat(dir)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') continue
+          throw error
+        }
+        if (info.isSymbolicLink()) {
+          throw new BlenderError('工程目录不能为符号链接或目录联接。', 'STORAGE_UNSAFE', 400)
+        }
+        if (!info.isDirectory()) {
+          throw new BlenderError('清理目标必须是损坏工程目录。', 'STORAGE_UNSAFE', 400)
+        }
+        await this.checkPath(dir)
+        let isCorrupt = false
+        try {
+          await this.get(candidate.id, candidate.archived)
+        } catch (error) {
+          const code = (error as { code?: string } | undefined)?.code
+          if (code === 'ENOENT' || code === 'PROJECT_NOT_FOUND') continue
+          isCorrupt = true
+        }
+        if (!isCorrupt) {
+          throw new BlenderError('该 3D 工程当前完好，拒绝作为损坏目录清理。', 'PROJECT_NOT_CORRUPT', 400)
+        }
+        dirs.push(dir)
+        ids.push(candidate.id)
+      }
+      if (dirs.length === 0) return { trashedCount: 0, ids: [] }
+      await this.trashDirs(dirs)
+      return { trashedCount: ids.length, ids }
+    } finally {
       await unlockProjects().catch(() => {})
     }
   }

@@ -230,6 +230,7 @@ async function createWorkbenchFixture(t, extra = {}) {
     fetchImpl,
     bridge: extra.bridge,
     trashPath: extra.trashPath,
+    trashPaths: extra.trashPaths,
     launchGui: async (executable, blendFile) => {
       launchedGuis.push({ executable, blendFile })
       return { pid: 4242, executable, blendFile }
@@ -913,4 +914,73 @@ test('BlenderWorkbench trash action moves archived/active projects to Recycle Bi
   const listed = await (await post({ action: 'list' })).json()
   assert.deepEqual(listed.value.projects, [])
   assert.equal(listed.value.corruptedCount, undefined)
+})
+
+test('BlenderWorkbench trashArchived & trashCorrupted batch cleanly, require confirmation, block during jobs, and refuse healthy projects', async (t) => {
+  const batches = []
+  const trashPaths = async (targetPaths) => {
+    batches.push([...targetPaths])
+    for (const p of targetPaths) await rm(p, { recursive: true, force: true })
+    return { moved: [...targetPaths], missing: [] }
+  }
+  const { workbench, post, setBehavior } = await createWorkbenchFixture(t, { trashPaths })
+
+  const active = (await (await post({ action: 'create', fields: defaultProjectFields({ title: 'Healthy Active 3D' }) })).json()).value
+  const arch1 = (await (await post({ action: 'create', fields: defaultProjectFields({ title: 'Archived Scene 1' }) })).json()).value
+  const arch2 = (await (await post({ action: 'create', fields: defaultProjectFields({ title: 'Archived Scene 2' }) })).json()).value
+  const brokenA = (await (await post({ action: 'create', fields: defaultProjectFields({ title: 'Broken Active 3D' }) })).json()).value
+  const brokenB = (await (await post({ action: 'create', fields: defaultProjectFields({ title: 'Broken Archived 3D' }) })).json()).value
+
+  assert.equal((await post({ action: 'archive', id: arch1.id, revision: arch1.revision, confirmed: true })).status, 200)
+  assert.equal((await post({ action: 'archive', id: arch2.id, revision: arch2.revision, confirmed: true })).status, 200)
+  assert.equal((await post({ action: 'archive', id: brokenB.id, revision: brokenB.revision, confirmed: true })).status, 200)
+
+  // Corrupt two project.json files (one active, one archived)
+  await writeFile(join(await workbench.store.path(brokenA.id, false), 'project.json'), '{broken-active')
+  await writeFile(join(await workbench.store.path(brokenB.id, true), 'project.json'), '{broken-archived')
+
+  // list exposes corruptedCount + corruptedProjects
+  const listed = await (await post({ action: 'list' })).json()
+  assert.equal(listed.value.corruptedCount, 2)
+  assert.equal(listed.value.corruptedProjects.length, 2)
+  assert.ok(listed.value.corruptedProjects.some((c) => c.id === brokenA.id && c.archived === false))
+  assert.ok(listed.value.corruptedProjects.some((c) => c.id === brokenB.id && c.archived === true))
+
+  // Unconfirmed requests rejected
+  assert.equal((await post({ action: 'trashArchived' })).status, 400)
+  assert.equal((await post({ action: 'trashCorrupted' })).status, 400)
+
+  // Attempting to trashCorrupted a healthy project is refused with PROJECT_NOT_CORRUPT
+  const refuseHealthy = await post({ action: 'trashCorrupted', confirmed: true, items: [{ id: active.id, archived: false }] })
+  assert.equal(refuseHealthy.status, 400)
+  assert.equal((await refuseHealthy.json()).code, 'PROJECT_NOT_CORRUPT')
+  assert.equal(batches.length, 0)
+
+  // Blocked while a Blender job is running
+  setBehavior('hang')
+  const runningJob = (await (await post({ action: 'preview_still', id: active.id, revision: active.revision })).json()).value
+  assert.equal((await post({ action: 'trashArchived', confirmed: true })).status, 409)
+  assert.equal((await post({ action: 'trashCorrupted', confirmed: true })).status, 409)
+  workbench.cancelJob(runningJob.id)
+  await workbench.waitForJob(runningJob.id)
+
+  // trashArchived moves both valid archived folders in one batch (leaving brokenB for trashCorrupted)
+  const resArchived = await post({ action: 'trashArchived', confirmed: true })
+  assert.equal(resArchived.status, 200)
+  assert.equal((await resArchived.json()).value.trashedCount, 2)
+  assert.equal(batches.length, 1)
+  assert.equal(batches[0].length, 2)
+  assert.equal((await workbench.store.list(true)).length, 0)
+
+  // trashCorrupted moves both corrupted folders in one batch and clears warning
+  const resCorrupted = await post({ action: 'trashCorrupted', confirmed: true })
+  assert.equal(resCorrupted.status, 200)
+  assert.equal((await resCorrupted.json()).value.trashedCount, 2)
+  assert.equal(batches.length, 2)
+  assert.equal(batches[1].length, 2)
+
+  const after = await (await post({ action: 'list' })).json()
+  assert.equal(after.value.corruptedCount, undefined)
+  assert.equal(after.value.corruptedProjects, undefined)
+  assert.deepEqual(after.value.projects.map((p) => p.id), [active.id])
 })

@@ -2,6 +2,12 @@
 
 [返回简介](README.md) · [完整说明](docs/REFERENCE.zh.md) · [Live Bridge 指南](docs/BRIDGE.md) · [验证说明](docs/VALIDATION.md)
 
+## [0.2.3] - 2026-11-24
+
+- **损坏目录清理与一键清空已归档**：黄色损坏工程提示条新增 **「查看并移入回收站清理」** 入口与确认弹窗（`trashCorrupted`），后端二次校验仅清理真实损坏目录并拒绝完好工程（`PROJECT_NOT_CORRUPT`）；「已归档」页新增 **「清空已归档（全部移入回收站）」**（`trashArchived`），单次批量移入系统回收站并受 `workbench-slot` 与活跃任务互斥保护。
+- **Windows 单进程批量回收站加速与弹窗布局修复**：升级 `movePathsToTrash` 在 Windows 下以单进程对象列表批量移入回收站并拦截 UNC 网络路径；修复回退模态框在 `container-type: inline-size` 下宽度塌缩问题。
+- **Corrupted folder cleanup, clear-all archived & Windows batch Recycle Bin**: add **Inspect & move to Recycle Bin** (`trashCorrupted`, refusing healthy projects with `PROJECT_NOT_CORRUPT`), **Clear archived (Recycle Bin)** (`trashArchived`), single-process Windows batch Recycle Bin with UNC rejection, and fallback modal width fix.
+
 ## [0.2.2] - 2026-11-24
 
 - **系统回收站清理 3D 工程**：在活跃工程行、已归档工程行及「素材与成品」页新增 **「移入回收站」** 与确认弹窗（`trash`），采用零依赖跨平台系统原生回收站（Windows / macOS / Linux），包含修订号校验、运行中任务互斥与目录锁先释放保护。
