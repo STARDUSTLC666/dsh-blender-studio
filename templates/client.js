@@ -362,6 +362,44 @@ window.__ModuleLoader__.load({
       return 0;
     }
 
+    function formatJobStage(job, lang, t) {
+      if (!job) return '';
+      if (job.kind === 'pipeline') {
+        if (job.state === 'done') {
+          const qcTag = job.pipeline?.qc ? ' · QC-3D ' + job.pipeline.qc.score + '/' + job.pipeline.qc.grade : '';
+          if (job.pipeline?.stoppedEarly) {
+            return t(
+              '在 QC-3D 体检阶段提前中止' + qcTag,
+              'Stopped early during QC-3D audit' + qcTag,
+            );
+          }
+          const count = Array.isArray(job.pipeline?.artifactIds) ? job.pipeline.artifactIds.length : 0;
+          return t(
+            `全流程完成（生成 ${count} 项成品${qcTag}）`,
+            `Completed (${count} ${count === 1 ? 'artifact' : 'artifacts'}${qcTag})`,
+          );
+        }
+        if (lang === 'en' && /[\u3400-\u9fff]/.test(String(job.stage || ''))) {
+          if (job.state === 'failed') return 'Failed — expand job log for details';
+          if (job.state === 'cancelled') return 'Cancelled';
+          const stepLabels = ['Running QC-3D scene audit…', 'Rendering 4-View QC sheet…', 'Rendering hero output…', 'Exporting 3D model…'];
+          return stepLabels[computePipelineStepIndex(job)] || 'Running production pipeline…';
+        }
+      }
+      const raw = String(job.stage || job.state || '');
+      if (lang === 'en' && /[\u3400-\u9fff]/.test(raw)) {
+        if (job.state === 'done') return 'Completed';
+        if (job.state === 'failed') return 'Failed — expand job log for details';
+        if (job.state === 'cancelled') return 'Cancelled';
+        const code = String(job.stageCode || '').toLowerCase();
+        if (code.includes('inspect')) return 'Inspecting scene…';
+        if (code.includes('export')) return 'Exporting 3D model…';
+        if (code.includes('render') || code.includes('contact')) return 'Rendering in Blender…';
+        return 'Running Blender task…';
+      }
+      return raw;
+    }
+
     const CLIENT_BASE_CSS = `
 .dbw{color:var(--w-text);min-width:0}
 .dbw *{box-sizing:border-box}
@@ -555,9 +593,12 @@ window.__ModuleLoader__.load({
                 else if (next.kind === 'render_animation') setStageView('animation');
                 else if (next.kind === 'pipeline') {
                   if (next.pipeline?.stoppedEarly) {
+                    const reasonText =
+                      lang === 'en' && /[\u3400-\u9fff]/.test(String(next.pipeline.stopReason || ''))
+                        ? 'critical scene error found'
+                        : next.pipeline.stopReason || t('检测到严重场景错误', 'critical scene error found');
                     setNotice(
-                      t('全流程在 QC-3D 体检阶段提前中止：', 'Pipeline stopped during QC-3D audit: ') +
-                        (next.pipeline.stopReason || t('检测到严重场景错误', 'critical scene error found')),
+                      t('全流程在 QC-3D 体检阶段提前中止：', 'Pipeline stopped during QC-3D audit: ') + reasonText,
                     );
                   } else {
                     if (next.pipeline?.primaryRenderId) setStageView('still');
@@ -1171,7 +1212,7 @@ window.__ModuleLoader__.load({
                 role: job.state === 'failed' ? 'alert' : 'status',
                 'aria-live': job.state === 'failed' ? 'assertive' : 'polite',
               },
-              h('strong', null, jobKindLabel(job.kind, t) + ' · ' + (job.stage || job.state)),
+              h('strong', null, jobKindLabel(job.kind, t) + ' · ' + formatJobStage(job, lang, t)),
               jobElapsedSec !== null
                 ? h('span', { className: 'dbw-job-elapsed', 'data-job-elapsed': 'true', 'aria-label': t('任务已用时', 'Elapsed time') }, formatElapsed(jobElapsedSec))
                 : null,
@@ -1322,6 +1363,7 @@ window.__ModuleLoader__.load({
                     perform(async () => {
                       await api({ action: 'restore', id: item.id, revision: item.revision, confirmed: true });
                       await refresh();
+                      setEditorTab('studio');
                       await openProject(item.id);
                       setNotice(t('3D 工程已恢复至活跃列表。', '3D project restored to active list.'));
                     }),

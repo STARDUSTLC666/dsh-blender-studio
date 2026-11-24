@@ -137,7 +137,7 @@ const SAMPLE_ENV = {
   polyHavenEnabled: false,
   node: process.version,
   platform: process.platform,
-  hint: 'Ready',
+  hint: '已就绪：Blender 4.3.2（BLENDER_EEVEE_NEXT / GPV3），支持无头 CLI 渲染与可选 Live Bridge 联动。',
 }
 
 test('built lib/client.js preserves all 13 bright themes, 8 font pairings, soft-slate dark mode, v3 motion primitives, and dsh-updates footer', () => {
@@ -306,7 +306,18 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
     const body = init?.body ? JSON.parse(String(init.body)) : {}
     apiCalls.push({ url: u, headers: init?.headers || {}, body })
     if (body.action === 'get') {
-      return { ok: true, status: 200, json: async () => ({ ok: true, value: SAMPLE_PROJECT }) }
+      const found = body.id === SAMPLE_ARCHIVED_PROJECT.id ? { ...SAMPLE_ARCHIVED_PROJECT, archived: false } : SAMPLE_PROJECT
+      return { ok: true, status: 200, json: async () => ({ ok: true, value: found }) }
+    }
+    if (body.action === 'restore') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          value: { ...SAMPLE_ARCHIVED_PROJECT, archived: false, revision: SAMPLE_ARCHIVED_PROJECT.revision + 1 },
+        }),
+      }
     }
     if (body.action === 'duplicate') {
       return {
@@ -331,7 +342,7 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
             revision: SAMPLE_PROJECT.revision,
             state: 'done',
             stageCode: 'done',
-            stage: '全流程完成',
+            stage: '全流程完成（生成 1 项成品 · QC-3D 96/A）',
             progress: 100,
             lines: ['pipeline complete'],
             pipeline: {
@@ -793,7 +804,7 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
   assert.ok(container.querySelector('a[href*="kind=addon"]'), 'dsh_blender_bridge.py download link renders')
   assert.match(container.textContent || '', /4\.3\.2/)
 
-  // 9. English (en) locale header renders cleanly
+  // 9. English (en-US) locale: header, completed pipeline banner, and Bridge/Env summary have ZERO Chinese leakage (v0.2.1)
   const enLocale = { getSnapshot: () => ({ active: 'en-US' }) }
   await act(async () => {
     root.render(React.createElement(mainSlot.component, { workbench: true, locale: enLocale }))
@@ -804,4 +815,62 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
   assert.match(enHeaderText, /Studio|Projects/)
   assert.match(enHeaderText, /Assets/)
   assert.match(enHeaderText, /Bridge & Env/)
+
+  const enPipelineBanner = container.querySelector('.dbw-job-banner')
+  assert.ok(enPipelineBanner, 'completed pipeline banner remains visible in en-US')
+  const enPipelineText = enPipelineBanner.textContent || ''
+  assert.match(enPipelineText, /Completed \(1 artifact · QC-3D 96\/A\)/)
+  assert.doesNotMatch(enPipelineText, /[\u3400-\u9fff]/, 'en-US completed pipeline banner must contain zero Chinese characters')
+
+  const enEnvSummary = container.querySelector('[data-env-summary="true"]')
+  assert.ok(enEnvSummary, 'Bridge & Env [data-env-summary="true"] renders')
+  const enEnvSummaryText = enEnvSummary.textContent || ''
+  assert.match(enEnvSummaryText, /Ready: Blender 4\.3\.2 \(EEVEE Next · GPv3\)/)
+  assert.doesNotMatch(enEnvSummaryText, /[\u3400-\u9fff]/, 'en-US Bridge & Env status summary must contain zero Chinese characters')
+
+  // 10. v0.2.1 regression: restoring an archived project after switching tabs resets editorTab back to studio
+  const enHeaderTabs = [...container.querySelectorAll('.dsh-header [role="tab"]')]
+  const enAssetsTab = enHeaderTabs.find((el) => /Assets/.test(el.textContent || ''))
+  assert.ok(enAssetsTab, 'Assets tab found in en-US')
+  await act(async () => {
+    enAssetsTab.click()
+  })
+  assert.equal(enAssetsTab.getAttribute('aria-selected'), 'true', 'switched to Assets tab before returning to library')
+
+  const backToLibBtn = [...container.querySelectorAll('.dsh-header button')].find((b) => /Back|返回/.test(b.textContent || ''))
+  assert.ok(backToLibBtn, 'Back button found in header')
+  await act(async () => {
+    backToLibBtn.click()
+    await new Promise((r) => setTimeout(r, 30))
+  })
+  const enLibTabs = [...container.querySelectorAll('.dsh-header [role="tab"]')]
+  const enArchivedTab = enLibTabs.find((el) => /Archived|已归档/.test(el.textContent || ''))
+  assert.ok(enArchivedTab, 'Archived library tab found')
+  await act(async () => {
+    enArchivedTab.click()
+  })
+  const restoreBtn = [...container.querySelectorAll('.bl-project-card.dsh-row .dsh-row-actions button')].find((b) =>
+    /Restore|恢复/.test(b.textContent || ''),
+  )
+  assert.ok(restoreBtn, 'Restore button found on archived project card')
+  await act(async () => {
+    restoreBtn.click()
+    await new Promise((r) => setTimeout(r, 40))
+  })
+  assert.ok(
+    apiCalls.some((c) => c.body.action === 'restore' && c.body.id === SAMPLE_ARCHIVED_PROJECT.id),
+    'Restore button invokes POST { action: "restore" }',
+  )
+  assert.ok(
+    container.querySelector('[data-studio-console="true"]'),
+    'Restoring an archived project after switching tabs must land back on 3D Studio tab',
+  )
+  const studioTabAfterRestore = [...container.querySelectorAll('.dsh-header [role="tab"]')].find((el) =>
+    /3D Studio|Studio|3D 工作室/.test(el.textContent || ''),
+  )
+  assert.equal(
+    studioTabAfterRestore?.getAttribute('aria-selected'),
+    'true',
+    '3D Studio header tab must be aria-selected="true" after restore',
+  )
 })

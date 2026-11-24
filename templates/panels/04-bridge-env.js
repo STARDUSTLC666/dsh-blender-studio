@@ -110,7 +110,14 @@ function BlenderBridgeEnvPanel({
                 ),
           ),
           bridge.error && !bridge.connected
-            ? h('p', { className: 'bl-bridge-err' }, t('上次探测反馈：', 'Last check: ') + bridge.error)
+            ? h(
+                'p',
+                { className: 'bl-bridge-err' },
+                t('上次探测反馈：', 'Last check: ') +
+                  (lang === 'en' && /[\u3400-\u9fff]/.test(String(bridge.error))
+                    ? blenderError(bridge.error, true)
+                    : bridge.error),
+              )
             : null,
         ),
         h(
@@ -406,12 +413,25 @@ function BlenderBridgeEnvPanel({
           ),
           h(
             'p',
-            { className: 'w-muted bl-be-sub' },
-            environment?.hint ||
-              t(
-                'Headless CLI 模式无需打开 Blender GUI 即可渲染静帧、四视角图、动画与导出 3D 模型；支持 Blender 3.6 LTS / 4.x / 5.x。',
-                'Headless CLI renders stills, 4-view QC, animations, and exports without opening Blender GUI. Supports Blender 3.6–5.x.',
-              ),
+            { className: 'w-muted bl-be-sub', 'data-env-summary': 'true' },
+            environment?.ready && activeBlender
+              ? (() => {
+                  const eeveeName =
+                    activeBlender.major >= 5
+                      ? 'EEVEE (5.x)'
+                      : activeBlender.eeveeEngine === 'BLENDER_EEVEE_NEXT'
+                      ? 'EEVEE Next'
+                      : 'EEVEE';
+                  const gpName = activeBlender.greasePencilApi === 'gpv3' ? 'GPv3' : 'GPv2';
+                  return t(
+                    `已就绪：Blender ${activeBlender.version}（${eeveeName} · ${gpName}），支持无头 CLI 渲染与可选 Live Bridge 实时联动。`,
+                    `Ready: Blender ${activeBlender.version} (${eeveeName} · ${gpName}) — Headless CLI rendering and optional Live Bridge enabled.`,
+                  );
+                })()
+              : t(
+                  '尚未探测到本机 Blender 安装。请安装 Blender 3.6–5.x 或在下方手动配置可执行文件路径，Headless CLI 模式无需打开 Blender GUI 即可渲染与导出。',
+                  'No local Blender installation detected yet. Install Blender 3.6–5.x or set the executable path below; Headless CLI renders and exports without opening Blender GUI.',
+                ),
           ),
         ),
         h(

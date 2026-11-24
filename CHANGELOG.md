@@ -2,6 +2,12 @@
 
 [返回简介](README.md) · [完整说明](docs/REFERENCE.zh.md) · [Live Bridge 指南](docs/BRIDGE.md) · [验证说明](docs/VALIDATION.md)
 
+## [0.2.1] - 2026-11-24
+
+- **恢复归档工程视图复位**：从「已归档工程」恢复并打开项目时，自动将编辑页签重置回 **3D 工作室**，与新建、打开和复制工程体验保持一致，不再停留在上次切换的旧页签。
+- **英文界面（`en-US`）完整本地化**：基于结构化任务字段（`job.pipeline`）与本机环境元数据（`environment.active`）原生拼装英文全流程完成横幅与 Blender 环境状态摘要，消除英文模式下残留中文提示文本。
+- **Polish Release (`0.2.1`)**: resets the active editor tab back to **3D Studio** when restoring an archived project, and localizes the `en-US` pipeline completion banner and Blender environment status summary directly from structured metadata (zero Chinese text leakage in English locale).
+
 ## [0.2.0] - 2026-11-24
 
 - **高质量 3D 生产全流程（`DSH_KIT` + 一键 `pipeline` + 脚本版本快照）**：
