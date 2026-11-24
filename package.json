@@ -1,7 +1,7 @@
 {
   "name": "dsh-blender-studio",
   "version": "0.2.1",
-  "description": "DeepSeek Harness 3D / 2.5D / 蜡笔 2D 创作与渲染工作室插件：内置 OP-DSH 3D 交互预览工作台、Headless Blender CLI 无头渲染（静帧 / 2x2 四视角质检 / MP4 动画 / GLB·FBX·OBJ·STL 导出）、实时本地 Loopback Socket Bridge、8 个 Blender 3.6–5.x 专业技能与可选 Poly Haven CC0 资产检索。",
+  "description": "DeepSeek Harness Blender 3D 创作与渲染工作台插件：6 个工具与 9 个内置技能（兼容 Blender 3.6–5.x），支持 Headless CLI 渲染（静帧 / 2×2 四视角质检 / MP4 / GLB·FBX·OBJ·STL·.blend 导出）、可选本地回环 Live Bridge 插件、8 套场景模板与 HDRI/3D 模型自动装配、16 个 DSH_KIT 建模与 PBR 函数、QC-3D 自动体检、4 阶段流水线、脚本快照回滚、可选 Poly Haven CC0 检索与 13 套主题 / 8 套字体。",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -19,6 +19,7 @@
     "skills",
     "blender/dsh_blender_bridge.py",
     "cordis.patch.yml",
+    "screenshots.json",
     "README.md",
     "README.en.md",
     "docs",
