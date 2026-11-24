@@ -83,6 +83,30 @@ export const BLENDER_TEMPLATES: readonly BlenderTemplateMeta[] = [
     defaultMaterial: 'clay_matte',
     defaultFrames: 48,
   },
+  {
+    id: 'architectural-pavilion',
+    zh: '参数化建筑展馆',
+    en: 'Architectural Pavilion',
+    description: '极简曲面木构天窗肋条、倒影浅水池、清水混凝土展墙与暖光展台，建筑可视化开箱即用。',
+    descriptionEn: 'Minimalist curved timber skylight pavilion with reflecting pool, chamfered concrete walls, and warm gallery monolith.',
+    recommendedEngine: 'EEVEE',
+    defaultCamera: 'three_quarter',
+    defaultLighting: 'soft_daylight',
+    defaultMaterial: 'clay_matte',
+    defaultFrames: 48,
+  },
+  {
+    id: 'procedural-abstract',
+    zh: '程序化几何雕塑',
+    en: 'Procedural GeoNodes Art',
+    description: '基于真实 Blender GeometryNodeTree 构建的扭转参数化三叶结雕塑与虹彩金属材质。',
+    descriptionEn: 'Real Blender GeometryNodeTree twisted parametric ribbon & orbital sculpture with iridescent metallic shader.',
+    recommendedEngine: 'EEVEE',
+    defaultCamera: 'three_quarter',
+    defaultLighting: 'dramatic_rim',
+    defaultMaterial: 'brushed_metal',
+    defaultFrames: 72,
+  },
 ] as const
 
 export function getTemplateMeta(id: BlenderTemplateId): BlenderTemplateMeta {
@@ -159,7 +183,43 @@ from mathutils import Euler, Matrix, Vector
 DSH_PROJECT = ${pyJsonExpr(config)}
 DSH_ASSETS_DIR = ${pyStr(assetsDir)}
 DSH_ASSETS = ${pyJsonExpr(assetRecords)}
+DSH_ASSET_PATHS = {
+    a["name"]: os.path.join(DSH_ASSETS_DIR, a["file"])
+    for a in DSH_ASSETS
+    if DSH_ASSETS_DIR and a.get("file")
+}
+DSH_ASSET_BY_KIND = {}
+for _dsh_a in DSH_ASSETS:
+    DSH_ASSET_BY_KIND.setdefault(_dsh_a.get("kind", "reference"), []).append(_dsh_a)
 DSH_SCENE_JSON_MARKER = ${pyStr(SCENE_JSON_MARKER)}
+
+DSH_BACKDROP_EXACT = {
+    "Studio_Floor",
+    "Studio_Backdrop",
+    "Logo_Floor",
+    "Stage_Floor",
+    "GP_Paper_Card",
+    "Abstract_Floor",
+}
+DSH_BACKDROP_PREFIXES = (
+    "Studio_",
+    "Backdrop_",
+    "Stage_Floor",
+    "Softbox_",
+    "Cyclorama",
+    "Ground_Plane",
+    "Abstract_Floor",
+)
+
+
+def dsh_is_backdrop_object(obj):
+    name = getattr(obj, "name", "") or ""
+    if name in DSH_BACKDROP_EXACT:
+        return True
+    for prefix in DSH_BACKDROP_PREFIXES:
+        if name.startswith(prefix):
+            return True
+    return False
 
 
 def dsh_hex_to_rgba(hex_color, alpha=1.0):
@@ -251,8 +311,22 @@ def dsh_set_render_engine(scene, engine_name, samples, transparent_bg):
         scene.render.engine = "CYCLES"
         if hasattr(scene, "cycles"):
             scene.cycles.samples = int(samples)
+            if hasattr(scene.cycles, "use_adaptive_sampling"):
+                scene.cycles.use_adaptive_sampling = True
+            if hasattr(scene.cycles, "adaptive_threshold"):
+                scene.cycles.adaptive_threshold = 0.02
             if hasattr(scene.cycles, "use_denoising"):
                 scene.cycles.use_denoising = True
+            if hasattr(scene.cycles, "denoiser"):
+                try:
+                    scene.cycles.denoiser = "OPENIMAGEDENOISE"
+                except Exception:
+                    pass
+            if hasattr(scene.cycles, "denoising_input_passes"):
+                try:
+                    scene.cycles.denoising_input_passes = "RGB_ALBEDO_NORMAL"
+                except Exception:
+                    pass
             if hasattr(scene.cycles, "device"):
                 scene.cycles.device = "CPU"
     else:
@@ -269,14 +343,22 @@ def dsh_set_render_engine(scene, engine_name, samples, transparent_bg):
     scene.render.image_settings.file_format = "PNG"
     scene.render.image_settings.color_mode = "RGBA" if transparent_bg else "RGB"
 
+    chosen_vt = "Standard"
     for vt in ("AgX", "Filmic", "Standard"):
         try:
             scene.view_settings.view_transform = vt
+            chosen_vt = vt
+            break
+        except Exception:
+            continue
+    look_candidates = ("AgX - Medium High Contrast", "None") if chosen_vt == "AgX" else ("None",)
+    for look_name in look_candidates:
+        try:
+            scene.view_settings.look = look_name
             break
         except Exception:
             continue
     try:
-        scene.view_settings.look = "None"
         scene.view_settings.exposure = 0.0
     except Exception:
         pass
@@ -486,18 +568,22 @@ def dsh_setup_lighting(preset, accent_hex):
 
     accent_rgb = dsh_hex_to_rgba(accent_hex)[:3]
 
-    # Auto-wire uploaded HDRI if present
+    # Auto-wire uploaded HDRI if present (TexCoord -> Mapping -> TexEnvironment -> Background)
     hdri_asset = next((a for a in DSH_ASSETS if a.get("kind") == "hdri"), None)
     if hdri_asset and DSH_ASSETS_DIR:
         hdri_path = os.path.join(DSH_ASSETS_DIR, hdri_asset["file"])
         if os.path.isfile(hdri_path):
             try:
+                tex_coord = nt.nodes.new("ShaderNodeTexCoord")
+                mapping = nt.nodes.new("ShaderNodeMapping")
                 env_tex = nt.nodes.new("ShaderNodeTexEnvironment")
                 env_tex.image = bpy.data.images.load(hdri_path, check_existing=True)
+                nt.links.new(tex_coord.outputs["Generated"], mapping.inputs["Vector"])
+                nt.links.new(mapping.outputs["Vector"], env_tex.inputs["Vector"])
                 nt.links.new(env_tex.outputs["Color"], bg.inputs["Color"])
-                bg.inputs["Strength"].default_value = 1.1
-            except Exception:
-                pass
+                bg.inputs["Strength"].default_value = 1.15
+            except Exception as exc:
+                print("[dsh-blender-studio] HDRI load warning:", hdri_asset.get("name"), exc)
 
     if preset == "studio_3point":
         if not hdri_asset:
@@ -603,6 +689,601 @@ def dsh_setup_camera(preset, frame_start, frame_end, target=(0.0, 0.0, 0.85), di
     return cam_obj, target_empty
 
 
+# ==============================================================================
+# DSH_KIT: Built-in Cinema-Grade 3D Engineering & Lookdev Helper Library
+# Compatible with Blender 3.6, 4.x, and 5.x (EEVEE / Cycles OIDN / Compositor)
+# ==============================================================================
+
+
+def dsh_coerce_rgba(color, alpha=1.0):
+    if isinstance(color, str):
+        return dsh_hex_to_rgba(color, alpha=alpha)
+    if isinstance(color, (list, tuple)):
+        if len(color) >= 4:
+            return (float(color[0]), float(color[1]), float(color[2]), float(color[3]))
+        if len(color) == 3:
+            return (float(color[0]), float(color[1]), float(color[2]), float(alpha))
+    return (0.75, 0.78, 0.82, float(alpha))
+
+
+def dsh_bevel(obj, width=0.015, segments=3):
+    if obj is None or obj.type != "MESH":
+        return None
+    mod = obj.modifiers.new(name="DSH_Bevel", type="BEVEL")
+    mod.width = float(width)
+    mod.segments = max(1, int(segments))
+    mod.limit_method = "ANGLE"
+    mod.angle_limit = math.radians(30.0)
+    if hasattr(mod, "use_clamp_overlap"):
+        mod.use_clamp_overlap = True
+    return mod
+
+
+def dsh_smooth(obj):
+    if obj is None or obj.type != "MESH" or obj.data is None:
+        return obj
+    dsh_set_smooth(obj.data, True)
+    return obj
+
+
+def dsh_array_radial(obj, count, axis="Z", center=(0.0, 0.0, 0.0)):
+    n = max(1, int(count))
+    result = [obj]
+    if obj is None or n <= 1:
+        return result
+    axis_upper = str(axis or "Z").upper()
+    if axis_upper not in ("X", "Y", "Z"):
+        axis_upper = "Z"
+    pivot = Vector(center)
+    cols = list(obj.users_collection)
+    target_col = cols[0] if cols else dsh_ensure_collection("DSH_Hero")
+    bpy.context.view_layer.update()
+    base_mat = obj.matrix_world.copy()
+    for i in range(1, n):
+        angle = 2.0 * math.pi * (i / float(n))
+        rot = Matrix.Rotation(angle, 4, axis_upper)
+        xf = Matrix.Translation(pivot) @ rot @ Matrix.Translation(-pivot)
+        copy_obj = obj.copy()
+        copy_obj.name = f"{obj.name}_Rad_{i:02d}"
+        if copy_obj.name not in target_col.objects:
+            target_col.objects.link(copy_obj)
+        copy_obj.matrix_world = xf @ base_mat
+        result.append(copy_obj)
+    return result
+
+
+def dsh_tube_along_points(name, points, radius=0.02, mat=None, bevel_res=6, collection="DSH_Hero"):
+    pts = list(points or [])
+    if len(pts) < 2:
+        pts = [(0.0, 0.0, 0.0), (0.0, 0.0, 0.5)]
+    curve_data = bpy.data.curves.new(name=name + "_Curve", type="CURVE")
+    curve_data.dimensions = "3D"
+    curve_data.bevel_depth = float(radius)
+    curve_data.bevel_resolution = max(1, int(bevel_res))
+    if hasattr(curve_data, "use_fill_caps"):
+        curve_data.use_fill_caps = True
+    spline = curve_data.splines.new("POLY")
+    spline.points.add(len(pts) - 1)
+    for idx, pt in enumerate(pts):
+        spline.points[idx].co = (float(pt[0]), float(pt[1]), float(pt[2]), 1.0)
+    obj = bpy.data.objects.new(name, curve_data)
+    dsh_link_object(obj, collection)
+    if mat is not None:
+        dsh_assign_material(obj, mat)
+    return obj
+
+
+def dsh_ground_assembly(objs, z=0.0):
+    items = [o for o in (objs or []) if o is not None]
+    if not items:
+        return 0.0
+    bpy.context.view_layer.update()
+    min_z = None
+    for o in items:
+        if o.type in ("MESH", "CURVE", "FONT", "SURFACE"):
+            for corner in o.bound_box:
+                wc = o.matrix_world @ Vector(corner)
+                if min_z is None or wc.z < min_z:
+                    min_z = wc.z
+    if min_z is None:
+        return 0.0
+    delta = float(z) - min_z
+    item_set = set(items)
+    for o in items:
+        if o.parent is None or o.parent not in item_set:
+            o.location.z += delta
+    bpy.context.view_layer.update()
+    return delta
+
+
+def dsh_frame_camera_to_assembly(cam, objs, azimuth_deg=35.0, elevation_deg=20.0, lens_mm=58.0, margin=1.18):
+    scene = bpy.context.scene
+    items = [o for o in (objs or []) if o is not None and o.type in ("MESH", "CURVE", "FONT", "SURFACE", "GPENCIL", "GREASEPENCIL")]
+    bpy.context.view_layer.update()
+    if items:
+        xs, ys, zs = [], [], []
+        for o in items:
+            for corner in o.bound_box:
+                wc = o.matrix_world @ Vector(corner)
+                xs.append(wc.x)
+                ys.append(wc.y)
+                zs.append(wc.z)
+        center = Vector(((min(xs) + max(xs)) * 0.5, (min(ys) + max(ys)) * 0.5, (min(zs) + max(zs)) * 0.5))
+        sx = max(xs) - min(xs)
+        sy = max(ys) - min(ys)
+        sz = max(zs) - min(zs)
+        radius = max(0.5, 0.5 * math.sqrt(sx * sx + sy * sy + sz * sz))
+    else:
+        center = Vector((0.0, 0.0, 0.8))
+        radius = 1.6
+
+    if cam is None:
+        cam_data = bpy.data.cameras.new("DSH_Hero_Cam_Data")
+        cam = bpy.data.objects.new("DSH_Hero_Cam", cam_data)
+        dsh_link_object(cam, "DSH_Cameras")
+
+    cam.data.lens = float(lens_mm)
+    cam.data.clip_start = 0.05
+    cam.data.clip_end = 500.0
+    res_x = max(1, int(scene.render.resolution_x))
+    res_y = max(1, int(scene.render.resolution_y))
+    aspect = float(max(res_x, res_y)) / float(min(res_x, res_y))
+    sensor_min = float(getattr(cam.data, "sensor_width", 36.0)) / aspect
+    half_fov = math.atan((sensor_min * 0.5) / max(1.0, float(lens_mm)))
+    dist = (radius / max(0.08, math.sin(half_fov))) * float(margin)
+
+    az = math.radians(float(azimuth_deg))
+    el = math.radians(float(elevation_deg))
+    offset = Vector((
+        dist * math.cos(el) * math.sin(az),
+        -dist * math.cos(el) * math.cos(az),
+        dist * math.sin(el),
+    ))
+    cam.location = center + offset
+    direction = center - cam.location
+    if direction.length > 1e-4:
+        cam.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
+    scene.camera = cam
+    bpy.context.view_layer.update()
+    return cam, center
+
+
+def _dsh_new_pbr_mat(name):
+    mat = bpy.data.materials.new(name=name)
+    if bpy.app.version < (5, 0, 0) or mat.node_tree is None:
+        mat.use_nodes = True
+    nt = mat.node_tree
+    nt.nodes.clear()
+    out = nt.nodes.new("ShaderNodeOutputMaterial")
+    out.location = (480, 0)
+    bsdf = nt.nodes.new("ShaderNodeBsdfPrincipled")
+    bsdf.location = (180, 0)
+    nt.links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+    return mat, nt, bsdf
+
+
+def dsh_mat_car_paint(name, color, metallic=0.82, clearcoat=1.0):
+    rgba = dsh_coerce_rgba(color)
+    mat, nt, bsdf = _dsh_new_pbr_mat(name)
+    lw = nt.nodes.new("ShaderNodeLayerWeight")
+    lw.location = (-360, 140)
+    lw.inputs["Blend"].default_value = 0.28
+    ramp = nt.nodes.new("ShaderNodeValToRGB")
+    ramp.location = (-120, 140)
+    ramp.color_ramp.elements[0].position = 0.1
+    ramp.color_ramp.elements[0].color = rgba
+    ramp.color_ramp.elements[1].position = 0.92
+    ramp.color_ramp.elements[1].color = (rgba[0] * 0.32, rgba[1] * 0.32, rgba[2] * 0.38, 1.0)
+    nt.links.new(lw.outputs["Facing"], ramp.inputs["Fac"])
+    nt.links.new(ramp.outputs["Color"], bsdf.inputs["Base Color"])
+
+    tc = nt.nodes.new("ShaderNodeTexCoord")
+    tc.location = (-560, -140)
+    noise = nt.nodes.new("ShaderNodeTexNoise")
+    noise.location = (-340, -140)
+    noise.inputs["Scale"].default_value = 320.0
+    noise.inputs["Detail"].default_value = 4.0
+    bump = nt.nodes.new("ShaderNodeBump")
+    bump.location = (-80, -140)
+    bump.inputs["Strength"].default_value = 0.025
+    nt.links.new(tc.outputs["Object"], noise.inputs["Vector"])
+    nt.links.new(noise.outputs["Fac"], bump.inputs["Height"])
+    if "Normal" in bsdf.inputs:
+        nt.links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+
+    dsh_set_bsdf(bsdf, ["Metallic"], float(metallic))
+    dsh_set_bsdf(bsdf, ["Roughness"], 0.19)
+    dsh_set_bsdf(bsdf, ["Specular IOR Level", "Specular"], 0.72)
+    dsh_set_bsdf(bsdf, ["Coat Weight", "Clearcoat"], float(clearcoat))
+    dsh_set_bsdf(bsdf, ["Coat Roughness", "Clearcoat Roughness"], 0.03)
+    dsh_set_bsdf(bsdf, ["Coat IOR"], 1.55)
+    return mat
+
+
+def dsh_mat_carbon_fiber(name="Mat_Carbon_Fiber"):
+    mat, nt, bsdf = _dsh_new_pbr_mat(name)
+    tc = nt.nodes.new("ShaderNodeTexCoord")
+    tc.location = (-740, 0)
+    mp = nt.nodes.new("ShaderNodeMapping")
+    mp.location = (-540, 0)
+    mp.inputs["Rotation"].default_value = (0.0, 0.0, math.radians(45.0))
+    mp.inputs["Scale"].default_value = (42.0, 42.0, 42.0)
+    chk = nt.nodes.new("ShaderNodeTexChecker")
+    chk.location = (-320, 120)
+    chk.inputs["Color1"].default_value = (0.028, 0.030, 0.034, 1.0)
+    chk.inputs["Color2"].default_value = (0.068, 0.072, 0.080, 1.0)
+    chk.inputs["Scale"].default_value = 2.0
+    ramp_r = nt.nodes.new("ShaderNodeValToRGB")
+    ramp_r.location = (-100, -40)
+    ramp_r.color_ramp.elements[0].color = (0.24, 0.24, 0.24, 1.0)
+    ramp_r.color_ramp.elements[1].color = (0.38, 0.38, 0.38, 1.0)
+    bump = nt.nodes.new("ShaderNodeBump")
+    bump.location = (-80, -200)
+    bump.inputs["Strength"].default_value = 0.08
+
+    nt.links.new(tc.outputs["Object"], mp.inputs["Vector"])
+    nt.links.new(mp.outputs["Vector"], chk.inputs["Vector"])
+    nt.links.new(chk.outputs["Color"], bsdf.inputs["Base Color"])
+    nt.links.new(chk.outputs["Fac"], ramp_r.inputs["Fac"])
+    nt.links.new(ramp_r.outputs["Color"], bsdf.inputs["Roughness"])
+    nt.links.new(chk.outputs["Fac"], bump.inputs["Height"])
+    if "Normal" in bsdf.inputs:
+        nt.links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+
+    dsh_set_bsdf(bsdf, ["Metallic"], 0.18)
+    dsh_set_bsdf(bsdf, ["Coat Weight", "Clearcoat"], 0.85)
+    dsh_set_bsdf(bsdf, ["Coat Roughness", "Clearcoat Roughness"], 0.07)
+    return mat
+
+
+def dsh_mat_brushed_metal(name, color=(0.74, 0.77, 0.82), roughness=0.25):
+    rgba = dsh_coerce_rgba(color)
+    mat, nt, bsdf = _dsh_new_pbr_mat(name)
+    tc = nt.nodes.new("ShaderNodeTexCoord")
+    tc.location = (-680, -100)
+    mp = nt.nodes.new("ShaderNodeMapping")
+    mp.location = (-480, -100)
+    mp.inputs["Scale"].default_value = (18.0, 2.0, 18.0)
+    noise = nt.nodes.new("ShaderNodeTexNoise")
+    noise.location = (-280, -100)
+    noise.inputs["Scale"].default_value = 35.0
+    noise.inputs["Detail"].default_value = 6.0
+    bump = nt.nodes.new("ShaderNodeBump")
+    bump.location = (-60, -120)
+    bump.inputs["Strength"].default_value = 0.045
+    nt.links.new(tc.outputs["Object"], mp.inputs["Vector"])
+    nt.links.new(mp.outputs["Vector"], noise.inputs["Vector"])
+    nt.links.new(noise.outputs["Fac"], bump.inputs["Height"])
+    if "Normal" in bsdf.inputs:
+        nt.links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+
+    dsh_set_bsdf(bsdf, ["Base Color"], rgba)
+    dsh_set_bsdf(bsdf, ["Metallic"], 0.95)
+    dsh_set_bsdf(bsdf, ["Roughness"], float(roughness))
+    dsh_set_bsdf(bsdf, ["Anisotropic"], 0.65)
+    dsh_set_bsdf(bsdf, ["Specular IOR Level", "Specular"], 0.75)
+    return mat
+
+
+def dsh_mat_tinted_glass(name, color=(0.12, 0.18, 0.24), roughness=0.04):
+    rgba = dsh_coerce_rgba(color)
+    mat, nt, bsdf = _dsh_new_pbr_mat(name)
+    dsh_set_bsdf(bsdf, ["Base Color"], rgba)
+    dsh_set_bsdf(bsdf, ["Metallic"], 0.05)
+    dsh_set_bsdf(bsdf, ["Roughness"], float(roughness))
+    dsh_set_bsdf(bsdf, ["IOR"], 1.50)
+    dsh_set_bsdf(bsdf, ["Transmission Weight", "Transmission"], 0.86)
+    dsh_set_bsdf(bsdf, ["Coat Weight", "Clearcoat"], 0.92)
+    dsh_set_bsdf(bsdf, ["Coat Roughness", "Clearcoat Roughness"], 0.02)
+    if bpy.app.version < (4, 2, 0) and hasattr(mat, "blend_method"):
+        try:
+            mat.blend_method = "BLEND"
+        except Exception:
+            pass
+    return mat
+
+
+def dsh_mat_rubber_tire(name="Mat_Rubber_Tire"):
+    mat, nt, bsdf = _dsh_new_pbr_mat(name)
+    tc = nt.nodes.new("ShaderNodeTexCoord")
+    tc.location = (-520, -100)
+    noise = nt.nodes.new("ShaderNodeTexNoise")
+    noise.location = (-300, -100)
+    noise.inputs["Scale"].default_value = 95.0
+    noise.inputs["Detail"].default_value = 6.0
+    bump = nt.nodes.new("ShaderNodeBump")
+    bump.location = (-80, -100)
+    bump.inputs["Strength"].default_value = 0.06
+    nt.links.new(tc.outputs["Object"], noise.inputs["Vector"])
+    nt.links.new(noise.outputs["Fac"], bump.inputs["Height"])
+    if "Normal" in bsdf.inputs:
+        nt.links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+
+    dsh_set_bsdf(bsdf, ["Base Color"], (0.024, 0.025, 0.028, 1.0))
+    dsh_set_bsdf(bsdf, ["Metallic"], 0.0)
+    dsh_set_bsdf(bsdf, ["Roughness"], 0.76)
+    dsh_set_bsdf(bsdf, ["Specular IOR Level", "Specular"], 0.28)
+    return mat
+
+
+def dsh_mat_emissive_led(name, color, strength=8.0):
+    rgba = dsh_coerce_rgba(color)
+    mat, nt, bsdf = _dsh_new_pbr_mat(name)
+    dsh_set_bsdf(bsdf, ["Base Color"], rgba)
+    dsh_set_bsdf(bsdf, ["Roughness"], 0.12)
+    dsh_set_bsdf(bsdf, ["Coat Weight", "Clearcoat"], 0.65)
+    dsh_set_bsdf(bsdf, ["Emission Color", "Emission"], rgba)
+    dsh_set_bsdf(bsdf, ["Emission Strength"], float(strength))
+    return mat
+
+
+def dsh_mat_matte_armor(name, color=(0.24, 0.28, 0.26)):
+    rgba = dsh_coerce_rgba(color)
+    mat, nt, bsdf = _dsh_new_pbr_mat(name)
+    tc = nt.nodes.new("ShaderNodeTexCoord")
+    tc.location = (-540, -100)
+    noise = nt.nodes.new("ShaderNodeTexNoise")
+    noise.location = (-320, -100)
+    noise.inputs["Scale"].default_value = 140.0
+    noise.inputs["Detail"].default_value = 5.0
+    bump = nt.nodes.new("ShaderNodeBump")
+    bump.location = (-80, -100)
+    bump.inputs["Strength"].default_value = 0.04
+    nt.links.new(tc.outputs["Object"], noise.inputs["Vector"])
+    nt.links.new(noise.outputs["Fac"], bump.inputs["Height"])
+    if "Normal" in bsdf.inputs:
+        nt.links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+
+    dsh_set_bsdf(bsdf, ["Base Color"], rgba)
+    dsh_set_bsdf(bsdf, ["Metallic"], 0.16)
+    dsh_set_bsdf(bsdf, ["Roughness"], 0.58)
+    dsh_set_bsdf(bsdf, ["Specular IOR Level", "Specular"], 0.35)
+    return mat
+
+
+def dsh_setup_hero_studio(style="dark_cyclorama", accent_color="#4176e6"):
+    scene = bpy.context.scene
+    world = scene.world
+    if world is None:
+        world = bpy.data.worlds.new("DSH_Hero_World")
+        scene.world = world
+    if bpy.app.version < (5, 0, 0) or world.node_tree is None:
+        world.use_nodes = True
+    nt = world.node_tree
+    nt.nodes.clear()
+    out = nt.nodes.new("ShaderNodeOutputWorld")
+    bg = nt.nodes.new("ShaderNodeBackground")
+    nt.links.new(bg.outputs["Background"], out.inputs["Surface"])
+
+    accent_rgba = dsh_coerce_rgba(accent_color)
+    accent_rgb = accent_rgba[:3]
+    created = []
+
+    if style == "wet_asphalt":
+        bg.inputs["Color"].default_value = (0.014, 0.018, 0.028, 1.0)
+        bg.inputs["Strength"].default_value = 0.35
+        mat_floor, fnt, fbsdf = _dsh_new_pbr_mat("Mat_Studio_WetAsphalt")
+        tc = fnt.nodes.new("ShaderNodeTexCoord")
+        noise = fnt.nodes.new("ShaderNodeTexNoise")
+        noise.inputs["Scale"].default_value = 3.2
+        noise.inputs["Detail"].default_value = 7.0
+        ramp = fnt.nodes.new("ShaderNodeValToRGB")
+        ramp.color_ramp.elements[0].position = 0.38
+        ramp.color_ramp.elements[0].color = (0.05, 0.05, 0.05, 1.0)
+        ramp.color_ramp.elements[1].position = 0.62
+        ramp.color_ramp.elements[1].color = (0.48, 0.48, 0.48, 1.0)
+        fnt.links.new(tc.outputs["Object"], noise.inputs["Vector"])
+        fnt.links.new(noise.outputs["Fac"], ramp.inputs["Fac"])
+        fnt.links.new(ramp.outputs["Color"], fbsdf.inputs["Roughness"])
+        dsh_set_bsdf(fbsdf, ["Base Color"], (0.025, 0.027, 0.032, 1.0))
+        dsh_set_bsdf(fbsdf, ["Coat Weight", "Clearcoat"], 0.65)
+        floor = dsh_make_mesh_box("Studio_Wet_Asphalt", size=(24.0, 24.0, 0.1), location=(0.0, 0.0, -0.05), collection="DSH_Stage")
+        dsh_assign_material(floor, mat_floor)
+        created.append(floor)
+        dsh_add_light("Key_Strip", "AREA", (0.0, -2.5, 5.2), 680.0, (0.96, 0.98, 1.0), size=5.0)
+        dsh_add_light("Rim_Accent", "AREA", (-4.8, 4.2, 3.0), 460.0, accent_rgb, size=3.2)
+        dsh_add_light("Warm_Side", "AREA", (5.2, -1.5, 2.6), 310.0, (1.0, 0.85, 0.72), size=2.8)
+    elif style == "engineering_bay":
+        bg.inputs["Color"].default_value = (0.028, 0.032, 0.042, 1.0)
+        bg.inputs["Strength"].default_value = 0.48
+        mat_floor = dsh_create_material("Mat_Studio_BayFloor", "clay_matte", (0.14, 0.15, 0.17, 1.0))
+        floor = dsh_make_mesh_box("Studio_Bay_Floor", size=(22.0, 22.0, 0.1), location=(0.0, 0.0, -0.05), collection="DSH_Stage")
+        dsh_assign_material(floor, mat_floor)
+        created.append(floor)
+        dsh_add_light("Bay_Overhead_Key", "AREA", (3.6, -4.2, 5.4), 620.0, (1.0, 0.96, 0.92), size=4.2)
+        dsh_add_light("Bay_Cool_Fill", "AREA", (-5.0, -2.2, 3.2), 280.0, (0.78, 0.88, 1.0), size=4.0)
+        dsh_add_light("Bay_Accent_Rim", "AREA", (-2.2, 5.0, 3.8), 440.0, accent_rgb, size=3.0)
+    elif style == "helipad":
+        bg.inputs["Color"].default_value = (0.032, 0.046, 0.075, 1.0)
+        bg.inputs["Strength"].default_value = 0.60
+        mat_deck = dsh_create_material("Mat_Studio_Helipad", "clay_matte", (0.10, 0.11, 0.13, 1.0))
+        mat_ring = dsh_mat_emissive_led("Mat_Studio_HelipadRing", accent_rgba, strength=2.6)
+        deck = dsh_make_mesh_cylinder("Studio_Helipad_Deck", radius1=7.2, radius2=7.0, depth=0.16, segments=64, location=(0.0, 0.0, -0.08), bevel_width=0.03, collection="DSH_Stage")
+        dsh_assign_material(deck, mat_deck)
+        ring = dsh_make_mesh_torus("Studio_Helipad_Ring", major_radius=4.6, minor_radius=0.045, major_seg=64, minor_seg=12, location=(0.0, 0.0, 0.015), collection="DSH_Stage")
+        dsh_assign_material(ring, mat_ring)
+        created.extend([deck, ring])
+        dsh_add_light("Helipad_Sun", "SUN", (6.0, -6.0, 9.0), 2.8, (1.0, 0.92, 0.82))
+        dsh_add_light("Helipad_Flood_L", "AREA", (-5.5, -4.5, 4.4), 480.0, (0.85, 0.92, 1.0), size=3.4)
+        dsh_add_light("Helipad_Rim", "AREA", (3.5, 5.5, 4.0), 420.0, accent_rgb, size=3.0)
+    else:  # dark_cyclorama
+        bg.inputs["Color"].default_value = (0.016, 0.018, 0.024, 1.0)
+        bg.inputs["Strength"].default_value = 0.32
+        mat_cyc = dsh_create_material("Mat_Studio_Cyclorama", "ceramic_gloss", (0.04, 0.045, 0.055, 1.0))
+        if mat_cyc.node_tree:
+            cbsdf = next((n for n in mat_cyc.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None)
+            if cbsdf:
+                dsh_set_bsdf(cbsdf, ["Roughness"], 0.24)
+        floor = dsh_make_mesh_box("Studio_Cyclorama_Floor", size=(24.0, 24.0, 0.1), location=(0.0, 0.0, -0.05), collection="DSH_Stage")
+        dsh_assign_material(floor, mat_cyc)
+        created.append(floor)
+        dsh_add_light("Studio_Strip_Top", "AREA", (0.0, -1.0, 5.6), 640.0, (1.0, 0.98, 0.95), size=5.2)
+        dsh_add_light("Studio_Key_L", "AREA", (4.8, -4.4, 3.4), 420.0, (0.94, 0.97, 1.0), size=3.2)
+        dsh_add_light("Studio_Rim_Back", "AREA", (-3.8, 4.6, 3.2), 460.0, accent_rgb, size=2.8)
+    return created
+
+
+def dsh_setup_compositor(glare=True, glare_threshold=1.15):
+    scene = bpy.context.scene
+    if not glare:
+        return None
+    try:
+        scene.render.use_compositing = True
+    except Exception:
+        pass
+
+    def _configure_glare_node(gnode):
+        if "Type" in gnode.inputs:
+            for val in ("Fog Glow", "FOG_GLOW", "Bloom"):
+                try:
+                    gnode.inputs["Type"].default_value = val
+                    break
+                except Exception:
+                    continue
+        elif hasattr(gnode, "glare_type"):
+            gnode.glare_type = "FOG_GLOW"
+        if "Quality" in gnode.inputs:
+            for val in ("High", "HIGH", "Medium"):
+                try:
+                    gnode.inputs["Quality"].default_value = val
+                    break
+                except Exception:
+                    continue
+        elif hasattr(gnode, "quality"):
+            gnode.quality = "HIGH"
+        if "Threshold" in gnode.inputs:
+            gnode.inputs["Threshold"].default_value = float(glare_threshold)
+        elif hasattr(gnode, "threshold"):
+            gnode.threshold = float(glare_threshold)
+        if "Strength" in gnode.inputs:
+            gnode.inputs["Strength"].default_value = 0.35
+        if "Size" in gnode.inputs:
+            try:
+                gnode.inputs["Size"].default_value = 0.65
+            except Exception:
+                pass
+        elif hasattr(gnode, "size"):
+            gnode.size = 7
+
+    try:
+        # Blender 5.3+: non-deprecated Scene.compositor_effects
+        if hasattr(scene, "compositor_effects"):
+            ng = bpy.data.node_groups.new("DSH_Compositor_Glare", "CompositorNodeTree")
+            ng.interface.new_socket(name="Image", in_out="INPUT", socket_type="NodeSocketColor")
+            ng.interface.new_socket(name="Image", in_out="OUTPUT", socket_type="NodeSocketColor")
+            n_in = ng.nodes.new("NodeGroupInput")
+            n_in.location = (-300, 0)
+            n_glare = ng.nodes.new("CompositorNodeGlare")
+            n_glare.location = (0, 0)
+            _configure_glare_node(n_glare)
+            n_out = ng.nodes.new("NodeGroupOutput")
+            n_out.location = (300, 0)
+            ng.links.new(n_in.outputs["Image"], n_glare.inputs["Image"])
+            ng.links.new(n_glare.outputs["Image"], n_out.inputs["Image"])
+            fx = scene.compositor_effects.new("DSH_Glare")
+            fx.node_group = ng
+            if hasattr(fx, "enable_for_render"):
+                fx.enable_for_render = True
+            return ng
+
+        # Blender 5.0-5.2: Scene.compositing_node_group
+        if bpy.app.version >= (5, 0, 0) and hasattr(scene, "compositing_node_group"):
+            ng = bpy.data.node_groups.new("DSH_Compositor_Glare", "CompositorNodeTree")
+            if hasattr(ng, "interface"):
+                ng.interface.new_socket(name="Image", in_out="OUTPUT", socket_type="NodeSocketColor")
+            n_rl = ng.nodes.new("CompositorNodeRLayers")
+            n_rl.location = (-300, 0)
+            n_glare = ng.nodes.new("CompositorNodeGlare")
+            n_glare.location = (0, 0)
+            _configure_glare_node(n_glare)
+            n_out = ng.nodes.new("NodeGroupOutput")
+            n_out.location = (300, 0)
+            ng.links.new(n_rl.outputs["Image"], n_glare.inputs["Image"])
+            ng.links.new(n_glare.outputs["Image"], n_out.inputs["Image"])
+            scene.compositing_node_group = ng
+            return ng
+
+        # Blender 3.6-4.x: Scene.use_nodes + Scene.node_tree
+        scene.use_nodes = True
+        nt = scene.node_tree
+        nt.nodes.clear()
+        n_rl = nt.nodes.new("CompositorNodeRLayers")
+        n_rl.location = (-300, 0)
+        n_glare = nt.nodes.new("CompositorNodeGlare")
+        n_glare.location = (0, 0)
+        _configure_glare_node(n_glare)
+        n_comp = nt.nodes.new("CompositorNodeComposite")
+        n_comp.location = (300, 0)
+        nt.links.new(n_rl.outputs["Image"], n_glare.inputs["Image"])
+        nt.links.new(n_glare.outputs["Image"], n_comp.inputs["Image"])
+        return nt
+    except Exception as exc:
+        print("[dsh-blender-studio] Compositor setup skipped:", exc)
+        return None
+
+
+def dsh_add_dof(cam, target_obj, fstop=4.0):
+    if cam is None or getattr(cam, "data", None) is None:
+        return None
+    dof = cam.data.dof
+    dof.use_dof = True
+    dof.aperture_fstop = float(fstop)
+    if isinstance(target_obj, bpy.types.Object):
+        dof.focus_object = target_obj
+    elif isinstance(target_obj, (list, tuple, Vector)):
+        dof.focus_object = None
+        dof.focus_distance = max(0.1, (Vector(target_obj) - cam.location).length)
+    return dof
+
+
+def dsh_load_texture_image(asset_or_name=None):
+    if not DSH_ASSETS_DIR:
+        return None
+    target = None
+    if isinstance(asset_or_name, dict):
+        target = asset_or_name
+    elif isinstance(asset_or_name, str) and asset_or_name:
+        target = next((a for a in DSH_ASSETS if a.get("name") == asset_or_name or a.get("file") == asset_or_name), None)
+    else:
+        target = next((a for a in DSH_ASSETS if a.get("kind") == "texture"), None)
+    if not target:
+        return None
+    full_path = os.path.join(DSH_ASSETS_DIR, target["file"])
+    if not os.path.isfile(full_path):
+        return None
+    try:
+        return bpy.data.images.load(full_path, check_existing=True)
+    except Exception as exc:
+        print("[dsh-blender-studio] Texture load warning:", target.get("name"), exc)
+        return None
+
+
+def dsh_apply_uploaded_texture(mat, asset_or_name=None, mix_factor=0.72):
+    img = dsh_load_texture_image(asset_or_name)
+    if img is None or mat is None or mat.node_tree is None:
+        return False
+    nt = mat.node_tree
+    bsdf = next((n for n in nt.nodes if n.type == "BSDF_PRINCIPLED"), None)
+    if bsdf is None or "Base Color" not in bsdf.inputs:
+        return False
+    try:
+        tex_coord = nt.nodes.new("ShaderNodeTexCoord")
+        tex_coord.location = (-560, 120)
+        tex_node = nt.nodes.new("ShaderNodeTexImage")
+        tex_node.location = (-340, 120)
+        tex_node.image = img
+        if hasattr(tex_node, "projection"):
+            tex_node.projection = "BOX"
+        if hasattr(tex_node, "projection_blend"):
+            tex_node.projection_blend = 0.25
+        nt.links.new(tex_coord.outputs["Generated"], tex_node.inputs["Vector"])
+        nt.links.new(tex_node.outputs["Color"], bsdf.inputs["Base Color"])
+        return True
+    except Exception as exc:
+        print("[dsh-blender-studio] Texture wire warning:", exc)
+        return False
+
+
 def dsh_import_model_asset(asset_entry):
     if not DSH_ASSETS_DIR:
         return False
@@ -634,6 +1315,237 @@ def dsh_import_model_asset(asset_entry):
     return False
 
 
+def dsh_auto_place_uploaded_models(pedestal_top_z=0.0, target_size=1.6, replace_names=None, default_mat=None):
+    model_assets = [a for a in DSH_ASSETS if a.get("kind") == "model"]
+    if not model_assets or not DSH_ASSETS_DIR:
+        return []
+    before = set(bpy.data.objects)
+    imported_count = 0
+    for asset in model_assets:
+        if dsh_import_model_asset(asset):
+            imported_count += 1
+    if imported_count == 0:
+        return []
+    bpy.context.view_layer.update()
+    added = [o for o in bpy.data.objects if o not in before]
+    mesh_added = [o for o in added if o.type == "MESH" and o.data is not None]
+    if not added:
+        return []
+
+    # Remove template placeholder meshes only once a real uploaded 3D model is present
+    if replace_names:
+        for name in replace_names:
+            old = bpy.data.objects.get(name)
+            if old is not None and old not in added:
+                bpy.data.objects.remove(old, do_unlink=True)
+
+    # Ensure untextured imported meshes (e.g. STL/OBJ) receive a clean PBR material
+    if default_mat is not None:
+        for mobj in mesh_added:
+            if len(mobj.data.materials) == 0:
+                dsh_assign_material(mobj, default_mat)
+
+    # Normalize scale and ground cleanly onto pedestal_top_z
+    bounds_objs = mesh_added if mesh_added else added
+    xs, ys, zs = [], [], []
+    for o in bounds_objs:
+        for corner in o.bound_box:
+            wc = o.matrix_world @ Vector(corner)
+            xs.append(wc.x)
+            ys.append(wc.y)
+            zs.append(wc.z)
+    if xs:
+        span_x = max(xs) - min(xs)
+        span_y = max(ys) - min(ys)
+        span_z = max(zs) - min(zs)
+        max_dim = max(span_x, span_y, span_z)
+        scale_factor = (float(target_size) / max_dim) if max_dim > 1e-4 else 1.0
+        cx = (min(xs) + max(xs)) * 0.5
+        cy = (min(ys) + max(ys)) * 0.5
+        min_z = min(zs)
+
+        root = bpy.data.objects.new("DSH_Imported_Model_Root", None)
+        dsh_link_object(root, "DSH_Hero")
+        top_level = [o for o in added if o.parent is None or o.parent not in added]
+        for o in top_level:
+            world_mat = o.matrix_world.copy()
+            o.parent = root
+            o.matrix_world = world_mat
+        root.scale = Vector((scale_factor, scale_factor, scale_factor))
+        root.location = Vector((-cx * scale_factor, -cy * scale_factor, float(pedestal_top_z) - min_z * scale_factor))
+        bpy.context.view_layer.update()
+    return added
+
+
+def dsh_evaluate_scene_qc(objs, mesh_count, light_count, camera_count, total_polys):
+    scene = bpy.context.scene
+    bpy.context.view_layer.update()
+    issues = []
+    deduction = 0
+
+    def add_issue(code, severity, message, penalty, obj_name=None):
+        nonlocal deduction
+        item = {"code": code, "severity": severity, "message": message}
+        if obj_name:
+            item["object"] = obj_name
+        issues.append(item)
+        deduction += penalty
+
+    renderables = [o for o in objs if o.type in ("MESH", "FONT", "CURVE", "GPENCIL", "GREASEPENCIL", "SURFACE", "META")]
+    if not renderables:
+        add_issue("EMPTY_SCENE", "error", "场景缺少可见几何对象。", 50)
+
+    if scene.camera is None or camera_count == 0:
+        add_issue("NO_CAMERA", "error", "场景未配置主渲染相机。", 30)
+
+    has_hdri = False
+    if scene.world and scene.world.node_tree:
+        has_hdri = any(n.type == "TEX_ENVIRONMENT" and getattr(n, "image", None) is not None for n in scene.world.node_tree.nodes)
+    has_emissive = False
+    for mat in bpy.data.materials:
+        if mat.node_tree:
+            for n in mat.node_tree.nodes:
+                if n.type == "EMISSION":
+                    has_emissive = True
+                    break
+                if n.type == "BSDF_PRINCIPLED" and "Emission Strength" in n.inputs:
+                    try:
+                        if float(n.inputs["Emission Strength"].default_value) > 0.1:
+                            has_emissive = True
+                            break
+                    except Exception:
+                        pass
+        if has_emissive:
+            break
+    if light_count == 0 and not has_hdri and not has_emissive:
+        add_issue("NO_LIGHTS", "warn", "场景未配置光源或 HDRI 环境光，渲染可能全黑。", 15)
+
+    hero_meshes = [o for o in objs if o.type == "MESH" and o.data is not None and not dsh_is_backdrop_object(o)]
+    unassigned_pen = 0
+    flat_pen = 0
+    for obj in hero_meshes:
+        has_gn = any(m.type == "NODES" for m in obj.modifiers)
+        has_mat = any(m is not None for m in obj.data.materials)
+        if not has_mat and not has_gn:
+            pen = 8 if unassigned_pen < 24 else 0
+            unassigned_pen += pen
+            add_issue("UNASSIGNED_MATERIAL", "warn", f"对象 {obj.name} 未绑定材质。", pen, obj.name)
+
+        polys = obj.data.polygons
+        has_polish_mod = any(m.type in ("BEVEL", "SUBSURF", "NODES", "SOLIDIFY") for m in obj.modifiers)
+        if 0 < len(polys) <= 12 and not has_polish_mod and not any(p.use_smooth for p in polys):
+            pen = 6 if flat_pen < 18 else 0
+            flat_pen += pen
+            add_issue("FLAT_UNBEVELED_PRIMITIVE", "warn", f"对象 {obj.name} 为未倒角低面平直几何体。", pen, obj.name)
+
+    # Assembly-aware transitive 3D AABB grounding check (avoids false positives on vehicles/engines/stacked assemblies)
+    all_meshes = [o for o in objs if o.type == "MESH" and o.data is not None]
+    mesh_aabbs = {}
+    for obj in all_meshes:
+        try:
+            corners = [obj.matrix_world @ Vector(c) for c in obj.bound_box]
+            xs = [c.x for c in corners]
+            ys = [c.y for c in corners]
+            zs = [c.z for c in corners]
+            mesh_aabbs[obj] = (min(xs), max(xs), min(ys), max(ys), min(zs), max(zs))
+        except Exception:
+            pass
+
+    grounded = set()
+    for obj, box in mesh_aabbs.items():
+        if dsh_is_backdrop_object(obj) or box[4] <= 0.35:
+            grounded.add(obj)
+
+    pad = 0.38
+    changed = True
+    while changed:
+        changed = False
+        for obj, b1 in mesh_aabbs.items():
+            if obj in grounded:
+                continue
+            for gobj in list(grounded):
+                b2 = mesh_aabbs.get(gobj)
+                if not b2:
+                    continue
+                if (
+                    b1[0] - pad <= b2[1] and b1[1] + pad >= b2[0]
+                    and b1[2] - pad <= b2[3] and b1[3] + pad >= b2[2]
+                    and b1[4] - pad <= b2[5] and b1[5] + pad >= b2[4]
+                ):
+                    grounded.add(obj)
+                    changed = True
+                    break
+
+    aerial_tokens = (
+        "halo", "ring", "sun", "light", "glow", "shelf", "wall", "roof", "rib",
+        "canopy", "wing", "spoiler", "rotor", "blade", "mast", "tail", "fin",
+        "manifold", "pipe", "nozzle", "nacelle", "wave", "ridge", "stream",
+        "border", "paper", "water", "pool", "sculpture", "ribbon", "geonodes",
+    )
+    floating_pen = 0
+    for obj in hero_meshes:
+        if obj in grounded:
+            continue
+        lname = obj.name.lower()
+        if any(tok in lname for tok in aerial_tokens):
+            continue
+        box = mesh_aabbs.get(obj)
+        if box and box[4] > 0.35:
+            pen = 10 if floating_pen < 20 else 0
+            floating_pen += pen
+            add_issue(
+                "FLOATING_HERO",
+                "warn",
+                f"对象 {obj.name} 悬空离地约 {box[4]:.2f}m 且未接触主装配体。",
+                pen,
+                obj.name,
+            )
+
+    # Camera framing check via bpy_extras.object_utils.world_to_camera_view
+    if scene.camera is not None and renderables:
+        try:
+            from bpy_extras.object_utils import world_to_camera_view
+            cam = scene.camera
+            hero_renderables = [o for o in renderables if not dsh_is_backdrop_object(o)] or renderables
+            in_frame_count = 0
+            off_frame_names = []
+            for obj in hero_renderables:
+                try:
+                    pts = [obj.matrix_world @ Vector(c) for c in obj.bound_box]
+                    pts.append(sum(pts, Vector((0.0, 0.0, 0.0))) / max(1, len(pts)))
+                    ndcs = [world_to_camera_view(scene, cam, pt) for pt in pts]
+                    front_pts = [p for p in ndcs if p.z > 0.0]
+                    if not front_pts:
+                        off_frame_names.append(obj.name)
+                        continue
+                    min_x = min(p.x for p in front_pts)
+                    max_x = max(p.x for p in front_pts)
+                    min_y = min(p.y for p in front_pts)
+                    max_y = max(p.y for p in front_pts)
+                    if max_x >= 0.0 and min_x <= 1.0 and max_y >= 0.0 and min_y <= 1.0:
+                        in_frame_count += 1
+                    else:
+                        off_frame_names.append(obj.name)
+                except Exception:
+                    in_frame_count += 1
+            if in_frame_count == 0 and hero_renderables:
+                add_issue("OFF_FRAME_HERO", "error", "所有主体对象均位于当前主相机取景范围之外。", 20)
+            elif off_frame_names and len(hero_renderables) <= 12:
+                for name in off_frame_names[:2]:
+                    add_issue("OFF_FRAME_HERO", "warn", f"对象 {name} 完全位于主相机画面之外。", 10, name)
+        except Exception:
+            pass
+
+    if scene.render.engine in ("BLENDER_EEVEE", "BLENDER_EEVEE_NEXT") and total_polys > 500000:
+        add_issue("HIGH_POLYCOUNT", "warn", f"EEVEE 场景总面数达 {total_polys}（>50 万），渲染可能较慢。", 10)
+    elif scene.render.engine == "CYCLES" and total_polys > 1000000:
+        add_issue("HIGH_POLYCOUNT", "info", f"Cycles 场景总面数达 {total_polys}（>100 万），建议关注内存占用。", 5)
+
+    score = max(0, min(100, 100 - deduction))
+    grade = "A" if score >= 90 else "B" if score >= 75 else "C" if score >= 55 else "D"
+    return {"score": score, "grade": grade, "issues": issues}
+
+
 def dsh_collect_scene_summary():
     scene = bpy.context.scene
     objs = list(bpy.data.objects)
@@ -642,7 +1554,7 @@ def dsh_collect_scene_summary():
     camera_count = 0
     total_polys = 0
     obj_summaries = []
-    for obj in objs[:200]:
+    for idx, obj in enumerate(objs):
         otype = obj.type
         if otype == "MESH":
             mesh_count += 1
@@ -650,20 +1562,25 @@ def dsh_collect_scene_summary():
             light_count += 1
         elif otype == "CAMERA":
             camera_count += 1
-        entry = {
-            "name": obj.name,
-            "type": otype,
-            "location": [round(float(obj.location.x), 4), round(float(obj.location.y), 4), round(float(obj.location.z), 4)],
-            "dimensions": [round(float(obj.dimensions.x), 4), round(float(obj.dimensions.y), 4), round(float(obj.dimensions.z), 4)],
-        }
+        verts = 0
+        polys = 0
         if otype == "MESH" and obj.data is not None:
             verts = len(obj.data.vertices)
             polys = len(obj.data.polygons)
             total_polys += polys
-            entry["vertices"] = verts
-            entry["polygons"] = polys
-            entry["materialCount"] = len(obj.data.materials)
-        obj_summaries.append(entry)
+        if idx < 200:
+            entry = {
+                "name": obj.name,
+                "type": otype,
+                "location": [round(float(obj.location.x), 4), round(float(obj.location.y), 4), round(float(obj.location.z), 4)],
+                "dimensions": [round(float(obj.dimensions.x), 4), round(float(obj.dimensions.y), 4), round(float(obj.dimensions.z), 4)],
+            }
+            if otype == "MESH" and obj.data is not None:
+                entry["vertices"] = verts
+                entry["polygons"] = polys
+                entry["materialCount"] = len(obj.data.materials)
+            obj_summaries.append(entry)
+    qc = dsh_evaluate_scene_qc(objs, mesh_count, light_count, camera_count, total_polys)
     return {
         "capturedAt": datetime.now(timezone.utc).isoformat(),
         "blenderVersion": bpy.app.version_string.split(" ")[0],
@@ -677,6 +1594,7 @@ def dsh_collect_scene_summary():
         "materials": [m.name for m in bpy.data.materials][:120],
         "collections": [c.name for c in bpy.data.collections][:80],
         "objects": obj_summaries,
+        "qc": qc,
     }
 
 
@@ -731,6 +1649,15 @@ def dsh_build_template():
     halo.keyframe_insert(data_path="rotation_euler", frame=fs)
     halo.rotation_euler = Euler((math.radians(18.0), math.radians(-14.0), math.radians(180.0)), "XYZ")
     halo.keyframe_insert(data_path="rotation_euler", frame=fe)
+
+    # Auto-wire uploaded image texture & 3D models cleanly onto the pedestal
+    dsh_apply_uploaded_texture(mat_hero)
+    dsh_auto_place_uploaded_models(
+        pedestal_top_z=0.36,
+        target_size=1.6,
+        replace_names=["Product_Body", "Product_Collar", "Product_Dome"],
+        default_mat=mat_hero,
+    )
 
     dsh_setup_lighting(DSH_PROJECT["lightingPreset"], DSH_PROJECT["accentColor"])
     dsh_setup_camera(DSH_PROJECT["cameraPreset"], fs, fe, target=(0.0, 0.0, 1.15))
@@ -810,15 +1737,15 @@ def dsh_build_template():
     desk_top = dsh_make_mesh_box("Desk_Top", size=(2.2, 0.95, 0.09), location=(0.15, 1.35, 0.95), bevel_width=0.015, collection="DSH_Furniture")
     dsh_assign_material(desk_top, mat_desk)
     for idx, (lx, ly) in enumerate([(-0.82, 0.96), (1.12, 0.96), (-0.82, 1.72), (1.12, 1.72)]):
-        leg = dsh_make_mesh_box(f"Desk_Leg_{idx}", size=(0.08, 0.08, 0.72), location=(lx, ly, 0.58), collection="DSH_Furniture")
+        leg = dsh_make_mesh_box(f"Desk_Leg_{idx}", size=(0.08, 0.08, 0.72), location=(lx, ly, 0.58), bevel_width=0.008, collection="DSH_Furniture")
         dsh_assign_material(leg, mat_metal)
 
     # Glowing monitor + stand
-    stand = dsh_make_mesh_box("Monitor_Stand", size=(0.18, 0.14, 0.26), location=(0.15, 1.56, 1.12), collection="DSH_Furniture")
+    stand = dsh_make_mesh_box("Monitor_Stand", size=(0.18, 0.14, 0.26), location=(0.15, 1.56, 1.12), bevel_width=0.008, collection="DSH_Furniture")
     dsh_assign_material(stand, mat_metal)
     bezel = dsh_make_mesh_box("Monitor_Bezel", size=(1.18, 0.07, 0.68), location=(0.15, 1.52, 1.52), bevel_width=0.015, collection="DSH_Furniture")
     dsh_assign_material(bezel, mat_metal)
-    screen = dsh_make_mesh_box("Monitor_Screen", size=(1.08, 0.02, 0.58), location=(0.15, 1.48, 1.52), collection="DSH_Furniture")
+    screen = dsh_make_mesh_box("Monitor_Screen", size=(1.08, 0.02, 0.58), location=(0.15, 1.48, 1.52), bevel_width=0.004, collection="DSH_Furniture")
     dsh_assign_material(screen, mat_screen)
 
     # Chair
@@ -1055,6 +1982,360 @@ def dsh_build_template():
     dsh_setup_camera(DSH_PROJECT["cameraPreset"], fs, fe, target=(0.0, 0.0, 1.45), distance_scale=1.12)
 `
 
+    case 'architectural-pavilion':
+      return `
+def dsh_make_arched_rib(name, x_pos, y_start=-1.95, y_end=2.25, base_z=2.15, arch_rise=0.95, thickness_x=0.11, thickness_z=0.14, segs=22, collection="DSH_Pavilion"):
+    mesh = bpy.data.meshes.new(name + "_Mesh")
+    verts = []
+    faces = []
+    hx = thickness_x * 0.5
+    hz = thickness_z * 0.5
+    for i in range(segs + 1):
+        t = i / float(segs)
+        y = y_start + (y_end - y_start) * t
+        z = base_z + arch_rise * math.sin(math.pi * t)
+        # 4 corners of rib cross section at station i
+        verts.append((x_pos - hx, y, z - hz))
+        verts.append((x_pos + hx, y, z - hz))
+        verts.append((x_pos + hx, y, z + hz))
+        verts.append((x_pos - hx, y, z + hz))
+    for i in range(segs):
+        b0 = i * 4
+        b1 = (i + 1) * 4
+        faces.append((b0 + 0, b0 + 1, b1 + 1, b1 + 0))
+        faces.append((b0 + 1, b0 + 2, b1 + 2, b1 + 1))
+        faces.append((b0 + 2, b0 + 3, b1 + 3, b1 + 2))
+        faces.append((b0 + 3, b0 + 0, b1 + 0, b1 + 3))
+    faces.append((0, 3, 2, 1))
+    last = segs * 4
+    faces.append((last + 0, last + 1, last + 2, last + 3))
+    mesh.from_pydata(verts, [], faces)
+    mesh.update()
+    dsh_set_smooth(mesh, True)
+    obj = bpy.data.objects.new(name, mesh)
+    return dsh_link_object(obj, collection)
+
+
+def dsh_build_template():
+    accent = dsh_hex_to_rgba(DSH_PROJECT["accentColor"])
+    preset = DSH_PROJECT["materialPreset"]
+    mat_concrete = dsh_create_material("Mat_Pavilion_Concrete", preset, (0.84, 0.82, 0.78, 1.0))
+    mat_travertine = dsh_create_material("Mat_Pavilion_Plinth", "clay_matte", (0.76, 0.73, 0.68, 1.0))
+    mat_timber = dsh_create_material("Mat_Pavilion_Timber", "clay_matte", (0.56, 0.36, 0.20, 1.0))
+    mat_bronze = dsh_create_material("Mat_Pavilion_Bronze", "brushed_metal", (0.16, 0.14, 0.13, 1.0))
+    mat_water = dsh_create_material("Mat_Pavilion_Water", "ceramic_gloss", (0.04, 0.13, 0.18, 1.0))
+    mat_totem = dsh_create_material("Mat_Pavilion_Totem", "ceramic_gloss", accent)
+    mat_glow = dsh_create_material("Mat_Pavilion_WarmGlow", "ceramic_gloss", (1.0, 0.76, 0.42, 1.0), emission_strength=3.2)
+
+    # Fine-tune water mirror reflectivity
+    if mat_water.node_tree:
+        wbsdf = next((n for n in mat_water.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None)
+        if wbsdf:
+            dsh_set_bsdf(wbsdf, ["Roughness"], 0.03)
+            dsh_set_bsdf(wbsdf, ["Coat Weight", "Clearcoat"], 0.95)
+
+    # Architectural courtyard plinth and ground deck
+    ground = dsh_make_mesh_box("Studio_Ground", size=(20.0, 20.0, 0.12), location=(0.0, 0.0, -0.06), collection="DSH_Stage")
+    dsh_assign_material(ground, mat_travertine)
+    plinth_back = dsh_make_mesh_box("Pavilion_Terrace", size=(6.8, 3.6, 0.24), location=(0.0, 0.85, 0.12), bevel_width=0.025, collection="DSH_Pavilion")
+    dsh_assign_material(plinth_back, mat_concrete)
+
+    # Reflecting water pool basin in foreground + stepping stones
+    pool_rim_front = dsh_make_mesh_box("Pavilion_Pool_Rim_Front", size=(6.8, 0.26, 0.22), location=(0.0, -2.55, 0.11), bevel_width=0.02, collection="DSH_Pavilion")
+    pool_rim_left = dsh_make_mesh_box("Pavilion_Pool_Rim_Left", size=(0.26, 2.0, 0.22), location=(-3.27, -1.68, 0.11), bevel_width=0.02, collection="DSH_Pavilion")
+    pool_rim_right = dsh_make_mesh_box("Pavilion_Pool_Rim_Right", size=(0.26, 2.0, 0.22), location=(3.27, -1.68, 0.11), bevel_width=0.02, collection="DSH_Pavilion")
+    for rim in (pool_rim_front, pool_rim_left, pool_rim_right):
+        dsh_assign_material(rim, mat_concrete)
+    water = dsh_make_mesh_box("Pavilion_Water_Surface", size=(6.28, 1.54, 0.14), location=(0.0, -1.68, 0.09), bevel_width=0.01, collection="DSH_Pavilion")
+    dsh_assign_material(water, mat_water)
+    for idx, sy in enumerate((-2.15, -1.58, -1.02)):
+        step = dsh_make_mesh_box(f"Pavilion_Step_{idx}", size=(1.15, 0.42, 0.22), location=(-1.45, sy, 0.12), bevel_width=0.02, collection="DSH_Pavilion")
+        dsh_assign_material(step, mat_travertine)
+
+    # Minimalist concrete L-walls + architectural interior warm cove glow
+    wall_back = dsh_make_mesh_box("Pavilion_Wall_Back", size=(6.6, 0.26, 2.58), location=(0.0, 2.45, 1.52), bevel_width=0.025, collection="DSH_Pavilion")
+    wall_left = dsh_make_mesh_box("Pavilion_Wall_Left", size=(0.26, 3.2, 2.58), location=(-3.17, 0.98, 1.52), bevel_width=0.025, collection="DSH_Pavilion")
+    dsh_assign_material(wall_back, mat_concrete)
+    dsh_assign_material(wall_left, mat_concrete)
+    glow_cove = dsh_make_mesh_box("Pavilion_Glow_Strip", size=(5.6, 0.08, 0.12), location=(0.15, 2.28, 2.52), bevel_width=0.015, collection="DSH_Pavilion")
+    dsh_assign_material(glow_cove, mat_glow)
+
+    # Dark bronze structural columns & edge fascia beams (generous 2.5m architectural headroom)
+    for idx, (cx, cy) in enumerate([(-2.85, -0.78), (2.85, -0.78), (2.85, 2.18), (-0.15, -0.78)]):
+        col_obj = dsh_make_mesh_cylinder(f"Pavilion_Column_{idx}", radius1=0.075, radius2=0.075, depth=2.32, segments=24, location=(cx, cy, 1.36), bevel_width=0.01, collection="DSH_Pavilion")
+        dsh_assign_material(col_obj, mat_bronze)
+    beam_front = dsh_make_mesh_box("Pavilion_Beam_Front", size=(6.3, 0.18, 0.16), location=(0.0, -0.78, 2.52), bevel_width=0.015, collection="DSH_Pavilion")
+    beam_back = dsh_make_mesh_box("Pavilion_Beam_Back", size=(6.3, 0.18, 0.16), location=(0.0, 2.18, 2.52), bevel_width=0.015, collection="DSH_Pavilion")
+    dsh_assign_material(beam_front, mat_bronze)
+    dsh_assign_material(beam_back, mat_bronze)
+
+    # 11 parametric curved timber skylight ribs sweeping over the terrace & reflecting pool
+    for i in range(11):
+        t = i / 10.0
+        rx = -2.90 + 5.80 * t
+        rise = 0.65 + 0.42 * math.sin(math.pi * t)
+        rib = dsh_make_arched_rib(f"Pavilion_Rib_{i:02d}", rx, y_start=-1.45, y_end=2.45, base_z=2.46, arch_rise=rise)
+        dsh_assign_material(rib, mat_timber)
+
+    # Interior gallery hero pedestal & sculptural monolith
+    hero_ped = dsh_make_mesh_box("Pavilion_Hero_Pedestal", size=(1.18, 1.18, 0.52), location=(0.85, 0.72, 0.50), bevel_width=0.025, collection="DSH_Hero")
+    dsh_assign_material(hero_ped, mat_travertine)
+    totem = dsh_make_mesh_cylinder("Pavilion_Totem", radius1=0.33, radius2=0.21, depth=1.02, segments=48, location=(0.85, 0.72, 1.27), bevel_width=0.035, collection="DSH_Hero")
+    dsh_assign_material(totem, mat_totem)
+    totem_ring = dsh_make_mesh_torus("Pavilion_Totem_Halo", major_radius=0.50, minor_radius=0.026, location=(0.85, 0.72, 1.38), collection="DSH_Hero")
+    totem_ring.rotation_euler = Euler((math.radians(24.0), math.radians(-18.0), 0.0), "XYZ")
+    dsh_assign_material(totem_ring, mat_glow)
+
+    dsh_apply_uploaded_texture(mat_totem)
+    dsh_auto_place_uploaded_models(
+        pedestal_top_z=0.76,
+        target_size=1.35,
+        replace_names=["Pavilion_Totem", "Pavilion_Totem_Halo"],
+        default_mat=mat_totem,
+    )
+
+    fs = int(DSH_PROJECT["frameStart"])
+    fe = int(DSH_PROJECT["frameEnd"])
+    dsh_setup_lighting(DSH_PROJECT["lightingPreset"], DSH_PROJECT["accentColor"])
+    # Subtle warm interior accent fill inside the pavilion
+    dsh_add_light("Pavilion_Interior_Warm", "AREA", (0.85, 1.15, 2.65), 185.0, (1.0, 0.86, 0.66), size=2.4, target=(0.85, 0.5, 0.8))
+    cam_obj, _ = dsh_setup_camera(DSH_PROJECT["cameraPreset"], fs, fe, target=(0.0, 0.0, 1.20), distance_scale=2.04)
+    if DSH_PROJECT["cameraPreset"] == "three_quarter":
+        # Architectural eye-level perspective peeking cleanly under the front ribs at the hero sculpture
+        cam_obj.location = Vector((7.6, -9.4, 2.75))
+`
+
+    case 'procedural-abstract':
+      return `
+def dsh_create_iridescent_material(name, accent_rgba):
+    mat = bpy.data.materials.new(name=name)
+    if bpy.app.version < (5, 0, 0) or mat.node_tree is None:
+        mat.use_nodes = True
+    nt = mat.node_tree
+    nt.nodes.clear()
+    out = nt.nodes.new("ShaderNodeOutputMaterial")
+    out.location = (520, 0)
+    bsdf = nt.nodes.new("ShaderNodeBsdfPrincipled")
+    bsdf.location = (220, 0)
+    lw = nt.nodes.new("ShaderNodeLayerWeight")
+    lw.location = (-260, 80)
+    lw.inputs["Blend"].default_value = 0.35
+    ramp = nt.nodes.new("ShaderNodeValToRGB")
+    ramp.location = (-40, 80)
+    cr = ramp.color_ramp
+    cr.elements[0].position = 0.08
+    cr.elements[0].color = accent_rgba
+    cr.elements[1].position = 0.55
+    cr.elements[1].color = (
+        min(1.0, accent_rgba[2] * 0.85 + 0.18),
+        min(1.0, accent_rgba[0] * 0.65 + 0.25),
+        min(1.0, accent_rgba[1] * 0.90 + 0.35),
+        1.0,
+    )
+    e2 = cr.elements.new(0.88)
+    e2.color = (0.94, 0.88, 1.0, 1.0)
+    nt.links.new(lw.outputs["Facing"], ramp.inputs["Fac"])
+    nt.links.new(ramp.outputs["Color"], bsdf.inputs["Base Color"])
+    dsh_set_bsdf(bsdf, ["Metallic"], 0.88)
+    dsh_set_bsdf(bsdf, ["Roughness"], 0.16)
+    dsh_set_bsdf(bsdf, ["Specular IOR Level", "Specular"], 0.85)
+    dsh_set_bsdf(bsdf, ["Coat Weight", "Clearcoat"], 0.92)
+    dsh_set_bsdf(bsdf, ["Coat Roughness", "Clearcoat Roughness"], 0.04)
+    nt.links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+    return mat
+
+
+def dsh_build_geonodes_sculpture(obj, mat_sculpture, mat_orb):
+    ng = bpy.data.node_groups.new("DSH_Parametric_Ribbon_GN", "GeometryNodeTree")
+    if hasattr(ng, "interface"):
+        ng.interface.new_socket(name="Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+        ng.interface.new_socket(name="Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+    else:
+        ng.inputs.new("NodeSocketGeometry", "Geometry")
+        ng.outputs.new("NodeSocketGeometry", "Geometry")
+
+    nodes = ng.nodes
+    links = ng.links
+    n_in = nodes.new("NodeGroupInput")
+    n_in.location = (-780, 0)
+    n_out = nodes.new("NodeGroupOutput")
+    n_out.location = (760, 0)
+
+    # High-resolution closed circle displaced into a 3-lobe trefoil wave knot
+    circle = nodes.new("GeometryNodeCurvePrimitiveCircle")
+    circle.location = (-560, 160)
+    circle.inputs["Resolution"].default_value = 160
+    circle.inputs["Radius"].default_value = 0.92
+
+    spline_param = nodes.new("GeometryNodeSplineParameter")
+    spline_param.location = (-740, -120)
+
+    mul_3 = nodes.new("ShaderNodeMath")
+    mul_3.operation = "MULTIPLY"
+    mul_3.location = (-520, -120)
+    mul_3.inputs[1].default_value = 6.0 * math.pi  # 3 full lobes around circle
+    links.new(spline_param.outputs["Factor"], mul_3.inputs[0])
+
+    mul_2 = nodes.new("ShaderNodeMath")
+    mul_2.operation = "MULTIPLY"
+    mul_2.location = (-520, -300)
+    mul_2.inputs[1].default_value = 4.0 * math.pi  # 2 harmonic ripples
+    links.new(spline_param.outputs["Factor"], mul_2.inputs[0])
+
+    sin_z = nodes.new("ShaderNodeMath")
+    sin_z.operation = "SINE"
+    sin_z.location = (-340, -120)
+    links.new(mul_3.outputs["Value"], sin_z.inputs[0])
+
+    amp_z = nodes.new("ShaderNodeMath")
+    amp_z.operation = "MULTIPLY"
+    amp_z.location = (-160, -120)
+    amp_z.inputs[1].default_value = 0.42
+    links.new(sin_z.outputs["Value"], amp_z.inputs[0])
+
+    cos_xy = nodes.new("ShaderNodeMath")
+    cos_xy.operation = "COSINE"
+    cos_xy.location = (-340, -300)
+    links.new(mul_2.outputs["Value"], cos_xy.inputs[0])
+
+    amp_xy = nodes.new("ShaderNodeMath")
+    amp_xy.operation = "MULTIPLY"
+    amp_xy.location = (-160, -300)
+    amp_xy.inputs[1].default_value = 0.22
+    links.new(cos_xy.outputs["Value"], amp_xy.inputs[0])
+
+    comb_off = nodes.new("ShaderNodeCombineXYZ")
+    comb_off.location = (10, -180)
+    links.new(amp_xy.outputs["Value"], comb_off.inputs["X"])
+    links.new(amp_xy.outputs["Value"], comb_off.inputs["Y"])
+    links.new(amp_z.outputs["Value"], comb_off.inputs["Z"])
+
+    set_pos = nodes.new("GeometryNodeSetPosition")
+    set_pos.location = (180, 140)
+    links.new(circle.outputs["Curve"], set_pos.inputs["Geometry"])
+    links.new(comb_off.outputs["Vector"], set_pos.inputs["Offset"])
+
+    set_tilt = nodes.new("GeometryNodeSetCurveTilt")
+    set_tilt.location = (330, 140)
+    links.new(set_pos.outputs["Geometry"], set_tilt.inputs["Curve"])
+    links.new(mul_3.outputs["Value"], set_tilt.inputs["Tilt"])
+
+    profile = nodes.new("GeometryNodeCurvePrimitiveCircle")
+    profile.location = (180, -20)
+    profile.inputs["Resolution"].default_value = 24
+    profile.inputs["Radius"].default_value = 0.13
+
+    curve_to_mesh = nodes.new("GeometryNodeCurveToMesh")
+    curve_to_mesh.location = (470, 140)
+    links.new(set_tilt.outputs["Curve"], curve_to_mesh.inputs["Curve"])
+    links.new(profile.outputs["Curve"], curve_to_mesh.inputs["Profile Curve"])
+    if "Fill Caps" in curve_to_mesh.inputs:
+        curve_to_mesh.inputs["Fill Caps"].default_value = True
+
+    set_mat_main = nodes.new("GeometryNodeSetMaterial")
+    set_mat_main.location = (600, 140)
+    set_mat_main.inputs["Material"].default_value = mat_sculpture
+    links.new(curve_to_mesh.outputs["Mesh"], set_mat_main.inputs["Geometry"])
+
+    # Secondary procedural instanced orbital spheres along resampled knot
+    resample = nodes.new("GeometryNodeResampleCurve")
+    resample.location = (220, -220)
+    resample.inputs["Count"].default_value = 18
+    links.new(set_pos.outputs["Geometry"], resample.inputs["Curve"])
+
+    orb_mesh = nodes.new("GeometryNodeMeshUVSphere")
+    orb_mesh.location = (220, -380)
+    orb_mesh.inputs["Segments"].default_value = 20
+    orb_mesh.inputs["Rings"].default_value = 12
+    orb_mesh.inputs["Radius"].default_value = 0.068
+
+    inst = nodes.new("GeometryNodeInstanceOnPoints")
+    inst.location = (410, -240)
+    links.new(resample.outputs["Curve"], inst.inputs["Points"])
+    links.new(orb_mesh.outputs["Mesh"], inst.inputs["Instance"])
+
+    realize = nodes.new("GeometryNodeRealizeInstances")
+    realize.location = (540, -240)
+    links.new(inst.outputs["Instances"], realize.inputs["Geometry"])
+
+    set_mat_orb = nodes.new("GeometryNodeSetMaterial")
+    set_mat_orb.location = (640, -240)
+    set_mat_orb.inputs["Material"].default_value = mat_orb
+    links.new(realize.outputs["Geometry"], set_mat_orb.inputs["Geometry"])
+
+    join_geo = nodes.new("GeometryNodeJoinGeometry")
+    join_geo.location = (660, 0)
+    links.new(set_mat_main.outputs["Geometry"], join_geo.inputs["Geometry"])
+    links.new(set_mat_orb.outputs["Geometry"], join_geo.inputs["Geometry"])
+
+    smooth = nodes.new("GeometryNodeSetShadeSmooth")
+    smooth.location = (710, 0)
+    links.new(join_geo.outputs["Geometry"], smooth.inputs["Geometry"])
+    links.new(smooth.outputs["Geometry"], n_out.inputs["Geometry"])
+
+    mod = obj.modifiers.new(name="DSH_Parametric_GeoNodes", type="NODES")
+    mod.node_group = ng
+    return mod
+
+
+def dsh_build_template():
+    accent = dsh_hex_to_rgba(DSH_PROJECT["accentColor"])
+    mat_floor = dsh_create_material("Mat_Abstract_Floor", "ceramic_gloss", (0.05, 0.06, 0.08, 1.0))
+    mat_plinth = dsh_create_material("Mat_Abstract_Plinth", "clay_matte", (0.12, 0.13, 0.16, 1.0))
+    mat_trim = dsh_create_material("Mat_Abstract_Trim", "brushed_metal", (0.78, 0.80, 0.86, 1.0))
+    mat_sculpture = dsh_create_iridescent_material("Mat_Iridescent_Ribbon", accent)
+    mat_glow = dsh_create_material("Mat_Abstract_CoreGlow", "ceramic_gloss", accent, emission_strength=3.6)
+
+    floor = dsh_make_mesh_box("Abstract_Floor", size=(18.0, 18.0, 0.1), location=(0.0, 0.0, -0.05), collection="DSH_Stage")
+    dsh_assign_material(floor, mat_floor)
+
+    plinth_base = dsh_make_mesh_cylinder("Abstract_Plinth_Base", radius1=1.45, radius2=1.35, depth=0.20, segments=64, location=(0.0, 0.0, 0.10), bevel_width=0.03, collection="DSH_Stage")
+    dsh_assign_material(plinth_base, mat_plinth)
+    plinth_cap = dsh_make_mesh_cylinder("Abstract_Plinth_Cap", radius1=1.18, radius2=1.15, depth=0.10, segments=64, location=(0.0, 0.0, 0.25), bevel_width=0.02, collection="DSH_Stage")
+    dsh_assign_material(plinth_cap, mat_trim)
+    stem = dsh_make_mesh_cylinder("Abstract_Mount_Stem", radius1=0.08, radius2=0.05, depth=0.68, segments=32, location=(0.0, 0.0, 0.64), bevel_width=0.015, collection="DSH_Hero")
+    dsh_assign_material(stem, mat_trim)
+
+    core_orb = dsh_make_mesh_sphere("Abstract_Core_Orb", radius=0.28, location=(0.0, 0.0, 1.38), collection="DSH_Hero")
+    dsh_assign_material(core_orb, mat_glow)
+    core_ring = dsh_make_mesh_torus("Abstract_Core_Halo", major_radius=0.56, minor_radius=0.028, location=(0.0, 0.0, 1.38), collection="DSH_Hero")
+    core_ring.rotation_euler = Euler((math.radians(64.0), math.radians(22.0), 0.0), "XYZ")
+    dsh_assign_material(core_ring, mat_trim)
+
+    # Build real Blender GeometryNodeTree sculpture (fallback to procedural bmesh knot only if needed)
+    gn_mesh = bpy.data.meshes.new("GeoNodes_Sculpture_Mesh")
+    gn_obj = bpy.data.objects.new("GeoNodes_Sculpture", gn_mesh)
+    gn_obj.location = Vector((0.0, 0.0, 1.38))
+    gn_obj.rotation_euler = Euler((math.radians(28.0), math.radians(-16.0), 0.0), "XYZ")
+    dsh_link_object(gn_obj, "DSH_Hero")
+    dsh_assign_material(gn_obj, mat_sculpture)
+    try:
+        dsh_build_geonodes_sculpture(gn_obj, mat_sculpture, mat_glow)
+    except Exception as exc:
+        print("[dsh-blender-studio] GeoNodes fallback to bmesh parametric knot:", exc)
+        bpy.data.objects.remove(gn_obj, do_unlink=True)
+        gn_obj = dsh_make_mesh_torus("GeoNodes_Sculpture", major_radius=0.95, minor_radius=0.14, major_seg=96, minor_seg=24, location=(0.0, 0.0, 1.38), collection="DSH_Hero")
+        gn_obj.rotation_euler = Euler((math.radians(28.0), math.radians(-16.0), 0.0), "XYZ")
+        dsh_assign_material(gn_obj, mat_sculpture)
+
+    fs = int(DSH_PROJECT["frameStart"])
+    fe = int(DSH_PROJECT["frameEnd"])
+    gn_obj.keyframe_insert(data_path="rotation_euler", frame=fs)
+    gn_obj.rotation_euler = Euler((math.radians(28.0), math.radians(-16.0), math.radians(360.0)), "XYZ")
+    gn_obj.keyframe_insert(data_path="rotation_euler", frame=fe)
+
+    dsh_apply_uploaded_texture(mat_sculpture)
+    dsh_auto_place_uploaded_models(
+        pedestal_top_z=0.30,
+        target_size=1.65,
+        replace_names=["GeoNodes_Sculpture", "Abstract_Core_Orb", "Abstract_Core_Halo", "Abstract_Mount_Stem"],
+        default_mat=mat_sculpture,
+    )
+
+    dsh_setup_lighting(DSH_PROJECT["lightingPreset"], DSH_PROJECT["accentColor"])
+    dsh_setup_camera(DSH_PROJECT["cameraPreset"], fs, fe, target=(0.0, 0.0, 1.28), distance_scale=1.18)
+`
+
     case 'blank-stage':
     default:
       return `
@@ -1067,15 +2348,16 @@ def dsh_build_template():
     floor = dsh_make_mesh_box("Stage_Floor", size=(12.0, 12.0, 0.08), location=(0.0, 0.0, -0.04), collection="DSH_Stage")
     dsh_assign_material(floor, mat_floor)
 
-    imported_any = False
-    for asset in DSH_ASSETS:
-        if asset.get("kind") == "model":
-            if dsh_import_model_asset(asset):
-                imported_any = True
+    marker = dsh_make_mesh_box("Reference_Cube_1m", size=(1.0, 1.0, 1.0), location=(0.0, 0.0, 0.5), bevel_width=0.04, collection="DSH_Hero")
+    dsh_assign_material(marker, mat_marker)
 
-    if not imported_any:
-        marker = dsh_make_mesh_box("Reference_Cube_1m", size=(1.0, 1.0, 1.0), location=(0.0, 0.0, 0.5), bevel_width=0.04, collection="DSH_Hero")
-        dsh_assign_material(marker, mat_marker)
+    dsh_apply_uploaded_texture(mat_marker)
+    dsh_auto_place_uploaded_models(
+        pedestal_top_z=0.0,
+        target_size=1.6,
+        replace_names=["Reference_Cube_1m"],
+        default_mat=mat_marker,
+    )
 
     fs = int(DSH_PROJECT["frameStart"])
     fe = int(DSH_PROJECT["frameEnd"])
@@ -1138,6 +2420,7 @@ export function generateRunnerHarness(
     : generateSceneScript(project, assetsDir)
 
   switch (mode) {
+    case 'pipeline':
     case 'inspect_scene':
       return `${baseScene}
 print("__DSH_STAGE__=采集场景结构信息", flush=True)
@@ -1195,10 +2478,9 @@ def _dsh_render_contact_sheet(out_path, cell_w, cell_h, frame_num):
     orig_fmt = scene.render.image_settings.file_format
     orig_fp = scene.render.filepath
 
-    # Compute hero assembly bounds (keep pedestals/plinths; exclude large studio floors/walls)
+    # Compute hero assembly bounds (keep pedestals/plinths; exclude large studio floors/walls/softboxes)
     all_renderables = [o for o in bpy.data.objects if o.type in ("MESH", "FONT", "CURVE", "GPENCIL", "GREASEPENCIL")]
-    backdrop_names = {"Studio_Floor", "Studio_Backdrop", "Logo_Floor", "Stage_Floor", "GP_Paper_Card"}
-    hero_objs = [o for o in all_renderables if o.name not in backdrop_names]
+    hero_objs = [o for o in all_renderables if not dsh_is_backdrop_object(o)]
     focus_objs = hero_objs if hero_objs else all_renderables
     if focus_objs:
         xs, ys, zs = [], [], []

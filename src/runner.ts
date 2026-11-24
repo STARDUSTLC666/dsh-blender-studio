@@ -49,6 +49,9 @@ export interface ParsedBlenderProgress {
   savedFile?: string
 }
 
+export const DEFAULT_EEVEE_TIMEOUT_MS = 180_000
+export const DEFAULT_CYCLES_TIMEOUT_MS = 300_000
+
 const SCRUBBED_ENV_ALLOWLIST =
   /^(path|pathext|systemroot|windir|comspec|display|wayland_display|xdg_runtime_dir|cuda_visible_devices|hip_visible_devices|metal_device_wrapper_type)$/i
 

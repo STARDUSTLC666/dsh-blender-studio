@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" fill="none" role="img" aria-label="dsh-blender-studio 3D 创作与渲染四步流程示意（深色）">
+  <defs>
+    <linearGradient id="bgD" x1="0" y1="0" x2="1200" y2="320" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#111b2d"/>
+      <stop offset="65%" stop-color="#162238"/>
+      <stop offset="100%" stop-color="#1a2436"/>
+    </linearGradient>
+    <linearGradient id="iconTileD" x1="28" y1="24" x2="228" y2="232" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#27344d"/>
+      <stop offset="55%" stop-color="#1b2437"/>
+      <stop offset="100%" stop-color="#121826"/>
+    </linearGradient>
+    <linearGradient id="iconTopD" x1="64" y1="54" x2="192" y2="128" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFB347"/>
+      <stop offset="55%" stop-color="#F27A1A"/>
+      <stop offset="100%" stop-color="#DE5D08"/>
+    </linearGradient>
+    <linearGradient id="iconLeftD" x1="60" y1="92" x2="128" y2="206" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#3B82D6"/>
+      <stop offset="100%" stop-color="#1C4E8F"/>
+    </linearGradient>
+    <linearGradient id="iconRightD" x1="128" y1="128" x2="196" y2="188" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FBF7EF"/>
+      <stop offset="100%" stop-color="#D7CFC2"/>
+    </linearGradient>
+    <linearGradient id="iconCoreD" x1="112" y1="114" x2="144" y2="146" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#67E8F9"/>
+      <stop offset="100%" stop-color="#2563EB"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Outer card -->
+  <rect x="1" y="1" width="1198" height="318" rx="24" fill="url(#bgD)" stroke="#31445e" stroke-width="1.5"/>
+
+  <!-- Left studio emblem -->
+  <g transform="translate(30, 46) scale(0.74)">
+    <rect x="24" y="24" width="208" height="208" rx="48" fill="url(#iconTileD)"/>
+    <rect x="25.5" y="25.5" width="205" height="205" rx="46.5" stroke="#7b93bc" stroke-opacity="0.55" stroke-width="3"/>
+    <polygon points="128,52 193.8,90 128,128 62.2,90" fill="url(#iconTopD)"/>
+    <polygon points="62.2,90 128,128 128,204 62.2,166" fill="url(#iconLeftD)"/>
+    <polygon points="193.8,90 128,128 128,204 193.8,166" fill="url(#iconRightD)"/>
+    <path d="M63.5,90.8 L128,128 L192.5,90.8 M128,128 L128,202.5" stroke="#ffffff" stroke-opacity="0.68" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="128" cy="128" r="24" fill="#151D2C" stroke="#FFFDF9" stroke-width="4"/>
+    <circle cx="128" cy="128" r="13.5" fill="url(#iconCoreD)"/>
+    <circle cx="123.5" cy="123.5" r="4" fill="#ffffff" fill-opacity="0.8"/>
+    <circle cx="128" cy="52" r="5" fill="#FFF7ED" stroke="#EA580C" stroke-width="2.5"/>
+    <circle cx="62.2" cy="166" r="4.5" fill="#EFF6FF" stroke="#2563EB" stroke-width="2.5"/>
+    <circle cx="193.8" cy="166" r="4.5" fill="#F0FDF4" stroke="#10B981" stroke-width="2.5"/>
+  </g>
+
+  <!-- Header -->
+  <g font-family="Segoe UI, Microsoft YaHei, PingFang SC, Arial, sans-serif">
+    <text x="244" y="72" font-size="28" font-weight="700" fill="#eef3ff">Blender 3D Studio</text>
+    <rect x="506" y="47" width="194" height="28" rx="14" fill="#1c2b44" stroke="#365078"/>
+    <text x="603" y="66" text-anchor="middle" font-size="13" font-weight="600" fill="#7aaaff">v0.2.0 · Blender 3.6–5.x</text>
+    <text x="244" y="108" font-size="17" fill="#a9bbd5">在 DeepSeek Harness 中完成 3D 装配、实时预览、自动体检与多格式导出。</text>
+
+    <!-- Step 01 -->
+    <rect x="244" y="136" width="212" height="132" rx="14" fill="#1b2a42" stroke="#31445e"/>
+    <rect x="260" y="152" width="32" height="22" rx="6" fill="#3a2819" stroke="#9c5a20"/>
+    <text x="276" y="167" text-anchor="middle" font-size="12" font-weight="700" fill="#ffb35c">01</text>
+    <text x="260" y="199" font-size="16" font-weight="700" fill="#eef3ff">模板与资产自装配</text>
+    <text x="260" y="224" font-size="13" fill="#a9bbd5">8 套跨版本 bpy 模板</text>
+    <text x="260" y="245" font-size="13" fill="#a9bbd5">HDRI 自动打光 · 模型落台</text>
+
+    <!-- Arrow 1->2 -->
+    <path d="M462 202 H474 M470 197 L475 202 L470 207" stroke="#647c9e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Step 02 -->
+    <rect x="480" y="136" width="212" height="132" rx="14" fill="#1b2a42" stroke="#31445e"/>
+    <rect x="496" y="152" width="32" height="22" rx="6" fill="#192e52" stroke="#3b6bc2"/>
+    <text x="512" y="167" text-anchor="middle" font-size="12" font-weight="700" fill="#7ab8ff">02</text>
+    <text x="496" y="199" font-size="16" font-weight="700" fill="#eef3ff">3D 视口 &amp; Live Bridge</text>
+    <text x="496" y="224" font-size="13" fill="#a9bbd5">Canvas 3D 预览 · 快捷预设</text>
+    <text x="496" y="245" font-size="13" fill="#a9bbd5">127.0.0.1 实时联动 Blender</text>
+
+    <!-- Arrow 2->3 -->
+    <path d="M698 202 H710 M706 197 L711 202 L706 207" stroke="#647c9e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Step 03 -->
+    <rect x="716" y="136" width="212" height="132" rx="14" fill="#1b2a42" stroke="#31445e"/>
+    <rect x="732" y="152" width="32" height="22" rx="6" fill="#14372d" stroke="#228b68"/>
+    <text x="748" y="167" text-anchor="middle" font-size="12" font-weight="700" fill="#5de8b5">03</text>
+    <text x="732" y="199" font-size="16" font-weight="700" fill="#eef3ff">QC-3D 体检 &amp; 四视角</text>
+    <text x="732" y="224" font-size="13" fill="#a9bbd5">自动评分 A–D 排错审计</text>
+    <text x="732" y="245" font-size="13" fill="#a9bbd5">2×2 四视角拼图视觉自检</text>
+
+    <!-- Arrow 3->4 -->
+    <path d="M934 202 H946 M942 197 L947 202 L942 207" stroke="#647c9e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Step 04 -->
+    <rect x="952" y="136" width="212" height="132" rx="14" fill="#1b2a42" stroke="#31445e"/>
+    <rect x="968" y="152" width="32" height="22" rx="6" fill="#262854" stroke="#5b62c9"/>
+    <text x="984" y="167" text-anchor="middle" font-size="12" font-weight="700" fill="#a5b4fc">04</text>
+    <text x="968" y="199" font-size="16" font-weight="700" fill="#eef3ff">多格式无头渲染导出</text>
+    <text x="968" y="224" font-size="13" fill="#a9bbd5">PNG 静帧 · H.264 MP4</text>
+    <text x="968" y="245" font-size="13" fill="#a9bbd5">GLB · FBX · OBJ · STL · .blend</text>
+
+    <!-- Footer caption -->
+    <text x="48" y="295" font-size="12" fill="#90a6c4">dsh-blender-studio · DSH 社区插件流程示意</text>
+  </g>
+</svg>

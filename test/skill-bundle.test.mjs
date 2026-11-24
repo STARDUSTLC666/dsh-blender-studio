@@ -23,6 +23,7 @@ const EXPECTED_SKILLS = [
   'blender-rendering-export',
   'blender-grease-pencil',
   'blender-visual-qc',
+  'blender-production-pipeline',
 ]
 
 function skillDoc(name, body = '# Instructions\nUse this skill.', description = 'A useful skill') {
@@ -105,7 +106,7 @@ function makeWorld(t, names = ['alpha', 'beta'], behavior = {}) {
   }
 }
 
-test('dsh-blender-studio exports exact Cordis metadata and all 8 bundled SKILL.md files pass checkBundledSkills()', () => {
+test('dsh-blender-studio exports exact Cordis metadata and all 9 bundled SKILL.md files pass checkBundledSkills()', () => {
   assert.equal(pluginName, 'blender-studio')
   assert.deepEqual(inject, ['skills', 'tools'])
   assert.deepEqual([...SKILL_NAMES], EXPECTED_SKILLS)
@@ -113,7 +114,7 @@ test('dsh-blender-studio exports exact Cordis metadata and all 8 bundled SKILL.m
   assert.ok(bundledAddonPath().endsWith('dsh_blender_bridge.py'))
 
   const checks = checkBundledSkills()
-  assert.equal(checks.length, 8)
+  assert.equal(checks.length, 9)
   for (const check of checks) {
     assert.equal(check.ok, true, `${check.name} failed validation: ${check.detail}`)
     assert.equal(check.code, 'valid', `${check.name} code should be valid`)
@@ -124,7 +125,7 @@ test('dsh-blender-studio exports exact Cordis metadata and all 8 bundled SKILL.m
   )
 })
 
-test('dsh-blender-studio apply(ctx) registers all 8 skills, all 6 tools including blender_health, HTTP routes, and disposes cleanly', async () => {
+test('dsh-blender-studio apply(ctx) registers all 9 skills, all 6 tools including blender_health, HTTP routes, and disposes cleanly', async () => {
   const registeredSkills = new Map()
   const registeredTools = new Map()
   const registeredRoutes = []
@@ -188,19 +189,19 @@ test('dsh-blender-studio apply(ctx) registers all 8 skills, all 6 tools includin
   assert.equal(registeredRoutes[0].path, '/api/dsh-blender-studio/workbench')
   assert.equal(registeredRoutes[1].path, '/api/dsh-blender-studio/workbench/upload')
 
-  // blender_health reports all 8 skills ready
+  // blender_health reports all 9 skills ready
   const healthTool = registeredTools.get('blender_health')
   const healthReport = await healthTool.execute({})
   assert.equal(healthReport.ok, true)
-  assert.equal(healthReport.skills.length, 8)
+  assert.equal(healthReport.skills.length, 9)
   assert.ok(healthReport.skills.every((s) => s.ok && s.code === 'ready'))
   const rendered = healthTool.output.render({}, healthReport)
-  assert.match(rendered[0].text, /8\/8/)
+  assert.match(rendered[0].text, /9\/9/)
 
   // Dispose cleans up every skill, tool, and route idempotently
   for (const fn of disposeListeners) fn()
   for (const fn of effectCleanups) fn()
-  assert.equal(registeredSkills.size, 0, 'all 8 skills disposed')
+  assert.equal(registeredSkills.size, 0, 'all 9 skills disposed')
   assert.equal(registeredTools.size, 0, 'all 6 tools disposed')
   assert.equal(registeredRoutes.length, 0, 'both HTTP routes disposed')
 

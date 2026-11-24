@@ -56,6 +56,23 @@ const MOCK_SCENE_SUMMARY = {
     { name: 'Product_Body', type: 'MESH', location: [0, 0, 1.0], dimensions: [1.2, 1.2, 1.4], vertices: 256, polygons: 512 },
     { name: 'DSH_Camera', type: 'CAMERA', location: [4.2, -4.7, 3.0] },
   ],
+  qc: {
+    score: 96,
+    grade: 'A',
+    issues: [],
+  },
+}
+
+const MOCK_BAD_QC_SUMMARY = {
+  ...MOCK_SCENE_SUMMARY,
+  qc: {
+    score: 40,
+    grade: 'D',
+    issues: [
+      { code: 'NO_CAMERA', severity: 'error', message: 'Scene has no active camera' },
+      { code: 'UNASSIGNED_MATERIAL', severity: 'warn', message: 'Hero has no material', object: 'Product_Body' },
+    ],
+  },
 }
 
 async function startMockBridgeServer(t) {
@@ -116,8 +133,11 @@ async function createWorkbenchFixture(t, extra = {}) {
   const root = await mkdtemp(join(testRoot, '.wb-fixture-'))
   const launchedGuis = []
   let executorBehavior = extra.executorBehavior ?? 'succeed'
+  let mockSummary = extra.sceneSummary ?? MOCK_SCENE_SUMMARY
+  const seenScripts = []
 
   const executor = async (req) => {
+    seenScripts.push(req.scriptContent || '')
     req.onLine?.('Fra:1 Mem:24.00M | Sample 16/32')
     req.onProgress?.(50, '渲染第 1 帧 · 采样 16/32')
 
@@ -160,9 +180,9 @@ async function createWorkbenchFixture(t, extra = {}) {
     return {
       exitCode: 0,
       lines: ['Fra:1 Mem:24.00M | Sample 32/32', 'Saved output'],
-      stdout: `mock-blender-stdout\n${SCENE_JSON_MARKER}${JSON.stringify(MOCK_SCENE_SUMMARY)}`,
+      stdout: `mock-blender-stdout\n${SCENE_JSON_MARKER}${JSON.stringify(mockSummary)}`,
       stderr: '',
-      sceneSummary: MOCK_SCENE_SUMMARY,
+      sceneSummary: mockSummary,
       savedFiles: [],
       durationMs: 42,
     }
@@ -243,8 +263,12 @@ async function createWorkbenchFixture(t, extra = {}) {
     workbench,
     post,
     launchedGuis,
+    seenScripts,
     setBehavior: (b) => {
       executorBehavior = b
+    },
+    setSceneSummary: (s) => {
+      mockSummary = s
     },
   }
 }
@@ -252,7 +276,7 @@ async function createWorkbenchFixture(t, extra = {}) {
 test('BlenderWorkbench HTTP API: CSRF guard, GET addon/asset/artifact (Range 206)/source ZIP, POST CRUD & upload', async (t) => {
   const { workbench, post } = await createWorkbenchFixture(t)
 
-  // 1. CSRF / Origin checks
+  // 1. CSRF / Origin checks (including DSH Desktop dsh-app://app + Sec-Fetch-Site: cross-site)
   assert.equal(
     (
       await workbench.fetch(
@@ -266,11 +290,18 @@ test('BlenderWorkbench HTTP API: CSRF guard, GET addon/asset/artifact (Range 206
     403,
     'missing x-dsh-blender-studio header must return 403',
   )
-  assert.equal((await post({ action: 'list' }, { origin: 'http://evil.test' })).status, 403)
+  const evilOriginRes = await post({ action: 'list' }, { origin: 'https://evil.example' })
+  assert.equal(evilOriginRes.status, 403)
+  assert.equal((await evilOriginRes.json()).code, 'ORIGIN_FORBIDDEN')
+
+  const crossSiteRes = await post({ action: 'list' }, { origin: 'http://dsh.test', 'sec-fetch-site': 'cross-site' })
+  assert.equal(crossSiteRes.status, 403, 'non-desktop cross-site request must return 403 ORIGIN_FORBIDDEN')
+  assert.equal((await crossSiteRes.json()).code, 'ORIGIN_FORBIDDEN')
+
   assert.equal(
     (await post({ action: 'list' }, { origin: 'dsh-app://app', host: '127.0.0.1:8181', 'sec-fetch-site': 'cross-site' })).status,
     200,
-    'desktop dsh-app://app origin allowed',
+    'desktop dsh-app://app origin with Sec-Fetch-Site: cross-site must be allowed',
   )
 
   // 2. GET ?kind=addon returns dsh_blender_bridge.py
@@ -672,4 +703,160 @@ test('all 6 Agent tools register cleanly, execute end-to-end, render human-reada
   for (const fn of disposers) fn()
   assert.equal(tools.size, 0)
   assert.equal(routes.length, 0)
+})
+
+test('v0.2.0 HTTP API & Agent tools: duplicate, script checkpoints, 512 KB POST cap, chained pipeline (qualityTier + abortOnQcError), and QC-3D output.render', async (t) => {
+  const mockBridge = await startMockBridgeServer(t)
+  const bridgeClient = new BlenderBridgeClient({ host: '127.0.0.1', port: mockBridge.port })
+  const { workbench, post, seenScripts, setSceneSummary } = await createWorkbenchFixture(t, { bridge: bridgeClient })
+
+  // 1. Create + large 200 KB customScript saved via 512 KB POST JSON cap
+  const largeScript = 'import bpy\n# ' + 'A'.repeat(200 * 1024) + '\nprint("large-v1")\n'
+  const createRes = await post({
+    action: 'create',
+    fields: defaultProjectFields({
+      title: 'Turbofan Masterpiece',
+      template: 'procedural-abstract',
+      engine: 'EEVEE',
+      samples: 32,
+      scriptMode: 'custom',
+      customScript: largeScript,
+    }),
+  })
+  assert.equal(createRes.status, 200, '200 KB customScript must fit within 512 KB POST body cap')
+  const created = (await createRes.json()).value
+
+  // 2. Duplicate via HTTP action
+  const dupRes = await post({ action: 'duplicate', id: created.id, title: 'Turbofan Clone' })
+  assert.equal(dupRes.status, 200)
+  const dup = (await dupRes.json()).value
+  assert.notEqual(dup.id, created.id)
+  assert.equal(dup.title, 'Turbofan Clone')
+
+  // 3. Checkpoints via HTTP actions (save_checkpoint + update + restore_checkpoint)
+  const cpSavedRes = await post({
+    action: 'save_checkpoint',
+    id: created.id,
+    revision: created.revision,
+    note: 'Baseline v1',
+  })
+  assert.equal(cpSavedRes.status, 200)
+  const afterSaveCp = (await cpSavedRes.json()).value
+  const baselineCp = afterSaveCp.checkpoints.find((c) => c.note === 'Baseline v1')
+  assert.ok(baselineCp)
+
+  const editedRes = await post({
+    action: 'update',
+    id: created.id,
+    revision: afterSaveCp.revision,
+    fields: { customScript: 'import bpy\nprint("large-v2")\n' },
+  })
+  assert.equal(editedRes.status, 200)
+  const afterEdit = (await editedRes.json()).value
+  assert.match(afterEdit.customScript, /large-v2/)
+
+  const restoredRes = await post({
+    action: 'restore_checkpoint',
+    id: created.id,
+    revision: afterEdit.revision,
+    checkpointId: baselineCp.id,
+  })
+  assert.equal(restoredRes.status, 200)
+  const afterRestore = (await restoredRes.json()).value
+  assert.match(afterRestore.customScript, /large-v1/)
+
+  // 4. Chained 4-stage pipeline with qualityTier: 'beauty' (must NOT mutate saved EEVEE/32 fields)
+  seenScripts.length = 0
+  const pipeStart = await post({
+    action: 'pipeline',
+    id: created.id,
+    revision: afterRestore.revision,
+    includeContactSheet: true,
+    renderKind: 'still',
+    exportFormat: 'glb',
+    qualityTier: 'beauty',
+    abortOnQcError: true,
+  })
+  assert.equal(pipeStart.status, 200)
+  const pipeJob = (await pipeStart.json()).value
+  assert.equal(pipeJob.kind, 'pipeline')
+  const pipeDone = await workbench.waitForJob(pipeJob.id)
+  assert.equal(pipeDone.state, 'done')
+  assert.equal(Boolean(pipeDone.pipeline?.stoppedEarly), false)
+  assert.equal(pipeDone.pipeline?.qc?.score, 96)
+  assert.equal(pipeDone.pipeline?.qc?.grade, 'A')
+  assert.ok(pipeDone.pipeline?.contactSheetId, 'pipeline produced contact_sheet artifact')
+  assert.ok(pipeDone.pipeline?.primaryRenderId, 'pipeline produced primary still artifact')
+  assert.ok(pipeDone.pipeline?.modelArtifactId, 'pipeline produced GLB model artifact')
+  assert.equal(pipeDone.pipeline?.artifactIds.length, 3)
+
+  // Verify non-mutating qualityTier override (beauty ran CYCLES 64 spp, saved project remains EEVEE 32)
+  assert.ok(seenScripts.some((s) => s.includes('"CYCLES"') || s.includes('CYCLES')), 'beauty tier ran CYCLES')
+  const latestProj = await workbench.store.get(created.id)
+  assert.equal(latestProj.engine, 'EEVEE', 'pipeline qualityTier must not mutate saved engine')
+  assert.equal(latestProj.samples, 32, 'pipeline qualityTier must not mutate saved samples')
+
+  // 5. Pipeline abortOnQcError: true stops early cleanly when inspect_scene returns QC error
+  setSceneSummary(MOCK_BAD_QC_SUMMARY)
+  const abortStart = await post({
+    action: 'pipeline',
+    id: created.id,
+    revision: latestProj.revision,
+    includeContactSheet: true,
+    renderKind: 'still',
+    exportFormat: 'glb',
+    abortOnQcError: true,
+  })
+  assert.equal(abortStart.status, 200)
+  const abortDone = await workbench.waitForJob((await abortStart.json()).value.id)
+  assert.equal(abortDone.state, 'done')
+  assert.equal(abortDone.pipeline?.stoppedEarly, true)
+  assert.equal(abortDone.pipeline?.artifactIds.length, 0)
+  assert.equal(abortDone.pipeline?.qc?.grade, 'D')
+  assert.match(abortDone.pipeline?.stopReason || '', /NO_CAMERA|QC-3D|错误|error/i)
+
+  // 6. Agent tools v0.2.0: QC-3D output.render across blender_project, blender_render (pipeline), blender_script, blender_bridge
+  setSceneSummary(MOCK_SCENE_SUMMARY)
+  const tools = new Map()
+  const ctx = {
+    skills: { register: () => () => {} },
+    tools: { register(def) { tools.set(def.name, def); return () => tools.delete(def.name) } },
+    connection: { fetch: { register: () => () => {} } },
+    inject(_d, fn) { fn(ctx) },
+    on() {},
+  }
+  installBlenderWorkbench(ctx, { workbench })
+
+  const projTool = tools.get('blender_project')
+  const dupToolRes = await projTool.execute({ action: 'duplicate', id: created.id, title: 'Tool Duplicated' })
+  assert.equal(dupToolRes.title, 'Tool Duplicated')
+  const cpToolRes = await projTool.execute({ action: 'save_checkpoint', id: dupToolRes.id, revision: dupToolRes.revision, note: 'Tool CP' })
+  assert.ok(cpToolRes.checkpoints.some((c) => c.note === 'Tool CP'))
+
+  const renderTool = tools.get('blender_render')
+  const toolPipeStart = await renderTool.execute({
+    action: 'pipeline',
+    id: created.id,
+    revision: latestProj.revision,
+    qualityTier: 'draft',
+    includeContactSheet: true,
+    renderKind: 'still',
+    exportFormat: 'glb',
+  })
+  await workbench.waitForJob(toolPipeStart.id)
+  const toolPipePolled = await renderTool.execute({ action: 'job', job: toolPipeStart.id })
+  const toolPipeText = renderTool.output.render({}, toolPipePolled)[0].text
+  assert.match(toolPipeText, /QC-3D/)
+  assert.match(toolPipeText, /96\/100/)
+
+  const bridgeTool = tools.get('blender_bridge')
+  const liveScene = await bridgeTool.execute({ action: 'scene_info' })
+  const bridgeSceneText = bridgeTool.output.render({}, liveScene)[0].text
+  assert.match(bridgeSceneText, /QC-3D/)
+  assert.match(bridgeSceneText, /96\/100/)
+
+  const scriptTool = tools.get('blender_script')
+  const scriptRun = await scriptTool.execute({ action: 'run_bridge', code: 'import bpy\nprint("qc")' })
+  const scriptRunText = scriptTool.output.render({}, scriptRun)[0].text
+  assert.match(scriptRunText, /QC-3D/)
 })

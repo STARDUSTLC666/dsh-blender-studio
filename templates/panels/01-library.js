@@ -13,6 +13,7 @@ function BlenderLibraryPanel({
   t,
   onOpen,
   onCreate,
+  onDuplicate,
   onArchiveRequest,
   onRestore,
 }) {
@@ -94,8 +95,8 @@ function BlenderLibraryPanel({
           ),
         },
         t(
-          '点击「新建 3D 工程」或从下方 6 套跨版本 Blender 模板快速起步，实时在浏览器 3D 舞台中调光构图。',
-          'Click New 3D Scene or pick one of the 6 cross-version Blender templates below to stage and render right away.',
+          '点击「新建 3D 工程」或从下方 8 套跨版本 Blender 模板快速起步，实时在浏览器 3D 舞台中调光构图。',
+          'Click New Scene or pick one of the 8 cross-version Blender templates below to stage and render right away.',
         ),
       ),
       h(
@@ -308,6 +309,18 @@ function BlenderLibraryPanel({
                     onClick: () => onOpen?.(item.id),
                   },
                   t('进入工作室', 'Open'),
+                ),
+                h(
+                  W.Button,
+                  {
+                    size: 'sm',
+                    variant: 'ghost',
+                    icon: 'copy',
+                    'data-action': 'duplicate',
+                    disabled: busy || dirty || activeJob,
+                    onClick: () => onDuplicate?.(item),
+                  },
+                  t('复制', 'Duplicate'),
                 ),
                 h(
                   W.Button,

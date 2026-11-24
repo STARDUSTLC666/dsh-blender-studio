@@ -1,28 +1,52 @@
 ---
 name: "blender-visual-qc"
-description: "Inspect 4-view contact sheets and scene summaries in dsh-blender-studio to catch clipping, floating geometry, bad framing, missing textures, or exposure defects before final delivery."
+description: "Audit 3D scenes with QC-3D automated scoring (A-D) and 2x2 4-view contact sheets in dsh-blender-studio to catch clipping, floating geometry, bad framing, missing materials, or exposure defects before final delivery."
 ---
 
-# Blender Visual Quality Control & Self-Correction Loop
+# Blender Visual Quality Control & `QC-3D` Audit Loop
 
 Use this skill after building or editing any Blender scene in `dsh-blender-studio`, **before** producing high-sample final stills, long animations, or final 3D exports.
 
-A `bpy` script that exits with code `0` can still produce a broken image: a hero facing away from the camera, an object floating above the floor, a camera stuck inside a wall, blown-out highlights, or magenta missing textures. Visual QC prevents delivering broken renders.
+A `bpy` script that exits with code `0` can still produce a broken image: a hero facing away from the camera, an object floating above the floor, a camera stuck inside a wall, blown-out highlights, or magenta missing textures. Combining deterministic **`QC-3D` telemetry** with **2×2 visual contact sheets** eliminates broken deliveries.
 
-## 1. The Mandatory QC Protocol in `dsh-blender-studio`
+## 1. The Mandatory Two-Layer QC Protocol in `dsh-blender-studio`
 
-1. **Generate the 2×2 Contact Sheet**:
+1. **Run Automated `QC-3D` Telemetry (`inspect_scene` / `scene_info`)**:
+   Call `blender_project` (`action: "inspect_scene"`), `blender_script`, or Live Bridge `blender_bridge` (`action: "scene_info"`).
+   Every returned `sceneSummary` includes a deterministic `qc` object:
+   ```json
+   {
+     "score": 100,
+     "grade": "A",
+     "issues": [
+       { "code": "UNASSIGNED_MATERIAL", "severity": "warn", "message": "...", "object": "GEO_Wheel" }
+     ]
+   }
+   ```
+   Target **Grade `A` (`>= 90`)** with **zero `error` findings** before spending time on high-sample Cycles renders.
+2. **Generate the 2×2 Contact Sheet (`contact_sheet`)**:
    Call `blender_render` with `action: "contact_sheet"` on the saved project (`id`, `revision`).
    `dsh-blender-studio` automatically renders 4 calibrated angles and stitches them into one PNG:
    - **Top-Left**: Front orthographic/elevation view (`-Y → +Y`) — verifies vertical alignment, symmetry, and floor grounding (`Z = 0`).
    - **Top-Right**: Three-quarter hero view — verifies overall silhouette, depth, and lighting modeling.
    - **Bottom-Left**: Top-down plan view (`+Z → -Z`) — reveals hidden interpenetration, spacing, and wall clearance.
    - **Bottom-Right**: Active project camera — verifies exact final framing, lens distortion, backdrop edges, and exposure.
-2. **Pull Structural Telemetry**:
-   Call `blender_project` with `action: "inspect_scene"` (or inspect `sceneSummary` returned by `blender_script` / `blender_render`) to verify `objectCount`, `meshCount`, `lightCount`, `cameraCount`, `totalPolygons`, `activeCamera`, and per-object `location` + `dimensions`.
-3. **Evaluate All 6 QC Gates** before approving final output.
+3. **Evaluate All `QC-3D` Codes + All 6 Visual Gates** before approving final output.
 
-## 2. The 6 Visual & Structural QC Gates
+## 2. Deterministic `QC-3D` Issue Codes Reference
+
+| Issue Code | Severity | What It Detects | Immediate Fix |
+| :--- | :--- | :--- | :--- |
+| `EMPTY_SCENE` | `error` | Zero renderable geometry objects (`meshCount === 0` and no Grease Pencil / Curve / Font) | Verify mesh creation linked objects to `scene.collection` or a child collection |
+| `NO_CAMERA` | `error` | No camera object or `scene.camera` is `None` | Create `CAM_Main` and assign `scene.camera = cam_obj` |
+| `NO_LIGHTS` | `warn` | Zero scene light objects and no HDRI world illumination | Add 3-point `AREA` rig or upload an `.hdr`/`.exr` asset for automatic World HDRI wiring |
+| `UNASSIGNED_MATERIAL` | `warn` | Hero mesh has `0` material slots (renders dull default gray) | Assign a configured `Principled BSDF` material (`obj.data.materials.append(mat)`) |
+| `FLAT_UNBEVELED_PRIMITIVE` | `info`/`warn` | Low-poly primitive hero (e.g. raw cube/cylinder) lacks smooth shading and bevel/subsurf modifiers | Add `BEVEL` (`limit_method='ANGLE'`, `segments=3`) and enable smooth shading |
+| `FLOATING_HERO` | `warn` | Isolated hero assembly hovers `> 0.35 m` above stage without contact (assembly-aware: intentional elevated sub-parts like helicopter rotors, wings, or halos attached to an assembly are not flagged) | Run `ground_object_to_z(obj, stage_z)` on the assembly root/pedestal |
+| `OFF_FRAME_HERO` | `error`/`warn` | Projected world bounding corners via `bpy_extras.object_utils.world_to_camera_view` fall outside the active camera NDC `[0, 1]` frame | Re-aim camera via `TRACK_TO` and recompute distance with `frame_camera_to_target(...)` |
+| `HIGH_POLYCOUNT` | `info`/`warn` | Total scene polygons exceed `500,000` (especially costly on EEVEE or GLB export) | Cap `SUBSURF` `render_levels <= 2`, decimate or reduce `ARRAY`/scatter counts |
+
+## 3. The 6 Visual & Structural QC Gates
 
 ### Gate 1 — Framing & Safe Margins (Bottom-Right Panel)
 - Does the hero fill roughly **55%–80%** of the frame without touching or getting cropped by any border?
@@ -55,7 +79,7 @@ A `bpy` script that exits with code `0` can still produce a broken image: a hero
 - `lightCount >= 1` (or HDRI world active).
 - `totalPolygons` matches intent (not `0`, and not runaway `> 1,000,000` from unchecked `SUBSURF`/`ARRAY` nesting).
 
-## 3. Defect → Root Cause → Exact Fix Table
+## 4. Defect → Root Cause → Exact Fix Table
 
 | Observed Defect | Likely Root Cause | Exact `bpy` Fix |
 | :--- | :--- | :--- |
@@ -68,7 +92,7 @@ A `bpy` script that exits with code `0` can still produce a broken image: a hero
 | Jagged dark crease artifacts | Non-uniform object scale or missing angle bevel | Bake scale into mesh (`obj.scale = (1,1,1)`), add `BEVEL` (`limit_method='ANGLE'`, `segments=3`), recalculate normals |
 | Un-realized GN missing in GLB | Geometry Nodes instances not realized | Insert `GeometryNodeRealizeInstances` before `Group Output` and enable `export_apply=True` |
 
-## 4. Disciplined Iteration Loop
+## 5. Disciplined Iteration Loop
 
 - Fix concrete root causes in the project settings or `customScript`, save with the latest `revision` (`blender_project` `update` / `update_script`), and re-run `contact_sheet`.
 - Cap visual QC loops at **2–3 focused iterations**; summarize what changed each pass rather than tweaking blindly.

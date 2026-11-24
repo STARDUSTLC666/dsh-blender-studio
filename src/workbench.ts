@@ -22,13 +22,19 @@ import {
   type BlenderVersionProber,
 } from './environment.js'
 import { PolyHavenClient } from './polyhaven.js'
-import { BlenderRunner, type BlenderRunExecutor } from './runner.js'
+import {
+  BlenderRunner,
+  DEFAULT_CYCLES_TIMEOUT_MS,
+  DEFAULT_EEVEE_TIMEOUT_MS,
+  type BlenderRunExecutor,
+} from './runner.js'
 import type { SkillBundleHealthReport, SkillsPluginContext } from './skill-bundle.js'
 import { BlenderStore } from './store.js'
 import { BLENDER_TEMPLATES, generateRunnerHarness, generateSceneScript } from './templates.js'
 import { registerBlenderTools } from './tools.js'
 import {
   ARTIFACT_MIME_MAP,
+  BLENDER_QUALITY_TIERS,
   BlenderConflict,
   BlenderError,
   blenderId,
@@ -45,7 +51,10 @@ import {
   type BlenderExportFormat,
   type BlenderJob,
   type BlenderJobKind,
+  type BlenderPipelineOptions,
+  type BlenderPipelineSummary,
   type BlenderProject,
+  type BlenderQualityTier,
   type BlenderSceneSummary,
   type BlenderSettings,
   type PolyHavenAssetType,
@@ -66,6 +75,7 @@ export interface StartJobOptions {
   code?: string
   allowUnsafe?: boolean
   timeoutMs?: number
+  pipeline?: BlenderPipelineOptions
 }
 
 export interface BlenderWorkbenchOptions {
@@ -85,9 +95,9 @@ export interface BlenderWorkbenchOptions {
   checkSkillsHealth?: () => Promise<SkillBundleHealthReport>
 }
 
-const MAX_JSON_BODY_BYTES = 256 * 1024 // 256 KB (custom scripts up to 64 KB + metadata)
+const MAX_JSON_BODY_BYTES = 512 * 1024 // 512 KB (custom scripts up to 256 KB + metadata)
 const MAX_JOBS_RETAINED = 40
-const DEFAULT_JOB_TIMEOUT_MS = 20 * 60 * 1000 // 20 min
+const ANIMATION_JOB_TIMEOUT_MS = 600_000 // 10 min for animations
 
 function errorMessage(e: unknown): string {
   return scrubLogText(e instanceof Error ? e.message : String(e))
@@ -143,7 +153,52 @@ function outputSpecForJob(
       return { fileName: 'scene.blend', artifactKind: 'blend', mime: ARTIFACT_MIME_MAP.blend }
     case 'inspect_scene':
     case 'run_script':
+    case 'pipeline':
       return null
+  }
+}
+
+function validateQualityTier(value: unknown): BlenderQualityTier | undefined {
+  if (value === undefined || value === null || value === '') return undefined
+  if (typeof value === 'string' && (BLENDER_QUALITY_TIERS as readonly string[]).includes(value)) {
+    return value as BlenderQualityTier
+  }
+  throw new BlenderError('渲染质量档位必须为 draft、studio 或 beauty。', 'BAD_REQUEST', 400)
+}
+
+function validatePipelineOptions(raw?: BlenderPipelineOptions): Required<Omit<BlenderPipelineOptions, 'qualityTier'>> & {
+  qualityTier?: BlenderQualityTier
+} {
+  const includeContactSheet = raw?.includeContactSheet !== false
+  const renderKind = raw?.renderKind ?? 'still'
+  if (renderKind !== 'still' && renderKind !== 'animation') {
+    throw new BlenderError('pipeline renderKind 必须为 still 或 animation。', 'BAD_REQUEST', 400)
+  }
+  const exportFormat = raw?.exportFormat ?? 'glb'
+  if (exportFormat !== 'none') {
+    validateExportFormat(exportFormat)
+  }
+  const qualityTier = validateQualityTier(raw?.qualityTier)
+  const abortOnQcError = raw?.abortOnQcError === true
+  return {
+    includeContactSheet,
+    renderKind,
+    exportFormat,
+    qualityTier,
+    abortOnQcError,
+  }
+}
+
+function applyQualityTier(project: BlenderProject, tier?: BlenderQualityTier): BlenderProject {
+  switch (tier) {
+    case 'draft':
+      return { ...project, engine: 'EEVEE', samples: 16, resolutionScale: 50 }
+    case 'studio':
+      return { ...project, engine: 'EEVEE', samples: 32, resolutionScale: 100 }
+    case 'beauty':
+      return { ...project, engine: 'CYCLES', samples: 64, resolutionScale: 100 }
+    default:
+      return project
   }
 }
 
@@ -399,6 +454,7 @@ export class BlenderWorkbench {
 
     const validId = blenderId(id)
     const exportFormat = kind === 'export_model' ? validateExportFormat(options.format ?? 'glb') : undefined
+    const pipelineOpts = kind === 'pipeline' ? validatePipelineOptions(options.pipeline) : undefined
 
     this.starting = true
     try {
@@ -438,9 +494,10 @@ export class BlenderWorkbench {
           revision: project.revision,
           state: 'running',
           stageCode: 'snapshot',
-          stage: '准备工程快照与执行环境',
+          stage: kind === 'pipeline' ? '准备一键全流程任务' : '准备工程快照与执行环境',
           progress: 2,
           lines: [],
+          ...(kind === 'pipeline' ? { pipeline: { artifactIds: [] } } : {}),
           startedAt: new Date().toISOString(),
         },
         controller: new AbortController(),
@@ -451,10 +508,161 @@ export class BlenderWorkbench {
       running.done = this.executeJob(running, active.path, snapshot, {
         ...options,
         format: exportFormat,
+        pipeline: pipelineOpts,
       })
       return structuredClone(running.view)
     } finally {
       this.starting = false
+    }
+  }
+
+  private async runHarnessStage(
+    job: RunningJob,
+    stageKind: Exclude<BlenderJobKind, 'pipeline'>,
+    stageRunId: string,
+    executablePath: string,
+    stageProject: BlenderProject,
+    snapshotAssets: Map<string, Buffer>,
+    stageOptions: {
+      format?: BlenderExportFormat
+      overrideCode?: string
+      frame?: number
+      timeoutMs: number
+      stageCode: string
+      stageLabel: string
+      progressStart: number
+      progressEnd: number
+    },
+  ): Promise<{
+    result: Awaited<ReturnType<BlenderRunner['run']>>
+    artifact?: BlenderArtifact
+  }> {
+    const outputSpec = outputSpecForJob(stageKind, stageOptions.format)
+    let stageRunDir: string | undefined
+    let keepStageDir = false
+
+    try {
+      job.controller.signal.throwIfAborted()
+      stageRunDir = await this.store.runDir(stageProject.id, stageRunId)
+      const assetsDir = join(stageRunDir, 'assets')
+      await mkdir(assetsDir, { recursive: true })
+      for (const [file, bytes] of snapshotAssets) {
+        await writeFile(join(assetsDir, file), bytes, { flag: 'wx', mode: 0o600 })
+      }
+
+      const outputPath = outputSpec ? join(stageRunDir, outputSpec.fileName) : undefined
+      const scriptPath = join(stageRunDir, 'run.py')
+      const scriptContent = generateRunnerHarness(stageKind, {
+        project: stageProject,
+        assetsDir,
+        outputPath,
+        format: stageOptions.format,
+        overrideCode: stageKind === 'run_script' ? stageOptions.overrideCode : undefined,
+        frame: stageOptions.frame,
+      })
+
+      this.setStage(job, stageOptions.stageCode, stageOptions.stageLabel, stageOptions.progressStart)
+      const startedAt = Date.now()
+      const span = Math.max(1, stageOptions.progressEnd - stageOptions.progressStart)
+
+      const result = await this.runner.run({
+        executablePath,
+        scriptPath,
+        scriptContent,
+        cwd: stageRunDir,
+        frameStart: stageProject.frameStart,
+        frameEnd: stageProject.frameEnd,
+        timeoutMs: stageOptions.timeoutMs,
+        signal: job.controller.signal,
+        onLine: line => this.pushJobLine(job, line),
+        onProgress: (progress, stage) => {
+          const mapped =
+            progress > 0
+              ? stageOptions.progressStart + Math.round((Math.min(100, progress) / 100) * span)
+              : job.view.progress
+          const nextPct = Math.max(job.view.progress, Math.min(stageOptions.progressEnd, mapped))
+          this.setStage(job, stageOptions.stageCode, stage || job.view.stage, nextPct)
+        },
+      })
+
+      job.controller.signal.throwIfAborted()
+
+      if (result.sceneSummary) {
+        job.view.sceneSummary = result.sceneSummary
+        await this.store.updateSceneSummary(stageProject.id, result.sceneSummary)
+      }
+
+      if (stageKind === 'run_script') {
+        const combined = [result.stdout, result.stderr].filter(Boolean).join('\n').trim()
+        job.view.scriptOutput = scrubLogText(combined, 16_000)
+      }
+
+      let artifact: BlenderArtifact | undefined
+      if (outputSpec && outputPath) {
+        let finalFileName = outputSpec.fileName
+        let finalFilePath = outputPath
+        let finalMime = outputSpec.mime
+
+        let fileInfo = await stat(finalFilePath).catch(() => null)
+        if ((!fileInfo || !fileInfo.isFile() || fileInfo.size <= 0) && stageKind === 'render_animation') {
+          const framesDir = join(stageRunDir, 'frames')
+          const frameEntries = (await readdir(framesDir).catch(() => []))
+            .filter(name => /\.png$/i.test(name))
+            .sort()
+          if (frameEntries.length > 0) {
+            const firstFrame = join(framesDir, frameEntries[0])
+            const firstBytes = await readFile(firstFrame)
+            finalFileName = 'frame_0001.png'
+            finalFilePath = join(stageRunDir, finalFileName)
+            finalMime = ARTIFACT_MIME_MAP.png
+            await writeFile(finalFilePath, firstBytes, { mode: 0o600 })
+            fileInfo = await stat(finalFilePath).catch(() => null)
+          }
+        }
+
+        if (!fileInfo || !fileInfo.isFile() || fileInfo.size <= 0) {
+          throw new BlenderError('Blender 任务结束但未生成有效成品文件，请展开日志检查。', 'OUTPUT_INVALID', 400)
+        }
+        if (fileInfo.size > MAX_ARTIFACT_DOWNLOAD_BYTES) {
+          throw new BlenderError('生成的成品文件超过 200 MB 下载上限。', 'OUTPUT_TOO_LARGE', 400)
+        }
+
+        const { width: baseW, height: baseH } = resolveRenderResolution(
+          stageProject.aspect,
+          stageProject.resolutionScale,
+        )
+        let dims: { width?: number; height?: number } = {}
+        if (finalMime === 'image/png') {
+          dims = await readPngDimensions(finalFilePath, baseW, baseH)
+        } else if (outputSpec.artifactKind === 'animation') {
+          dims = { width: baseW, height: baseH }
+        }
+
+        artifact = {
+          id: stageRunId,
+          kind: outputSpec.artifactKind,
+          revision: stageProject.revision,
+          file: finalFileName,
+          mime: finalMime,
+          size: fileInfo.size,
+          engine: stageProject.engine,
+          samples: stageProject.samples,
+          width: dims.width,
+          height: dims.height,
+          durationMs: Math.max(1, result.durationMs || Date.now() - startedAt),
+          created: new Date().toISOString(),
+        }
+
+        await this.store.registerArtifact(stageProject.id, artifact)
+        await this.store.pruneRunWorkdir(stageRunDir, [finalFileName])
+        keepStageDir = true
+      }
+
+      return { result, artifact }
+    } finally {
+      if (stageRunDir && !keepStageDir) {
+        await this.store.safeRemoveRunDir(stageProject.id, stageRunId)
+      }
     }
   }
 
@@ -465,16 +673,27 @@ export class BlenderWorkbench {
     options: StartJobOptions,
   ): Promise<void> {
     const project = snapshot.project
-    const outputSpec = outputSpecForJob(job.view.kind, options.format)
     let unlock: (() => Promise<void>) | undefined
-    let runDir: string | undefined
-    let keepRunDir = false
 
     let finalState: BlenderJob['state'] = 'failed'
     let finalStageCode = 'failed'
     let finalStage = '任务未完成'
 
-    const timeoutMs = options.timeoutMs ?? DEFAULT_JOB_TIMEOUT_MS
+    const pipelineOpts = job.view.kind === 'pipeline' ? validatePipelineOptions(options.pipeline) : undefined
+    const timeoutMs =
+      options.timeoutMs ??
+      (job.view.kind === 'pipeline'
+        ? pipelineOpts?.renderKind === 'animation'
+          ? 900_000
+          : pipelineOpts?.qualityTier === 'beauty' || project.engine === 'CYCLES'
+            ? 600_000
+            : 360_000
+        : job.view.kind === 'render_animation'
+          ? ANIMATION_JOB_TIMEOUT_MS
+          : project.engine === 'CYCLES'
+            ? DEFAULT_CYCLES_TIMEOUT_MS
+            : DEFAULT_EEVEE_TIMEOUT_MS)
+
     const timer = setTimeout(() => {
       job.abortReason ??= 'timeout'
       job.controller.abort()
@@ -495,123 +714,168 @@ export class BlenderWorkbench {
         },
       })
 
-      job.controller.signal.throwIfAborted()
-      runDir = await this.store.runDir(project.id, job.view.id)
-      const assetsDir = join(runDir, 'assets')
-      await mkdir(assetsDir, { recursive: true })
-      for (const [file, bytes] of snapshot.assets) {
-        await writeFile(join(assetsDir, file), bytes, { flag: 'wx', mode: 0o600 })
-      }
+      if (job.view.kind === 'pipeline' && pipelineOpts) {
+        const summary: BlenderPipelineSummary = { artifactIds: [] }
+        job.view.pipeline = summary
+        const deadline = Date.now() + timeoutMs
+        const remainingTimeout = () => Math.max(10_000, deadline - Date.now())
 
-      const outputPath = outputSpec ? join(runDir, outputSpec.fileName) : undefined
-      const scriptPath = join(runDir, 'run.py')
-      const scriptContent = generateRunnerHarness(job.view.kind, {
-        project,
-        assetsDir,
-        outputPath,
-        format: options.format,
-        overrideCode: job.view.kind === 'run_script' ? options.code : undefined,
-        frame: options.frame,
-      })
+        // Stage 1: inspect_scene + QC-3D audit
+        const qcStage = await this.runHarnessStage(
+          job,
+          'inspect_scene',
+          randomUUID(),
+          executablePath,
+          project,
+          snapshot.assets,
+          {
+            frame: options.frame,
+            timeoutMs: remainingTimeout(),
+            stageCode: 'pipeline-qc',
+            stageLabel: '全流程 (1/4)：场景构建与 QC-3D 体检',
+            progressStart: 5,
+            progressEnd: 18,
+          },
+        )
+        if (qcStage.result.sceneSummary?.qc) {
+          summary.qc = qcStage.result.sceneSummary.qc
+        }
 
-      this.setStage(job, 'running', '正在执行 Blender 任务', 8)
-      const startedAt = Date.now()
-
-      const result = await this.runner.run({
-        executablePath,
-        scriptPath,
-        scriptContent,
-        cwd: runDir,
-        frameStart: project.frameStart,
-        frameEnd: project.frameEnd,
-        timeoutMs,
-        signal: job.controller.signal,
-        onLine: line => this.pushJobLine(job, line),
-        onProgress: (progress, stage) => {
-          const nextPct = progress > 0 ? Math.max(job.view.progress, Math.min(99, progress)) : job.view.progress
-          this.setStage(job, 'running', stage || job.view.stage, nextPct)
-        },
-      })
-
-      job.controller.signal.throwIfAborted()
-
-      if (result.sceneSummary) {
-        job.view.sceneSummary = result.sceneSummary
-        await this.store.updateSceneSummary(project.id, result.sceneSummary)
-      }
-
-      if (job.view.kind === 'run_script') {
-        const combined = [result.stdout, result.stderr].filter(Boolean).join('\n').trim()
-        job.view.scriptOutput = scrubLogText(combined, 16_000)
-      }
-
-      if (outputSpec && outputPath) {
-        let finalFileName = outputSpec.fileName
-        let finalFilePath = outputPath
-        let finalMime = outputSpec.mime
-
-        let fileInfo = await stat(finalFilePath).catch(() => null)
-        // Fallback check if animation fell back to PNG frame sequence when FFmpeg was unavailable
-        if ((!fileInfo || !fileInfo.isFile() || fileInfo.size <= 0) && job.view.kind === 'render_animation') {
-          const framesDir = join(runDir, 'frames')
-          const frameEntries = (await readdir(framesDir).catch(() => []))
-            .filter(name => /\.png$/i.test(name))
-            .sort()
-          if (frameEntries.length > 0) {
-            const firstFrame = join(framesDir, frameEntries[0])
-            const firstBytes = await readFile(firstFrame)
-            finalFileName = 'frame_0001.png'
-            finalFilePath = join(runDir, finalFileName)
-            finalMime = ARTIFACT_MIME_MAP.png
-            await writeFile(finalFilePath, firstBytes, { mode: 0o600 })
-            fileInfo = await stat(finalFilePath).catch(() => null)
+        const errorIssues = summary.qc?.issues?.filter(issue => issue.severity === 'error') ?? []
+        if (pipelineOpts.abortOnQcError && errorIssues.length > 0) {
+          summary.stoppedEarly = true
+          summary.stopReason = `QC-3D 检测到阻断性错误（${errorIssues.map(i => i.code).join(', ')}），已提前中止渲染。`
+          finalState = 'done'
+          finalStageCode = 'stopped-early'
+          finalStage = summary.stopReason
+          job.view.progress = 100
+        } else {
+          // Stage 2: 2x2 multi-angle visual QC contact sheet (fast EEVEE 16 spp)
+          if (pipelineOpts.includeContactSheet) {
+            const csId = randomUUID()
+            const qcProject: BlenderProject = { ...project, engine: 'EEVEE', samples: 16 }
+            const csStage = await this.runHarnessStage(
+              job,
+              'contact_sheet',
+              csId,
+              executablePath,
+              qcProject,
+              snapshot.assets,
+              {
+                frame: options.frame,
+                timeoutMs: remainingTimeout(),
+                stageCode: 'pipeline-contact-sheet',
+                stageLabel: '全流程 (2/4)：渲染 2×2 四视角质检拼图 (EEVEE 16 spp)',
+                progressStart: 20,
+                progressEnd: 46,
+              },
+            )
+            if (csStage.artifact) {
+              summary.contactSheetId = csStage.artifact.id
+              summary.artifactIds.push(csStage.artifact.id)
+              job.view.artifactId = csStage.artifact.id
+              job.view.artifactKind = csStage.artifact.kind
+            }
           }
+
+          // Stage 3: Primary render with optional qualityTier (without mutating saved project)
+          const renderProject = applyQualityTier(project, pipelineOpts.qualityTier)
+          const primaryKind: 'preview_still' | 'render_animation' =
+            pipelineOpts.renderKind === 'animation' ? 'render_animation' : 'preview_still'
+          const renderId = randomUUID()
+          const renderStage = await this.runHarnessStage(
+            job,
+            primaryKind,
+            renderId,
+            executablePath,
+            renderProject,
+            snapshot.assets,
+            {
+              frame: options.frame,
+              timeoutMs: remainingTimeout(),
+              stageCode: 'pipeline-render',
+              stageLabel: `全流程 (3/4)：主画面渲染 (${renderProject.engine} ${renderProject.samples} spp · ${renderProject.resolutionScale}%)`,
+              progressStart: 48,
+              progressEnd: 84,
+            },
+          )
+          if (renderStage.result.sceneSummary?.qc) {
+            summary.qc = renderStage.result.sceneSummary.qc
+          }
+          if (renderStage.artifact) {
+            summary.primaryRenderId = renderStage.artifact.id
+            summary.artifactIds.push(renderStage.artifact.id)
+            job.view.artifactId = renderStage.artifact.id
+            job.view.artifactKind = renderStage.artifact.kind
+          }
+
+          // Stage 4: Optional 3D model export
+          if (pipelineOpts.exportFormat !== 'none') {
+            const exportId = randomUUID()
+            const exportStage = await this.runHarnessStage(
+              job,
+              'export_model',
+              exportId,
+              executablePath,
+              project,
+              snapshot.assets,
+              {
+                format: pipelineOpts.exportFormat,
+                timeoutMs: remainingTimeout(),
+                stageCode: 'pipeline-export',
+                stageLabel: `全流程 (4/4)：导出 3D 模型 (${pipelineOpts.exportFormat.toUpperCase()})`,
+                progressStart: 86,
+                progressEnd: 98,
+              },
+            )
+            if (exportStage.artifact) {
+              summary.modelArtifactId = exportStage.artifact.id
+              summary.artifactIds.push(exportStage.artifact.id)
+            }
+          }
+
+          const userCancelled =
+            job.controller.signal.aborted &&
+            (job.abortReason === 'user' || job.abortReason === 'dispose' || !job.abortReason)
+          finalState = userCancelled ? 'cancelled' : 'done'
+          finalStageCode = userCancelled ? 'cancelled' : 'done'
+          finalStage = userCancelled
+            ? '已取消'
+            : `全流程完成（生成 ${summary.artifactIds.length} 项成品${summary.qc ? ` · QC-3D ${summary.qc.score}/${summary.qc.grade}` : ''}）`
+          if (finalState === 'done') job.view.progress = 100
+        }
+      } else {
+        const single = await this.runHarnessStage(
+          job,
+          job.view.kind as Exclude<BlenderJobKind, 'pipeline'>,
+          job.view.id,
+          executablePath,
+          project,
+          snapshot.assets,
+          {
+            format: options.format,
+            overrideCode: options.code,
+            frame: options.frame,
+            timeoutMs,
+            stageCode: 'running',
+            stageLabel: '正在执行 Blender 任务',
+            progressStart: 8,
+            progressEnd: 99,
+          },
+        )
+        if (single.artifact) {
+          job.view.artifactId = single.artifact.id
+          job.view.artifactKind = single.artifact.kind
         }
 
-        if (!fileInfo || !fileInfo.isFile() || fileInfo.size <= 0) {
-          throw new BlenderError('Blender 任务结束但未生成有效成品文件，请展开日志检查。', 'OUTPUT_INVALID', 400)
-        }
-        if (fileInfo.size > MAX_ARTIFACT_DOWNLOAD_BYTES) {
-          throw new BlenderError('生成的成品文件超过 200 MB 下载上限。', 'OUTPUT_TOO_LARGE', 400)
-        }
-
-        const { width: baseW, height: baseH } = resolveRenderResolution(project.aspect, project.resolutionScale)
-        let dims: { width?: number; height?: number } = {}
-        if (finalMime === 'image/png') {
-          dims = await readPngDimensions(finalFilePath, baseW, baseH)
-        } else if (outputSpec.artifactKind === 'animation') {
-          dims = { width: baseW, height: baseH }
-        }
-
-        const artifact: BlenderArtifact = {
-          id: job.view.id,
-          kind: outputSpec.artifactKind,
-          revision: project.revision,
-          file: finalFileName,
-          mime: finalMime,
-          size: fileInfo.size,
-          engine: project.engine,
-          samples: project.samples,
-          width: dims.width,
-          height: dims.height,
-          durationMs: Math.max(1, result.durationMs || Date.now() - startedAt),
-          created: new Date().toISOString(),
-        }
-
-        await this.store.registerArtifact(project.id, artifact)
-        await this.store.pruneRunWorkdir(runDir, [finalFileName])
-        keepRunDir = true
-        job.view.artifactId = artifact.id
-        job.view.artifactKind = artifact.kind
+        const userCancelled =
+          job.controller.signal.aborted &&
+          (job.abortReason === 'user' || job.abortReason === 'dispose' || !job.abortReason)
+        finalState = userCancelled ? 'cancelled' : 'done'
+        finalStageCode = userCancelled ? 'cancelled' : 'done'
+        finalStage = userCancelled ? '已取消' : '已完成'
+        if (finalState === 'done') job.view.progress = 100
       }
-
-      const userCancelled =
-        job.controller.signal.aborted &&
-        (job.abortReason === 'user' || job.abortReason === 'dispose' || !job.abortReason)
-      finalState = userCancelled ? 'cancelled' : 'done'
-      finalStageCode = userCancelled ? 'cancelled' : 'done'
-      finalStage = userCancelled ? '已取消' : '已完成'
-      if (finalState === 'done') job.view.progress = 100
     } catch (err) {
       const errCode = (err as { code?: string })?.code
       const message =
@@ -623,14 +887,13 @@ export class BlenderWorkbench {
         (job.controller.signal.aborted &&
           (job.abortReason === 'user' || job.abortReason === 'dispose' || !job.abortReason))
       finalState = isUserCancel ? 'cancelled' : 'failed'
-      finalStageCode = isUserCancel ? 'cancelled' : job.abortReason || (typeof errCode === 'string' ? errCode.toLowerCase() : 'failed')
+      finalStageCode = isUserCancel
+        ? 'cancelled'
+        : job.abortReason || (typeof errCode === 'string' ? errCode.toLowerCase() : 'failed')
       finalStage = isUserCancel ? '已取消；工程已保留' : message
       this.pushJobLine(job, message)
     } finally {
       clearTimeout(timer)
-      if (runDir && !keepRunDir) {
-        await this.store.safeRemoveRunDir(project.id, job.view.id)
-      }
       if (unlock) await unlock().catch(() => {})
       this.setStage(job, finalStageCode, finalStage)
       job.view.state = finalState
@@ -698,9 +961,12 @@ export class BlenderWorkbench {
 
   private guard(request: Request): void {
     const url = new URL(request.url)
-    const origin = request.headers.get('origin')
-    const site = request.headers.get('sec-fetch-site')
-    const desktop = origin === 'dsh-app://app'
+    const rawOrigin = request.headers.get('origin')
+    const origin = rawOrigin ? rawOrigin.trim() : null
+    const site = request.headers.get('sec-fetch-site')?.trim().toLowerCase() || null
+    const desktop = origin !== null && origin.replace(/\/+$/, '').toLowerCase() === 'dsh-app://app'
+
+    // DeepSeek Harness Desktop Electron shell sends Origin: dsh-app://app with Sec-Fetch-Site: cross-site.
     if (site && !['same-origin', 'none'].includes(site) && !desktop) {
       throw new BlenderError('请从 DSH 页面操作。', 'ORIGIN_FORBIDDEN', 403)
     }
@@ -711,18 +977,23 @@ export class BlenderWorkbench {
       } catch {
         throw new BlenderError('请从 DSH 页面操作。', 'ORIGIN_FORBIDDEN', 403)
       }
-      if (
-        !['http:', 'https:'].includes(source.protocol) ||
-        source.host !== (request.headers.get('host') || url.host)
-      ) {
+      const protocolOk = source.protocol === 'http:' || source.protocol === 'https:'
+      const hostHeader = request.headers.get('host')?.trim()
+      const expectedHost = hostHeader || url.host
+      const sameHost = source.host.toLowerCase() === expectedHost.toLowerCase()
+      const isInternalCarrierLoopback =
+        !hostHeader &&
+        url.hostname.toLowerCase() === 'dsh.internal' &&
+        source.protocol === 'http:' &&
+        ['127.0.0.1', 'localhost', '[::1]', '::1', 'dsh.internal'].includes(source.hostname.toLowerCase())
+      if (!protocolOk || (!sameHost && !isInternalCarrierLoopback)) {
         throw new BlenderError('请从 DSH 页面操作。', 'ORIGIN_FORBIDDEN', 403)
       }
     }
     if (request.method === 'POST') {
-      const marker =
-        request.headers.get('x-dsh-blender-studio') ||
-        request.headers.get('x-dsh-blender') ||
-        request.headers.get('x-dsh-media')
+      const primary = request.headers.get('x-dsh-blender-studio')
+      const compat = request.headers.get('x-dsh-blender')
+      const marker = primary !== null ? primary : compat
       if (marker !== '1') {
         throw new BlenderError('操作来源无效。', 'ORIGIN_FORBIDDEN', 403)
       }
@@ -895,7 +1166,7 @@ export class BlenderWorkbench {
         }
         const text = await request.text()
         if (Buffer.byteLength(text, 'utf8') > MAX_JSON_BODY_BYTES) {
-          throw new BlenderError('请求体过大（上限 256 KB）。', 'BAD_REQUEST', 400)
+          throw new BlenderError('请求体过大（上限 512 KB）。', 'BAD_REQUEST', 400)
         }
         let v: Record<string, any>
         try {
@@ -934,6 +1205,26 @@ export class BlenderWorkbench {
             break
           case 'update':
             value = await this.store.update(blenderId(v.id), v.revision, v.fields)
+            break
+          case 'duplicate':
+            value = await this.store.duplicate(
+              blenderId(v.id),
+              typeof v.title === 'string' ? v.title : undefined,
+            )
+            break
+          case 'save_checkpoint':
+            value = await this.store.saveCheckpoint(
+              blenderId(v.id),
+              v.revision,
+              typeof v.note === 'string' ? v.note : undefined,
+            )
+            break
+          case 'restore_checkpoint':
+            value = await this.store.restoreCheckpoint(
+              blenderId(v.id),
+              v.revision,
+              blenderId(v.checkpointId ?? v.checkpoint),
+            )
             break
           case 'removeAsset':
             value = await this.store.removeAsset(blenderId(v.id), v.revision, blenderId(v.asset ?? v.assetId))
@@ -994,6 +1285,19 @@ export class BlenderWorkbench {
             value = await this.startJob('run_script', blenderId(v.id), v.revision, {
               code: typeof v.code === 'string' ? v.code : undefined,
               allowUnsafe: v.allowUnsafe === true,
+            })
+            break
+          case 'pipeline':
+            value = await this.startJob('pipeline', blenderId(v.id), v.revision, {
+              frame: typeof v.frame === 'number' ? v.frame : undefined,
+              allowUnsafe: v.allowUnsafe === true,
+              pipeline: {
+                includeContactSheet: typeof v.includeContactSheet === 'boolean' ? v.includeContactSheet : true,
+                renderKind: v.renderKind,
+                exportFormat: v.exportFormat,
+                qualityTier: v.qualityTier,
+                abortOnQcError: v.abortOnQcError === true,
+              },
             })
             break
           case 'open_gui':

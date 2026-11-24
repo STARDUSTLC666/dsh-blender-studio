@@ -254,15 +254,23 @@ test('BlenderBridgeClient enforces token authentication, timeouts, protocol chec
 
 test('checkScriptSafety allows clean bpy scripts and catches dangerous patterns with line numbers', () => {
   const cleanScript = [
+    '"""Docstring mentioning os.system("noop") and subprocess.run() should be ignored."""',
     '# Comment mentioning os.system("noop") and subprocess should be ignored',
     'import bpy',
+    'import bmesh',
     'import math',
+    'import colorsys',
     'from mathutils import Vector',
     '',
     'mesh = bpy.data.meshes.new("HeroMesh")',
     'obj = bpy.data.objects.new("Hero", mesh)',
     'bpy.context.scene.collection.objects.link(obj)',
     'obj.location = Vector((0.0, 0.0, 1.0))',
+    'mat = bpy.data.materials.new("CarPaint")',
+    'bsdf = mat.node_tree.nodes.get("Principled BSDF")',
+    'for socket in bsdf.inputs:',
+    '    if socket.name == "Metallic":',
+    '        socket.default_value = 0.85',
   ].join('\n')
 
   assert.deepEqual(checkScriptSafety(''), { safe: true, findings: [] })

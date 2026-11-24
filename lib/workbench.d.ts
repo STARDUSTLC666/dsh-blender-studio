@@ -4,13 +4,14 @@ import { PolyHavenClient } from './polyhaven.js';
 import { BlenderRunner, type BlenderRunExecutor } from './runner.js';
 import type { SkillBundleHealthReport, SkillsPluginContext } from './skill-bundle.js';
 import { BlenderStore } from './store.js';
-import { type BlenderBridgeStatus, type BlenderEnvironmentStatus, type BlenderExportFormat, type BlenderJob, type BlenderJobKind, type BlenderSceneSummary, type BlenderSettings } from './types.js';
+import { type BlenderBridgeStatus, type BlenderEnvironmentStatus, type BlenderExportFormat, type BlenderJob, type BlenderJobKind, type BlenderPipelineOptions, type BlenderSceneSummary, type BlenderSettings } from './types.js';
 export interface StartJobOptions {
     format?: BlenderExportFormat;
     frame?: number;
     code?: string;
     allowUnsafe?: boolean;
     timeoutMs?: number;
+    pipeline?: BlenderPipelineOptions;
 }
 export interface BlenderWorkbenchOptions {
     root?: string;
@@ -70,6 +71,7 @@ export declare class BlenderWorkbench {
     private pushJobLine;
     private setStage;
     startJob(kind: BlenderJobKind, id: string, revision?: unknown, options?: StartJobOptions): Promise<BlenderJob>;
+    private runHarnessStage;
     private executeJob;
     openGui(id: string, revision?: unknown): Promise<{
         launched: boolean;

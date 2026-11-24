@@ -72,6 +72,46 @@ function makeBoxFaces(cx, cy, cz, sx, sy, sz, rgb, wireColor, layer = 2) {
   return quads.map(idx => ({ pts: idx.map(i => v[i]), rgb, wire: wireColor, layer }));
 }
 
+function makeRotatedBoxFaces(cx, cy, cz, sx, sy, sz, rotZ, rotX, rgb, wireColor, layer = 2, rotY = 0) {
+  const hx = sx / 2;
+  const hy = sy / 2;
+  const hz = sz / 2;
+  const cX = Math.cos(rotX || 0);
+  const sX = Math.sin(rotX || 0);
+  const cY = Math.cos(rotY || 0);
+  const sY = Math.sin(rotY || 0);
+  const cZ = Math.cos(rotZ || 0);
+  const sZ = Math.sin(rotZ || 0);
+  const local = [
+    [-hx, -hy, -hz],
+    [hx, -hy, -hz],
+    [hx, hy, -hz],
+    [-hx, hy, -hz],
+    [-hx, -hy, hz],
+    [hx, -hy, hz],
+    [hx, hy, hz],
+    [-hx, hy, hz],
+  ];
+  const v = local.map(([lx, ly, lz]) => {
+    const y1 = ly * cX - lz * sX;
+    const z1 = ly * sX + lz * cX;
+    const x2 = lx * cY + z1 * sY;
+    const z2 = -lx * sY + z1 * cY;
+    const x3 = x2 * cZ - y1 * sZ;
+    const y3 = x2 * sZ + y1 * cZ;
+    return [cx + x3, cy + y3, cz + z2];
+  });
+  const quads = [
+    [4, 5, 6, 7],
+    [0, 3, 2, 1],
+    [0, 1, 5, 4],
+    [2, 3, 7, 6],
+    [1, 2, 6, 5],
+    [3, 0, 4, 7],
+  ];
+  return quads.map(idx => ({ pts: idx.map(i => v[i]), rgb, wire: wireColor, layer }));
+}
+
 function makeCylinderFaces(cx, cy, cz, rTop, rBot, hVal, segs, rgb, wireColor, layer = 2) {
   const faces = [];
   const z0 = cz - hVal / 2;
@@ -187,6 +227,64 @@ function buildTemplateGeometry(template, accentRgb, phase) {
       faces.push(...makeBoxFaces(0, layer.y, layer.z, layer.w, 0.05, layer.h, layer.rgb, 'rgba(15,23,42,0.55)', layer.layer));
     }
     faces.push(...makeBoxFaces(0, 0.04, 0.06, 3.0, 2.1, 0.12, neutralDark, wire, 0));
+  } else if (template === 'architectural-pavilion') {
+    const poolCyan = [72, 148, 186];
+    const concreteWarm = [204, 198, 188];
+    // Stepped stone terrace & reflective pool
+    faces.push(...makeBoxFaces(0, 0, 0.08, 3.35, 2.75, 0.16, neutralMid, wire, 0));
+    faces.push(...makeBoxFaces(0.42, -0.78, 0.175, 2.18, 0.86, 0.03, poolCyan, 'rgba(224,242,254,0.32)', 1));
+    faces.push(...makeBoxFaces(-0.18, 0.24, 0.21, 2.48, 1.56, 0.10, concreteWarm, wire, 1));
+    // Warm architectural interior volume + glass core
+    faces.push(...makeBoxFaces(-0.22, 0.42, 0.78, 1.48, 0.88, 1.04, accentRgb, 'rgba(255,255,255,0.22)', 2));
+    // Six colonnade pillars
+    const colXs = [-1.14, 0.0, 1.14];
+    const colYs = [-0.32, 0.86];
+    for (const cx of colXs) {
+      for (const cy of colYs) {
+        faces.push(...makeCylinderFaces(cx, cy, 0.84, 0.085, 0.095, 1.18, 8, neutralLight, wire, 2));
+      }
+    }
+    // Curved vaulted canopy built from 7 flush sloped roof panels + timber ribs spanning Y cleanly
+    const archSegs = 7;
+    for (let i = 0; i < archSegs; i++) {
+      const u = ((i + 0.5) / archSegs) * 2 - 1; // -1..1
+      const rx = u * 1.26;
+      const rz = 1.44 + Math.cos(u * Math.PI * 0.5) * 0.42;
+      const slope = -Math.sin(u * Math.PI * 0.5) * 0.42 * (Math.PI * 0.5) / 1.26;
+      const tiltY = -Math.atan(slope);
+      const ribColor = i % 2 === 0 ? concreteWarm : warmWood;
+      faces.push(...makeRotatedBoxFaces(rx, 0.26, rz, 0.40, 1.88, 0.085, 0, 0, ribColor, wire, 3, tiltY));
+    }
+    // Cantilever eaves & warm entry plinth
+    faces.push(...makeBoxFaces(-1.26, -0.78, 0.24, 0.72, 0.72, 0.14, warmWood, wire, 2));
+  } else if (template === 'procedural-abstract') {
+    const silverTint = [218, 226, 238];
+    // Stepped gallery plinth
+    faces.push(...makeCylinderFaces(0, 0, 0.10, 1.52, 1.64, 0.20, 20, neutralDark, wire, 0));
+    faces.push(...makeCylinderFaces(0, 0, 0.26, 1.14, 1.22, 0.12, 20, neutralMid, wire, 1));
+    // Kinetic twisted torus-ribbon sculpture
+    const segCount = 20;
+    const phaseAngle = phase * Math.PI * 2;
+    for (let i = 0; i < segCount; i++) {
+      const theta = (i / segCount) * Math.PI * 2 + phaseAngle * 0.35;
+      const rMajor = 0.88 + 0.10 * Math.cos(theta * 3);
+      const px = Math.cos(theta) * rMajor;
+      const py = Math.sin(theta) * rMajor;
+      const pz = 1.26 + Math.sin(theta * 2) * 0.34;
+      const mixRgb = i % 2 === 0 ? accentRgb : silverTint;
+      faces.push(...makeRotatedBoxFaces(px, py, pz, 0.34, 0.16, 0.15, theta + Math.PI / 2, theta * 1.5, mixRgb, 'rgba(255,255,255,0.22)', 2));
+    }
+    // Tilted metallic orbital halo segments
+    const haloCount = 10;
+    for (let j = 0; j < haloCount; j++) {
+      const a = (j / haloCount) * Math.PI * 2 - phaseAngle * 0.5;
+      const hx = Math.cos(a) * 1.28;
+      const hy = Math.sin(a) * 1.28 * Math.cos(0.55);
+      const hz = 1.26 + Math.sin(a) * 1.28 * Math.sin(0.55);
+      faces.push(...makeRotatedBoxFaces(hx, hy, hz, 0.28, 0.08, 0.08, a + Math.PI / 2, 0.55, neutralLight, wire, 3));
+    }
+    // Levitating parametric core
+    faces.push(...makeUvSphereFaces(0, 0, 1.24 + Math.sin(phaseAngle) * 0.07, 0.35, 7, 12, accentRgb, 'rgba(255,255,255,0.28)', 3));
   } else {
     faces.push(...makeBoxFaces(0, 0.15, 0.04, 3.2, 2.8, 0.08, neutralDark, wire, 0));
     faces.push(...makeBoxFaces(0, 1.5, 1.08, 3.2, 0.08, 2.0, neutralMid, wire, 0));
@@ -581,12 +679,131 @@ function BlenderStageCanvas({
   );
 }
 
+const QUALITY_PRESETS = [
+  { id: 'draft', zh: '草稿 Draft', en: 'Draft', spec: '16 spp · 50%', patch: { engine: 'EEVEE', samples: 16, resolutionScale: 50 } },
+  { id: 'studio', zh: '标准 Studio', en: 'Studio', spec: '32 spp · 100%', patch: { engine: 'EEVEE', samples: 32, resolutionScale: 100 } },
+  { id: 'cycles', zh: '电影 Cycles', en: 'Cycles', spec: '128 spp · 100%', patch: { engine: 'CYCLES', samples: 128, resolutionScale: 100 } },
+];
+
+const PIPELINE_TIERS = [
+  { id: 'draft', zh: '草稿 Draft', en: 'Draft' },
+  { id: 'studio', zh: '标准 Studio', en: 'Studio' },
+  { id: 'beauty', zh: '电影精渲 Beauty Cycles', en: 'Beauty Cycles' },
+];
+
+const DSH_KIT_SNIPPETS = [
+  {
+    id: 'car_paint',
+    zh: '车漆 PBR',
+    en: 'Car Paint',
+    code: 'mat_paint = dsh_mat_car_paint("Hero_CarPaint", (0.82, 0.08, 0.06), metallic=0.82, clearcoat=1.0)',
+  },
+  {
+    id: 'carbon_fiber',
+    zh: '碳纤维',
+    en: 'Carbon Fiber',
+    code: 'mat_carbon = dsh_mat_carbon_fiber("Hero_Carbon")',
+  },
+  {
+    id: 'brushed_metal',
+    zh: '拉丝金属',
+    en: 'Brushed Metal',
+    code: 'mat_metal = dsh_mat_brushed_metal("Hero_Alloy", color=(0.74, 0.77, 0.82), roughness=0.25)',
+  },
+  {
+    id: 'tinted_glass',
+    zh: '玻璃罩',
+    en: 'Tinted Glass',
+    code: 'mat_glass = dsh_mat_tinted_glass("Hero_Glass", color=(0.12, 0.18, 0.24), roughness=0.04)',
+  },
+  {
+    id: 'radial_array',
+    zh: '环形阵列',
+    en: 'Radial Array',
+    code: 'dsh_array_radial(bpy.context.active_object, count=12, axis="Z", center=(0, 0, 0))',
+  },
+  {
+    id: 'hero_studio',
+    zh: '棚拍环境',
+    en: 'Hero Studio',
+    code: 'dsh_setup_hero_studio(style="dark_cyclorama", accent_color="#4176e6")',
+  },
+  {
+    id: 'compositor',
+    zh: '后期泛光',
+    en: 'Compositor Glare',
+    code: 'dsh_setup_compositor(glare=True, glare_threshold=1.15)',
+  },
+];
+
+function renderQcReportCard(qc, t) {
+  if (!qc || typeof qc !== 'object') return null;
+  const rawScore = Number(qc.score);
+  const score = Number.isFinite(rawScore) ? Math.max(0, Math.min(100, Math.round(rawScore))) : 0;
+  const grade = String(qc.grade || (score >= 85 ? 'A' : score >= 70 ? 'B' : score >= 55 ? 'C' : 'D'));
+  const tone = score >= 85 ? 'good' : score >= 65 ? 'warn' : 'bad';
+  const issues = Array.isArray(qc.issues) ? qc.issues : [];
+  return h(
+    'div',
+    {
+      className: 'bl-qc-card',
+      'data-qc-card': 'true',
+      'data-qc-tone': tone,
+      'data-qc-score': String(score),
+      'data-qc-grade': grade,
+    },
+    h(
+      'div',
+      { className: 'bl-qc-head' },
+      h(
+        'span',
+        { className: 'bl-qc-badge', 'data-qc-badge': 'true', 'data-qc-tone': tone },
+        'QC-3D · ' + score + '/100 · ' + grade,
+      ),
+      h(
+        'span',
+        { className: 'bl-qc-summary' },
+        issues.length === 0
+          ? t('场景质检通过 · 零异常', 'Scene audit passed · 0 issues')
+          : t('检测到 ' + issues.length + ' 项诊断建议', issues.length + ' diagnostic ' + (issues.length === 1 ? 'item' : 'items')),
+      ),
+    ),
+    issues.length > 0
+      ? h(
+          'ul',
+          { className: 'bl-qc-issues' },
+          issues.map((issue, idx) => {
+            const sev = issue?.severity === 'error' || issue?.severity === 'warn' ? issue.severity : 'info';
+            return h(
+              'li',
+              { key: (issue?.code || 'qc') + '-' + idx, className: 'bl-qc-issue', 'data-severity': sev },
+              h('span', { className: 'bl-qc-sev' }, sev.toUpperCase()),
+              h(
+                'div',
+                { className: 'bl-qc-issue-body' },
+                issue?.code || issue?.object
+                  ? h(
+                      'div',
+                      { className: 'bl-qc-issue-meta' },
+                      issue?.code ? h('code', { className: 'bl-qc-code' }, issue.code) : null,
+                      issue?.object ? h('span', { className: 'bl-qc-obj' }, issue.object) : null,
+                    )
+                  : null,
+                h('span', { className: 'bl-qc-msg' }, issue?.message || ''),
+              ),
+            );
+          }),
+        )
+      : null,
+  );
+}
+
 function scanScriptQuickWarnings(code) {
   const patterns = [
     { re: /\bos\.system\s*\(/, label: 'os.system()' },
     { re: /\bsubprocess\b/, label: 'subprocess' },
     { re: /\bshutil\.rmtree\b/, label: 'shutil.rmtree' },
-    { re: /\b(urllib|requests|http\.client|socket)\b/, label: 'network/socket' },
+    { re: /\b(urllib|requests|http\.client)\b|\b(?:import|from)\s+socket\b|\bsocket\.(?:socket|create_connection|gethost|AF_|SOCK_|bind|connect|listen|inet_)/, label: 'network/socket' },
     { re: /\b(eval|exec|__import__)\s*\(/, label: 'dynamic exec/eval' },
   ];
   const found = [];
@@ -602,6 +819,10 @@ function BlenderStudioPanel({
   setFields,
   dirty,
   setDirty,
+  canSave,
+  onSave,
+  onSaveCheckpoint,
+  onRestoreCheckpoint,
   setError,
   setNotice,
   syncFields,
@@ -639,6 +860,10 @@ function BlenderStudioPanel({
   const [generatedPreview, setGeneratedPreview] = useState('');
   const [loadingScript, setLoadingScript] = useState(false);
   const [allowUnsafe, setAllowUnsafe] = useState(false);
+  const [pipelineTier, setPipelineTier] = useState('studio');
+  const [checkpointNote, setCheckpointNote] = useState('');
+  const scriptAreaRef = useRef(null);
+  const studioRootRef = useRef(null);
   const formSplit = W.useResizableSplit({ key: 'dsh-blender-studio:form-split', initial: 430, min: 300, max: 620 });
 
   const frameStart = Number.isInteger(fields.frameStart) && fields.frameStart >= 1 ? fields.frameStart : 1;
@@ -678,6 +903,55 @@ function BlenderStudioPanel({
       if (timerId !== null) clearInterval(timerId);
     };
   }, [turntablePlaying, fields.fps, frameStart, frameEnd]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const onKeyDown = event => {
+      if (event.defaultPrevented || event.isComposing) return;
+      const hasBlockingModal =
+        typeof document !== 'undefined' &&
+        Array.from(
+          document.querySelectorAll('[role="dialog"]:not([aria-modal="false"]):not([data-tour-card]), [role="alertdialog"], dialog[open]'),
+        ).some(el => !studioRootRef.current || !el.contains(studioRootRef.current));
+      if (hasBlockingModal) return;
+      const key = String(event.key || '');
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && key.toLowerCase() === 's') {
+        event.preventDefault();
+        if (dirty && canSave && !running && typeof onSave === 'function') onSave();
+        return;
+      }
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target;
+      const tag = target && typeof target.tagName === 'string' ? target.tagName.toUpperCase() : '';
+      if (
+        tag === 'INPUT' ||
+        tag === 'TEXTAREA' ||
+        tag === 'SELECT' ||
+        tag === 'BUTTON' ||
+        (target && target.isContentEditable) ||
+        (target && typeof target.closest === 'function' && target.closest('input, textarea, select, button, a[href], [contenteditable="true"], [role="textbox"]'))
+      ) {
+        return;
+      }
+      if (key === ' ') {
+        event.preventDefault();
+        setTurntablePlaying(prev => !prev);
+      } else if (key === '1') {
+        setStageView('stage');
+      } else if (key === '2') {
+        setStageView('still');
+      } else if (key === '3') {
+        setStageView('contact_sheet');
+      } else if (key === '4') {
+        setStageView('animation');
+      } else if (key === 'r' || key === 'R') {
+        setTurntablePlaying(false);
+        setOrbit(CAMERA_PRESET_ANGLES[fields.cameraPreset] || CAMERA_PRESET_ANGLES.three_quarter);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [dirty, canSave, running, onSave, fields.cameraPreset, setStageView]);
 
   function patchFields(patch) {
     setFields(prev => ({ ...prev, ...patch }));
@@ -998,6 +1272,76 @@ function BlenderStudioPanel({
           t('在 Blender 打开', 'Open GUI'),
         ),
       ),
+
+      h(
+        'div',
+        { className: 'bl-pipeline-bar', 'data-pipeline-bar': 'true', 'data-window-drag-exclude': '' },
+        h(
+          'div',
+          { className: 'bl-pipeline-left' },
+          h('span', { className: 'bl-pipeline-tag' }, t('全流程', 'PIPELINE')),
+          h(
+            'div',
+            {
+              className: 'bl-pipeline-tiers',
+              role: 'group',
+              'data-pipeline-tiers': 'true',
+              'aria-label': t('全流程渲染档位', 'Pipeline quality tier'),
+            },
+            PIPELINE_TIERS.map(tier =>
+              h(
+                'button',
+                {
+                  key: tier.id,
+                  type: 'button',
+                  className: 'bl-tier-chip',
+                  'data-pipeline-tier': tier.id,
+                  'aria-pressed': pipelineTier === tier.id,
+                  disabled: running,
+                  onClick: () => setPipelineTier(tier.id),
+                },
+                lang === 'en' ? tier.en : tier.zh,
+              ),
+            ),
+          ),
+        ),
+        h(
+          W.Button,
+          {
+            variant: 'primary',
+            size: 'sm',
+            icon: 'sparkles',
+            'data-action': 'pipeline',
+            disabled: !project || running || dirty || !environment?.ready,
+            title: !environment?.ready
+              ? t('请先在「桥接与环境」配置 Blender', 'Configure Blender first')
+              : dirty
+              ? t('请先保存工程', 'Save changes first')
+              : t('自动串行：QC-3D 体检 → 四视角质检 → 渲染 → 导出 GLB', 'Chained QC-3D audit → 4-View QC → Render → GLB export'),
+            onClick: () =>
+              startJob('pipeline', {
+                includeContactSheet: true,
+                renderKind: 'still',
+                exportFormat: 'glb',
+                qualityTier: pipelineTier,
+                abortOnQcError: false,
+              }),
+          },
+          t('一键全流程', 'Run Pipeline'),
+        ),
+      ),
+
+      h(
+        'div',
+        { className: 'bl-shortcut-bar', 'data-shortcut-bar': 'true' },
+        h('span', { className: 'bl-kbd-item' }, h('kbd', null, 'Space'), ' ', t('转台', 'Turntable')),
+        h('span', { className: 'bl-kbd-sep', 'aria-hidden': 'true' }, '·'),
+        h('span', { className: 'bl-kbd-item' }, h('kbd', null, '1–4'), ' ', t('切换视图', 'Views')),
+        h('span', { className: 'bl-kbd-sep', 'aria-hidden': 'true' }, '·'),
+        h('span', { className: 'bl-kbd-item' }, h('kbd', null, 'R'), ' ', t('重置视角', 'Reset Cam')),
+        h('span', { className: 'bl-kbd-sep', 'aria-hidden': 'true' }, '·'),
+        h('span', { className: 'bl-kbd-item' }, h('kbd', null, 'Ctrl+S'), ' ', t('保存', 'Save')),
+      ),
     );
   }
 
@@ -1123,6 +1467,46 @@ function BlenderStudioPanel({
               sc + '%',
             ),
           ),
+        ),
+      ),
+
+      h(
+        'div',
+        { className: 'bl-field' },
+        h('span', { className: 'bl-label' }, t('一键渲染预设', 'Quality Preset')),
+        h(
+          'div',
+          {
+            className: 'bl-quality-row',
+            role: 'group',
+            'data-quality-presets': 'true',
+            'aria-label': t('一键渲染质量预设', 'One-click quality presets'),
+          },
+          QUALITY_PRESETS.map(preset => {
+            const active =
+              fields.engine === preset.patch.engine &&
+              Number(fields.samples) === preset.patch.samples &&
+              Number(fields.resolutionScale) === preset.patch.resolutionScale;
+            return h(
+              'button',
+              {
+                key: preset.id,
+                type: 'button',
+                className: 'bl-quality-btn',
+                'data-quality-preset': preset.id,
+                'aria-pressed': active,
+                disabled: running,
+                onClick: () => patchFields(preset.patch),
+              },
+              h(
+                'span',
+                { className: 'bl-quality-title' },
+                h('span', { className: 'bl-mech-led', 'aria-hidden': 'true' }),
+                lang === 'en' ? preset.en : preset.zh,
+              ),
+              h('span', { className: 'bl-quality-spec' }, preset.spec),
+            );
+          }),
         ),
       ),
 
@@ -1380,6 +1764,7 @@ function BlenderStudioPanel({
         ? h(
             React.Fragment,
             null,
+            renderQcReportCard(sceneSummary.qc, t),
             h(
               'div',
               { className: 'bl-stat-grid' },
@@ -1437,7 +1822,28 @@ function BlenderStudioPanel({
     );
   }
 
+  function insertKitSnippet(snippet) {
+    if (!snippet || running) return;
+    const current = String(fields.customScript || '');
+    const ta = scriptAreaRef.current;
+    let nextCode = '';
+    if (ta && typeof ta.selectionStart === 'number' && typeof ta.selectionEnd === 'number' && ta.selectionStart !== current.length) {
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      const before = current.slice(0, start);
+      const after = current.slice(end);
+      const prefix = before && !before.endsWith('\n') ? '\n' : '';
+      const suffix = after && !after.startsWith('\n') ? '\n' : '';
+      nextCode = before + prefix + snippet.code + suffix + after;
+    } else {
+      nextCode = current.trim() ? current.replace(/\s*$/, '') + '\n' + snippet.code + '\n' : snippet.code + '\n';
+    }
+    patchFields({ customScript: nextCode, scriptMode: 'custom' });
+    setNotice(t('已插入 DSH_KIT 代码片段：', 'Inserted DSH_KIT snippet: ') + (lang === 'en' ? snippet.en : snippet.zh));
+  }
+
   function renderScriptTab() {
+    const checkpoints = Array.isArray(project?.checkpoints) ? project.checkpoints : [];
     return h(
       'div',
       { className: 'bl-script-body' },
@@ -1507,14 +1913,40 @@ function BlenderStudioPanel({
 
       h(
         'div',
+        { className: 'bl-kit-bar', 'data-dsh-kit-bar': 'true' },
+        h('span', { className: 'bl-kit-label' }, t('DSH_KIT 快捷插入', 'DSH_KIT Quick-Insert')),
+        h(
+          'div',
+          { className: 'bl-kit-chips', role: 'group', 'aria-label': t('DSH_KIT 快捷代码片段', 'DSH_KIT quick-insert snippets') },
+          DSH_KIT_SNIPPETS.map(sn =>
+            h(
+              'button',
+              {
+                key: sn.id,
+                type: 'button',
+                className: 'bl-kit-chip',
+                'data-kit-snippet': sn.id,
+                disabled: running,
+                title: sn.code,
+                onClick: () => insertKitSnippet(sn),
+              },
+              '+ ' + (lang === 'en' ? sn.en : sn.zh),
+            ),
+          ),
+        ),
+      ),
+
+      h(
+        'div',
         { className: 'bl-field' },
         h(
           'div',
           { className: 'bl-script-head-meta' },
           h('label', { htmlFor: controlId + '-custom-script' }, t('自定义 bpy Python 脚本', 'Custom bpy Python script')),
-          h('span', { className: 'w-muted' }, formatBytes(scriptBytes) + ' / 64 KB'),
+          h('span', { className: 'w-muted' }, formatBytes(scriptBytes) + ' / 256 KB'),
         ),
         h('textarea', {
+          ref: scriptAreaRef,
           id: controlId + '-custom-script',
           className: 'bl-code-editor',
           rows: 11,
@@ -1561,6 +1993,97 @@ function BlenderStudioPanel({
           },
           t('安全检查并执行脚本', 'Validate & Run Script'),
         ),
+      ),
+
+      h(
+        'div',
+        { className: 'bl-cp-card', 'data-checkpoints': 'true' },
+        h(
+          'div',
+          { className: 'bl-cp-head' },
+          h('strong', null, t('版本快照 (Checkpoints)', 'Script Checkpoints')),
+          h('span', { className: 'w-muted bl-cp-count' }, checkpoints.length + ' / 10'),
+        ),
+        h(
+          'div',
+          { className: 'bl-cp-save-row' },
+          h('input', {
+            type: 'text',
+            className: 'bl-cp-note',
+            maxLength: 120,
+            disabled: !project || running,
+            value: checkpointNote,
+            placeholder: t('快照备注（可选，如：精修车漆与倒角）', 'Optional note (e.g. beveled canopy & paint)'),
+            'aria-label': t('版本快照备注', 'Checkpoint note'),
+            onChange: e => setCheckpointNote(e.target.value),
+          }),
+          h(
+            W.Button,
+            {
+              size: 'sm',
+              icon: 'bookmark',
+              'data-action': 'save-checkpoint',
+              disabled: !project || running,
+              onClick: async () => {
+                if (typeof onSaveCheckpoint !== 'function') return;
+                const saved = await onSaveCheckpoint(checkpointNote);
+                if (saved) setCheckpointNote('');
+              },
+            },
+            t('保存快照', 'Save Snapshot'),
+          ),
+        ),
+        checkpoints.length > 0
+          ? h(
+              'ul',
+              { className: 'bl-cp-list' },
+              checkpoints.slice().reverse().map(cp =>
+                h(
+                  'li',
+                  { key: cp.id, className: 'bl-cp-item', 'data-checkpoint-id': cp.id },
+                  h(
+                    'div',
+                    { className: 'bl-cp-meta' },
+                    h(
+                      'div',
+                      { className: 'bl-cp-top' },
+                      h('span', { className: 'bl-cp-rev' }, 'r' + (cp.revision ?? 0)),
+                      cp.qcScore !== undefined && cp.qcScore !== null
+                        ? h(
+                            'span',
+                            {
+                              className: 'bl-cp-qc',
+                              'data-qc-tone': cp.qcScore >= 85 ? 'good' : cp.qcScore >= 65 ? 'warn' : 'bad',
+                            },
+                            'QC-3D ' + cp.qcScore,
+                          )
+                        : null,
+                      h('span', { className: 'bl-cp-time' }, cp.created ? new Date(cp.created).toLocaleTimeString() : ''),
+                      h('span', { className: 'bl-cp-size' }, formatBytes(cp.scriptLength || 0)),
+                    ),
+                    cp.note ? h('span', { className: 'bl-cp-desc' }, cp.note) : null,
+                  ),
+                  h(
+                    W.Button,
+                    {
+                      size: 'sm',
+                      variant: 'ghost',
+                      icon: 'rotate',
+                      'data-action': 'restore-checkpoint',
+                      'data-checkpoint-id': cp.id,
+                      disabled: running,
+                      onClick: () => typeof onRestoreCheckpoint === 'function' && onRestoreCheckpoint(cp.id),
+                    },
+                    t('恢复', 'Restore'),
+                  ),
+                ),
+              ),
+            )
+          : h(
+              'p',
+              { className: 'w-muted bl-cp-empty' },
+              t('暂无快照。修改脚本保存时自动留档，也可随时点击「保存快照」手动打点。', 'No checkpoints yet. Edits auto-snapshot on save, or click Save Snapshot anytime.'),
+            ),
       ),
     );
   }
@@ -1611,7 +2134,7 @@ function BlenderStudioPanel({
 
   return h(
     'div',
-    { className: 'bl-studio-root', 'data-editor-mode': editorMode },
+    { ref: studioRootRef, className: 'bl-studio-root', 'data-editor-mode': editorMode },
     // Top OP-DSH Console Strip
     h(
       'div',
@@ -1638,7 +2161,18 @@ function BlenderStudioPanel({
             : t('未配置 Blender', 'Blender Not Found'),
         ),
         activeBlender
-          ? h('span', { className: 'w-tag bl-ver-badge' }, 'v' + activeBlender.version + ' · ' + (activeBlender.eeveeEngine === 'BLENDER_EEVEE_NEXT' ? 'EEVEE Next' : 'EEVEE'))
+          ? h(
+              'span',
+              { className: 'w-tag bl-ver-badge' },
+              'v' +
+                activeBlender.version +
+                ' · ' +
+                (activeBlender.major >= 5
+                  ? 'EEVEE (5.x)'
+                  : activeBlender.eeveeEngine === 'BLENDER_EEVEE_NEXT'
+                  ? 'EEVEE Next'
+                  : 'EEVEE'),
+            )
           : null,
       ),
       h(
@@ -1745,6 +2279,17 @@ const BLENDER_STUDIO_CSS = `
 .bl-stage-actions{display:flex;flex-wrap:wrap;gap:6px;padding-top:4px;border-top:1px solid #313847}
 .bl-stage-actions .w-button{background:#2a313e;border-color:#424c60;color:#eef2f7}
 .bl-stage-actions .w-button.w-primary{background:#e85d2a;border-color:#d65020;color:#ffffff}
+.bl-pipeline-bar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:7px 9px;border-radius:8px;background:#262d3a;border:1px solid #384255}
+.bl-pipeline-left{display:flex;align-items:center;gap:7px;flex-wrap:wrap;min-width:0}
+.bl-pipeline-tag{font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:10px;font-weight:750;letter-spacing:0.06em;padding:2px 6px;border-radius:5px;background:rgba(232,93,42,0.18);border:1px solid rgba(232,93,42,0.45);color:#ffb092}
+.bl-pipeline-tiers{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap}
+.bl-tier-chip{padding:3px 8px;border-radius:6px;border:1px solid #414b5e;background:#2e3645;color:#cbd5e1;font:inherit;font-size:11px;font-weight:600;cursor:pointer}
+.bl-tier-chip[aria-pressed="true"]{background:#4176e6;border-color:#5b8def;color:#ffffff}
+.bl-pipeline-bar .w-button.w-primary{background:#059669;border-color:#047857;color:#ffffff}
+.bl-shortcut-bar{display:flex;flex-wrap:wrap;align-items:center;gap:5px 8px;padding-top:2px;font-size:11px;color:#94a3b8}
+.bl-kbd-item{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.bl-shortcut-bar kbd{display:inline-block;padding:1px 5px;border-radius:4px;background:#2a313e;border:1px solid #414b5e;color:#e2e8f0;font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:10px;font-weight:700;line-height:1.35}
+.bl-kbd-sep{color:#556277}
 
 .bl-inspector-card{display:flex;flex-direction:column;border:var(--dsh-control-border-width,1px) solid var(--w-border);border-radius:var(--dsw-radius-lg,14px);background:var(--dsw-alias-settings-card-fill,var(--w-canvas));overflow:clip;min-width:0}
 .bl-inspector-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:6px;background:var(--w-bg);border-bottom:var(--dsh-control-border-width,1px) solid var(--w-border)}
@@ -1764,7 +2309,14 @@ const BLENDER_STUDIO_CSS = `
 .bl-mech-key{display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:6px 8px;font:inherit;font-size:11.5px;font-weight:650;border-radius:var(--dsw-radius-sm,8px);background:var(--w-bg);border:var(--dsh-control-border-width,1px) solid var(--w-border);color:var(--w-text);cursor:pointer;box-shadow:0 2px 0 var(--w-border)}
 .bl-mech-key[aria-pressed="true"]{background:var(--w-selected);border-color:var(--w-accent);color:var(--w-accent);box-shadow:inset 0 1px 2px rgba(15,23,42,0.1)}
 .bl-mech-led{width:6px;height:6px;border-radius:50%;background:var(--w-border);flex:none}
-.bl-mech-key[aria-pressed="true"] .bl-mech-led{background:#e85d2a;box-shadow:0 0 5px rgba(232,93,42,0.75)}
+.bl-mech-key[aria-pressed="true"] .bl-mech-led,.bl-quality-btn[aria-pressed="true"] .bl-mech-led{background:#e85d2a;box-shadow:0 0 5px rgba(232,93,42,0.75)}
+.bl-quality-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.bl-quality-btn{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:6px 8px;border-radius:var(--dsw-radius-sm,8px);border:var(--dsh-control-border-width,1px) solid var(--w-border);background:var(--w-bg);color:var(--w-text);font:inherit;cursor:pointer;text-align:left;box-shadow:0 2px 0 var(--w-border)}
+.bl-quality-btn:hover:not(:disabled){border-color:var(--w-accent)}
+.bl-quality-btn[aria-pressed="true"]{background:var(--w-selected);border-color:var(--w-accent);color:var(--w-accent);box-shadow:inset 0 1px 2px rgba(15,23,42,0.1)}
+.bl-quality-title{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;line-height:1.25;white-space:nowrap}
+.bl-quality-spec{font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:9.5px;color:var(--w-muted);line-height:1.2;white-space:nowrap}
+.bl-quality-btn[aria-pressed="true"] .bl-quality-spec{color:var(--w-accent);opacity:0.88}
 .bl-scale-row{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;margin-top:4px}
 .bl-mini-chip{padding:3px 6px;border-radius:6px;border:var(--dsh-control-border-width,1px) solid var(--w-border);background:var(--w-bg);color:var(--w-muted);font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:11px;font-weight:600;cursor:pointer}
 .bl-mini-chip[aria-pressed="true"]{border-color:var(--w-accent);color:var(--w-accent);background:var(--w-selected)}
@@ -1779,6 +2331,30 @@ const BLENDER_STUDIO_CSS = `
 
 .bl-outliner-body,.bl-script-body{display:flex;flex-direction:column;gap:10px;min-width:0}
 .bl-outliner-head,.bl-script-head-meta{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.bl-qc-card{display:flex;flex-direction:column;gap:7px;padding:9px 11px;border-radius:var(--dsw-radius-md,10px);border:1px solid var(--w-border);background:var(--w-bg)}
+.bl-qc-card[data-qc-tone="good"]{border-color:color-mix(in oklab,#10b981 42%,var(--w-border));background:color-mix(in oklab,#10b981 7%,var(--w-bg))}
+.bl-qc-card[data-qc-tone="warn"]{border-color:color-mix(in oklab,#f59e0b 45%,var(--w-border));background:color-mix(in oklab,#f59e0b 8%,var(--w-bg))}
+.bl-qc-card[data-qc-tone="bad"]{border-color:color-mix(in oklab,#e11d48 45%,var(--w-border));background:color-mix(in oklab,#e11d48 8%,var(--w-bg))}
+.bl-qc-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.bl-qc-badge{display:inline-flex;align-items:center;padding:2px 9px;border-radius:999px;font-family:var(--dsh-font-mono,ui-monospace,monospace);font-variant-numeric:tabular-nums;font-size:11px;font-weight:750;letter-spacing:0.02em}
+.bl-qc-badge[data-qc-tone="good"]{background:#059669;color:#ffffff}
+.bl-qc-badge[data-qc-tone="warn"]{background:#d97706;color:#ffffff}
+.bl-qc-badge[data-qc-tone="bad"]{background:#e11d48;color:#ffffff}
+.bl-qc-summary{font-size:11.5px;font-weight:600;color:var(--w-text)}
+.bl-qc-issues{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px}
+.bl-qc-issue{display:flex;align-items:flex-start;gap:7px;padding:5px 7px;border-radius:7px;background:var(--w-canvas);border:var(--dsh-control-border-width,1px) solid var(--w-border);font-size:11.5px}
+.bl-qc-sev{flex:none;padding:1px 5px;border-radius:4px;font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:9.5px;font-weight:750}
+.bl-qc-issue[data-severity="error"] .bl-qc-sev{background:color-mix(in oklab,#e11d48 18%,transparent);color:#be123c}
+.bl-qc-issue[data-severity="warn"] .bl-qc-sev{background:color-mix(in oklab,#f59e0b 20%,transparent);color:#b45309}
+.bl-qc-issue[data-severity="info"] .bl-qc-sev{background:color-mix(in oklab,#3b82f6 16%,transparent);color:#1d4ed8}
+[data-theme="dark"] .bl-qc-issue[data-severity="error"] .bl-qc-sev{color:#fda4af}
+[data-theme="dark"] .bl-qc-issue[data-severity="warn"] .bl-qc-sev{color:#fcd34d}
+[data-theme="dark"] .bl-qc-issue[data-severity="info"] .bl-qc-sev{color:#93c5fd}
+.bl-qc-issue-body{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.bl-qc-issue-meta{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.bl-qc-code{font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:10px;color:var(--w-muted)}
+.bl-qc-obj{font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:10px;padding:0 5px;border-radius:4px;background:var(--w-selected);color:var(--w-accent)}
+.bl-qc-msg{color:var(--w-text);line-height:1.4}
 .bl-stat-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px}
 .bl-stat-box{display:flex;flex-direction:column;align-items:center;padding:6px 4px;border-radius:8px;background:var(--w-bg);border:var(--dsh-control-border-width,1px) solid var(--w-border)}
 .bl-stat-val{font-family:var(--dsh-font-mono,ui-monospace,monospace);font-weight:700;font-size:13px}
@@ -1793,9 +2369,30 @@ const BLENDER_STUDIO_CSS = `
 
 .bl-script-mode-row{display:grid;grid-template-columns:1fr 1fr;gap:6px}
 .bl-script-toolbar{display:flex;gap:6px;flex-wrap:wrap}
+.bl-kit-bar{display:flex;flex-direction:column;gap:5px;padding:7px 9px;border-radius:8px;background:var(--w-bg);border:var(--dsh-control-border-width,1px) solid var(--w-border)}
+.bl-kit-label{font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:10.5px;font-weight:700;color:var(--w-muted);letter-spacing:0.03em}
+.bl-kit-chips{display:flex;flex-wrap:wrap;gap:5px}
+.bl-kit-chip{padding:3px 8px;border-radius:999px;border:var(--dsh-control-border-width,1px) solid var(--w-border);background:var(--w-canvas);color:var(--w-text);font:inherit;font-size:11px;font-weight:600;cursor:pointer}
+.bl-kit-chip:hover:not(:disabled){border-color:var(--w-accent);color:var(--w-accent);background:var(--w-selected)}
 .bl-code-editor{font-family:var(--dsh-font-mono,ui-monospace,monospace)!important;font-size:12px!important;line-height:1.5;min-height:200px;resize:vertical}
 .bl-script-readonly{max-height:170px}
 .bl-script-run-row{display:flex;flex-direction:column;gap:8px}
+.bl-cp-card{display:flex;flex-direction:column;gap:7px;padding:9px 10px;border-radius:var(--dsw-radius-md,10px);background:var(--w-bg);border:var(--dsh-control-border-width,1px) solid var(--w-border)}
+.bl-cp-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px}
+.bl-cp-count{font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:11px}
+.bl-cp-save-row{display:flex;align-items:center;gap:6px}
+.bl-cp-note{flex:1;min-width:0;font-size:12px!important;padding:5px 8px!important}
+.bl-cp-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px}
+.bl-cp-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 8px;border-radius:7px;background:var(--w-canvas);border:var(--dsh-control-border-width,1px) solid var(--w-border)}
+.bl-cp-meta{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.bl-cp-top{display:flex;align-items:center;gap:5px;flex-wrap:wrap;font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:10.5px}
+.bl-cp-rev{font-weight:750;color:var(--w-text)}
+.bl-cp-qc{padding:0 5px;border-radius:999px;font-weight:700;font-size:10px;color:#fff;background:#059669}
+.bl-cp-qc[data-qc-tone="warn"]{background:#d97706}
+.bl-cp-qc[data-qc-tone="bad"]{background:#e11d48}
+.bl-cp-time,.bl-cp-size{color:var(--w-muted)}
+.bl-cp-desc{font-size:11.5px;color:var(--w-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bl-cp-empty{margin:0;font-size:11.5px;line-height:1.45}
 
 .bl-form-split{min-height:520px;align-items:start}
 .bl-form-pane{padding:14px 16px;border:var(--dsh-control-border-width,1px) solid var(--w-border);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-settings-card-fill,var(--w-canvas))}
@@ -1806,5 +2403,11 @@ const BLENDER_STUDIO_CSS = `
 @container dsh-workbench (max-width:940px){
   .bl-studio-grid{grid-template-columns:1fr}
   .bl-inspector-content{max-height:none}
+}
+@container dsh-workbench (max-width:760px){
+  .bl-stage-bezel{min-height:280px;padding:8px}
+  .bl-stat-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .bl-quality-row{grid-template-columns:1fr}
+  .bl-field-grid-2,.bl-field-grid-3{grid-template-columns:1fr}
 }
 `;

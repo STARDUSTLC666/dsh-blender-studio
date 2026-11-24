@@ -5,6 +5,8 @@ export type BlenderTemplateId =
   | 'motion-data'
   | 'grease-pencil-2d'
   | 'blank-stage'
+  | 'architectural-pavilion'
+  | 'procedural-abstract'
 
 export type BlenderRenderEngine = 'EEVEE' | 'CYCLES' | 'WORKBENCH'
 export type BlenderAspect = 'landscape' | 'portrait' | 'square'
@@ -19,6 +21,8 @@ export type BlenderFps = 24 | 30 | 60
 export type BlenderResolutionScale = 50 | 100 | 150 | 200
 export type PolyHavenAssetType = 'hdris' | 'textures' | 'models'
 
+export type BlenderQualityTier = 'draft' | 'studio' | 'beauty'
+
 export type BlenderJobKind =
   | 'preview_still'
   | 'contact_sheet'
@@ -27,6 +31,38 @@ export type BlenderJobKind =
   | 'inspect_scene'
   | 'run_script'
   | 'build_blend'
+  | 'pipeline'
+
+export interface BlenderPipelineOptions {
+  includeContactSheet?: boolean
+  renderKind?: 'still' | 'animation'
+  exportFormat?: BlenderExportFormat | 'none'
+  qualityTier?: BlenderQualityTier
+  abortOnQcError?: boolean
+}
+
+export interface BlenderPipelineSummary {
+  qc?: BlenderSceneQcReport
+  artifactIds: string[]
+  contactSheetId?: string
+  primaryRenderId?: string
+  modelArtifactId?: string
+  stoppedEarly?: boolean
+  stopReason?: string
+}
+
+export interface BlenderScriptCheckpoint {
+  id: string
+  revision: number
+  created: string
+  note: string
+  scriptMode: BlenderScriptMode
+  scriptLength: number
+  customScript: string
+  engine: BlenderRenderEngine
+  samples: number
+  qcScore?: number
+}
 
 export interface BlenderProjectFields {
   template: BlenderTemplateId
@@ -71,6 +107,22 @@ export interface BlenderSceneObjectSummary {
   polygons?: number
 }
 
+export type BlenderSceneQcSeverity = 'error' | 'warn' | 'info'
+export type BlenderSceneQcGrade = 'A' | 'B' | 'C' | 'D'
+
+export interface BlenderSceneQcIssue {
+  code: string
+  severity: BlenderSceneQcSeverity
+  message: string
+  object?: string
+}
+
+export interface BlenderSceneQcReport {
+  score: number
+  grade: BlenderSceneQcGrade
+  issues: BlenderSceneQcIssue[]
+}
+
 export interface BlenderSceneSummary {
   capturedAt: string
   blenderVersion: string
@@ -84,6 +136,7 @@ export interface BlenderSceneSummary {
   materials: string[]
   collections: string[]
   objects: BlenderSceneObjectSummary[]
+  qc?: BlenderSceneQcReport
 }
 
 export interface BlenderArtifact {
@@ -110,6 +163,7 @@ export interface BlenderProject extends BlenderProjectFields {
   assets: BlenderAsset[]
   artifacts: BlenderArtifact[]
   sceneSummary?: BlenderSceneSummary
+  checkpoints?: BlenderScriptCheckpoint[]
 }
 
 export interface BlenderExecutableInfo {
@@ -167,6 +221,7 @@ export interface BlenderJob {
   artifactKind?: BlenderArtifactKind
   sceneSummary?: BlenderSceneSummary
   scriptOutput?: string
+  pipeline?: BlenderPipelineSummary
   startedAt: string
   finishedAt?: string
 }
@@ -229,6 +284,7 @@ export type BlenderErrorCode =
   | 'ASSET_NOT_FOUND'
   | 'ASSET_CHANGED'
   | 'ARTIFACT_NOT_FOUND'
+  | 'CHECKPOINT_NOT_FOUND'
   | 'JOB_NOT_FOUND'
   | 'JOB_LIMIT'
   | 'JOB_CANCELLED'
@@ -266,6 +322,8 @@ export const BLENDER_TEMPLATE_IDS: readonly BlenderTemplateId[] = [
   'motion-data',
   'grease-pencil-2d',
   'blank-stage',
+  'architectural-pavilion',
+  'procedural-abstract',
 ] as const
 
 export const BLENDER_ENGINES: readonly BlenderRenderEngine[] = ['EEVEE', 'CYCLES', 'WORKBENCH'] as const
@@ -296,6 +354,7 @@ export const BLENDER_MATERIAL_PRESETS: readonly BlenderMaterialPreset[] = [
 ] as const
 export const BLENDER_SCRIPT_MODES: readonly BlenderScriptMode[] = ['template', 'custom'] as const
 export const BLENDER_EXPORT_FORMATS: readonly BlenderExportFormat[] = ['glb', 'fbx', 'obj', 'stl', 'blend'] as const
+export const BLENDER_QUALITY_TIERS: readonly BlenderQualityTier[] = ['draft', 'studio', 'beauty'] as const
 export const BLENDER_ARTIFACT_KINDS: readonly BlenderArtifactKind[] = [
   'still',
   'contact_sheet',
@@ -333,10 +392,11 @@ export const MAX_ACTIVE_PROJECTS = 30
 export const MAX_PROJECT_ASSETS = 24
 export const MAX_ASSET_BYTES = 50 * 1024 * 1024
 export const MAX_PROJECT_ASSETS_BYTES = 120 * 1024 * 1024
-export const MAX_PROJECT_ARTIFACTS = 20
+export const MAX_PROJECT_ARTIFACTS = 12
 export const MAX_ARTIFACT_DOWNLOAD_BYTES = 200 * 1024 * 1024
-export const MAX_CUSTOM_SCRIPT_BYTES = 64 * 1024
-export const MAX_PROJECT_JSON_BYTES = 256 * 1024
+export const MAX_CUSTOM_SCRIPT_BYTES = 256 * 1024
+export const MAX_PROJECT_JSON_BYTES = 4 * 1024 * 1024
+export const MAX_SCRIPT_CHECKPOINTS = 10
 export const MAX_JOB_LOG_LINES = 80
 export const SCENE_JSON_MARKER = '__DSH_SCENE_JSON__='
 export const DEFAULT_BRIDGE_HOST = '127.0.0.1'
@@ -564,7 +624,7 @@ export function validateProjectFields(
     throw new BlenderError('自定义脚本必须为字符串。', 'BAD_REQUEST', 400)
   }
   if (Buffer.byteLength(rawCustomScript, 'utf8') > MAX_CUSTOM_SCRIPT_BYTES) {
-    throw new BlenderError('自定义 bpy 脚本不能超过 64 KB。', 'SCRIPT_TOO_LARGE', 400)
+    throw new BlenderError('自定义 bpy 脚本不能超过 256 KB。', 'SCRIPT_TOO_LARGE', 400)
   }
   const customScript = rawCustomScript
 

@@ -5176,7 +5176,7 @@ dialog[open]::backdrop {
   function ensureStyleNode(id, cssText) {
     if (typeof document === 'undefined' || !document.head || typeof document.getElementById !== 'function') return false;
     let node = document.getElementById(id);
-    if (!node) {
+    if (!node || (typeof node.isConnected === 'boolean' && !node.isConnected)) {
       node = document.createElement('style');
       node.id = id;
       node.textContent = cssText;

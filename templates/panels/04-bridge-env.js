@@ -303,6 +303,7 @@ function BlenderBridgeEnvPanel({
         ? h(
             'div',
             { className: 'bl-live-scene-box' },
+            renderQcReportCard(liveScene.qc, t),
             h(
               'div',
               { className: 'bl-stat-grid' },

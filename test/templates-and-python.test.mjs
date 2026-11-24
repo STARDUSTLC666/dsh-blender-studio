@@ -55,7 +55,10 @@ function makeProject(overrides = {}) {
   }
 }
 
-test('BLENDER_TEMPLATES exposes all 6 templates with bilingual metadata', () => {
+test('BLENDER_TEMPLATES exposes all 8 templates (including architectural-pavilion & procedural-abstract) with bilingual metadata', () => {
+  assert.equal(BLENDER_TEMPLATE_IDS.length, 8)
+  assert.ok(BLENDER_TEMPLATE_IDS.includes('architectural-pavilion'))
+  assert.ok(BLENDER_TEMPLATE_IDS.includes('procedural-abstract'))
   assert.deepEqual(
     BLENDER_TEMPLATES.map((t) => t.id),
     [...BLENDER_TEMPLATE_IDS],
@@ -68,14 +71,54 @@ test('BLENDER_TEMPLATES exposes all 6 templates with bilingual metadata', () => 
   }
 })
 
-test('generated scene scripts include Blender 3.6–5.x compatibility guards (EEVEE Next, Principled BSDF 4.0+, AgX, GPv3)', () => {
+test('generated scene scripts include Blender 3.6–5.x compatibility guards, DSH_KIT helpers, auto-wired assets, Cycles OIDN, and QC-3D audit', () => {
+  const dshKitHelpers = [
+    'def dsh_bevel(',
+    'def dsh_smooth(',
+    'def dsh_array_radial(',
+    'def dsh_tube_along_points(',
+    'def dsh_ground_assembly(',
+    'def dsh_frame_camera_to_assembly(',
+    'def dsh_mat_car_paint(',
+    'def dsh_mat_carbon_fiber(',
+    'def dsh_mat_brushed_metal(',
+    'def dsh_mat_tinted_glass(',
+    'def dsh_mat_rubber_tire(',
+    'def dsh_mat_emissive_led(',
+    'def dsh_mat_matte_armor(',
+    'def dsh_setup_hero_studio(',
+    'def dsh_setup_compositor(',
+    'def dsh_add_dof(',
+  ]
+
   for (const template of BLENDER_TEMPLATE_IDS) {
     const project = makeProject({
       template,
       title: `Scene "Quoted" 'Single' \\ ${template}`,
       headline: `HEAD "3D" ${template}`,
       description: 'Line 1\nLine 2',
+      engine: template === 'architectural-pavilion' ? 'CYCLES' : 'EEVEE',
     })
+    project.assets.push(
+      {
+        id: 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff',
+        name: 'custom-hero.glb',
+        file: 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff.glb',
+        kind: 'model',
+        ext: 'glb',
+        size: 2048,
+        created: '2026-11-24T00:00:00Z',
+      },
+      {
+        id: 'cccccccc-dddd-4eee-8fff-111111111111',
+        name: 'albedo.png',
+        file: 'cccccccc-dddd-4eee-8fff-111111111111.png',
+        kind: 'texture',
+        ext: 'png',
+        size: 1024,
+        created: '2026-11-24T00:00:00Z',
+      },
+    )
     const script = generateSceneScript(project, '/tmp/dsh-assets')
     assert.match(script, /import bpy/)
     assert.match(script, /BLENDER_EEVEE_NEXT/)
@@ -86,6 +129,26 @@ test('generated scene scripts include Blender 3.6–5.x compatibility guards (EE
     assert.match(script, /Subsurface Weight/)
     assert.match(script, /AgX/)
     assert.match(script, /Filmic/)
+    assert.match(script, /OPENIMAGEDENOISE/)
+    assert.match(script, /use_adaptive_sampling/)
+    assert.match(script, /DSH_ASSET_PATHS/)
+    assert.match(script, /ShaderNodeTexEnvironment/)
+    assert.match(script, /dsh_auto_place_uploaded_models/)
+    for (const qcCode of [
+      'EMPTY_SCENE',
+      'NO_CAMERA',
+      'NO_LIGHTS',
+      'UNASSIGNED_MATERIAL',
+      'FLAT_UNBEVELED_PRIMITIVE',
+      'FLOATING_HERO',
+      'OFF_FRAME_HERO',
+      'HIGH_POLYCOUNT',
+    ]) {
+      assert.ok(script.includes(qcCode), `generated script missing QC-3D code ${qcCode}`)
+    }
+    for (const fnSig of dshKitHelpers) {
+      assert.ok(script.includes(fnSig), `generated script missing DSH_KIT helper ${fnSig}`)
+    }
     assert.ok(script.includes(SCENE_JSON_MARKER))
     assert.match(script, /def dsh_build_template\(\):/)
     if (template === 'grease-pencil-2d') {
@@ -93,16 +156,23 @@ test('generated scene scripts include Blender 3.6–5.x compatibility guards (EE
       assert.match(script, /grease_pencils/)
       assert.match(script, /frame\.drawing/)
     }
+    if (template === 'procedural-abstract') {
+      assert.match(script, /GeometryNodeTree/)
+      assert.match(script, /interface\.new_socket/)
+    }
   }
 
-  // Custom script mode omits template build and injects custom bpy code
+  // Custom script mode omits template build, injects custom bpy code, AND still provides DSH_KIT
   const customProject = makeProject({
     scriptMode: 'custom',
-    customScript: 'print("custom-scene-ok")\n',
+    customScript: 'mat = dsh_mat_car_paint("Paint", "#E11D48")\nprint("custom-scene-ok")\n',
   })
   const customScript = generateSceneScript(customProject, '/tmp/dsh-assets')
   assert.match(customScript, /print\("custom-scene-ok"\)/)
   assert.doesNotMatch(customScript, /dsh_build_template\(\)/)
+  for (const fnSig of dshKitHelpers) {
+    assert.ok(customScript.includes(fnSig), `custom script preamble missing DSH_KIT helper ${fnSig}`)
+  }
 })
 
 test('generateRunnerHarness supports all modes and zero-Pillow 2x2 contact sheet stitching', () => {
@@ -178,6 +248,8 @@ test('Python ast.parse verifies blender/dsh_blender_bridge.py and every generate
   assert.match(addonCode, /bpy\.app\.timers/)
   assert.match(addonCode, /def register\(\):/)
   assert.match(addonCode, /def unregister\(\):/)
+  assert.match(addonCode, /"qc"/)
+  assert.match(addonCode, /OFF_FRAME_HERO/)
   for (const cmd of ['"ping"', '"scene_info"', '"execute"', '"viewport_capture"', '"load_script"']) {
     assert.ok(addonCode.includes(cmd), `addon missing handler ${cmd}`)
   }

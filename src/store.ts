@@ -28,6 +28,7 @@ import {
   MAX_PROJECT_ASSETS,
   MAX_PROJECT_ASSETS_BYTES,
   MAX_PROJECT_JSON_BYTES,
+  MAX_SCRIPT_CHECKPOINTS,
   sanitizeFileName,
   validateProjectFields,
   type BlenderArtifact,
@@ -35,13 +36,14 @@ import {
   type BlenderAssetKind,
   type BlenderProject,
   type BlenderSceneSummary,
+  type BlenderScriptCheckpoint,
 } from './types.js'
 
 export { BlenderConflict, BlenderError, blenderId }
 
 const UUID_RE = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/
 const ASSET_EXT_PATTERN = '(?:hdr|exr|png|jpg|webp|glb|gltf|obj|fbx|stl|blend)'
-const PRECOMPRESSED_RE = /\.(?:png|jpg|webp|glb|mp4)$/i
+const PRECOMPRESSED_RE = /\.(?:png|jpe?g|webp|mp4|glb|blend|exr)$/i
 const SAFE_ARTIFACT_FILE_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,120}$/
 
 export function zipAsync(files: AsyncZippable): Promise<Uint8Array> {
@@ -312,6 +314,25 @@ export class BlenderStore {
       }
     }
 
+    let checkpoints: BlenderScriptCheckpoint[] | undefined
+    if (p.checkpoints !== undefined) {
+      if (!Array.isArray(p.checkpoints)) {
+        throw new BlenderError('工程脚本快照记录损坏。', 'PROJECT_CORRUPT', 400)
+      }
+      checkpoints = []
+      for (const cp of p.checkpoints.slice(0, MAX_SCRIPT_CHECKPOINTS)) {
+        try {
+          blenderId(cp.id)
+        } catch {
+          throw new BlenderError('工程脚本快照编号损坏。', 'PROJECT_CORRUPT', 400)
+        }
+        if (typeof cp.customScript !== 'string' || typeof cp.created !== 'string') {
+          throw new BlenderError('工程脚本快照内容损坏。', 'PROJECT_CORRUPT', 400)
+        }
+        checkpoints.push(cp)
+      }
+    }
+
     return {
       ...validatedFields,
       id: p.id,
@@ -322,6 +343,7 @@ export class BlenderStore {
       assets: p.assets,
       artifacts: p.artifacts,
       sceneSummary: p.sceneSummary,
+      checkpoints: checkpoints ?? [],
     }
   }
 
@@ -391,6 +413,7 @@ export class BlenderStore {
         archived: false,
         assets: [],
         artifacts: [],
+        checkpoints: [],
       }
       const dir = join(this.root, 'projects', project.id)
       await mkdir(dir, { mode: 0o700 })
@@ -431,9 +454,73 @@ export class BlenderStore {
     }
   }
 
+  private makeCheckpoint(project: BlenderProject, note?: string): BlenderScriptCheckpoint {
+    const cleanNote = typeof note === 'string' && note.trim() ? note.trim().slice(0, 120) : `Revision ${project.revision}`
+    return {
+      id: randomUUID(),
+      revision: project.revision,
+      created: new Date().toISOString(),
+      note: cleanNote,
+      scriptMode: project.scriptMode,
+      scriptLength: project.customScript.length,
+      customScript: project.customScript,
+      engine: project.engine,
+      samples: project.samples,
+      qcScore: project.sceneSummary?.qc?.score,
+    }
+  }
+
+  private pushCheckpoint(project: BlenderProject, checkpoint: BlenderScriptCheckpoint): void {
+    const existing = Array.isArray(project.checkpoints) ? project.checkpoints : []
+    project.checkpoints = [checkpoint, ...existing].slice(0, MAX_SCRIPT_CHECKPOINTS)
+  }
+
   async update(id: string, revision: unknown, value: unknown): Promise<BlenderProject> {
     return this.edit(id, revision, project => {
       const next = validateProjectFields(value, { defaults: project })
+      const scriptChanged =
+        project.customScript.trim().length > 0 &&
+        (next.customScript !== project.customScript || next.scriptMode !== project.scriptMode)
+      if (scriptChanged) {
+        const latest = project.checkpoints?.[0]
+        const isDuplicate =
+          latest && latest.customScript === project.customScript && latest.scriptMode === project.scriptMode
+        if (!isDuplicate) {
+          this.pushCheckpoint(project, this.makeCheckpoint(project, `Auto snapshot (R${project.revision})`))
+        }
+      }
+      Object.assign(project, next)
+    })
+  }
+
+  async saveCheckpoint(id: string, revision: unknown, note?: string): Promise<BlenderProject> {
+    return this.edit(id, revision, project => {
+      this.pushCheckpoint(project, this.makeCheckpoint(project, note))
+    })
+  }
+
+  async restoreCheckpoint(id: string, revision: unknown, checkpointId: string): Promise<BlenderProject> {
+    const validCheckpointId = blenderId(checkpointId)
+    return this.edit(id, revision, project => {
+      const target = (project.checkpoints ?? []).find(cp => cp.id === validCheckpointId)
+      if (!target) {
+        throw new BlenderError('指定的脚本快照不存在。', 'CHECKPOINT_NOT_FOUND', 404)
+      }
+      if (
+        project.customScript.trim().length > 0 &&
+        (project.customScript !== target.customScript || project.scriptMode !== target.scriptMode)
+      ) {
+        this.pushCheckpoint(project, this.makeCheckpoint(project, `Auto backup before restore (R${project.revision})`))
+      }
+      const next = validateProjectFields(
+        {
+          customScript: target.customScript,
+          scriptMode: target.scriptMode,
+          engine: target.engine,
+          samples: target.samples,
+        },
+        { defaults: project },
+      )
       Object.assign(project, next)
     })
   }
@@ -482,6 +569,81 @@ export class BlenderStore {
     }
   }
 
+  async duplicate(id: string, titleOverride?: string): Promise<BlenderProject> {
+    await this.init()
+    const unlockProjects = await lockfile.lock(join(this.root, 'projects'), {
+      retries: { retries: 8, minTimeout: 30, maxTimeout: 60 },
+    })
+    let releaseSource: (() => Promise<void>) | undefined
+    let createdDir: string | undefined
+    try {
+      const sourceDir = await this.path(id, false)
+      releaseSource = await lockfile.lock(sourceDir, {
+        retries: { retries: 8, minTimeout: 30, maxTimeout: 60 },
+      })
+      const active = await this.list(false)
+      if (active.length >= MAX_ACTIVE_PROJECTS) {
+        throw new BlenderError(
+          `工作台最多保存 ${MAX_ACTIVE_PROJECTS} 个活跃工程，请先归档现有工程。`,
+          'PROJECT_LIMIT',
+          409,
+        )
+      }
+      const source = await this.get(id, false)
+      const fallbackTitle = `${source.title.slice(0, 64)} (Copy)`
+      const requestedTitle =
+        typeof titleOverride === 'string' && titleOverride.trim() ? titleOverride.trim() : fallbackTitle
+      const fields = validateProjectFields({ ...source, title: requestedTitle })
+      const now = new Date().toISOString()
+      const newId = randomUUID()
+      const targetDir = join(this.root, 'projects', newId)
+      await mkdir(targetDir, { mode: 0o700 })
+      createdDir = targetDir
+
+      const copiedAssets: BlenderAsset[] = []
+      if (source.assets.length > 0) {
+        const targetAssetsDir = join(targetDir, 'assets')
+        await mkdir(targetAssetsDir, { recursive: true, mode: 0o700 })
+        await this.checkPath(targetAssetsDir)
+        for (const asset of source.assets) {
+          const bytes = await this.assetBytes(source.id, asset)
+          const nextAssetId = randomUUID()
+          const nextFile = `${nextAssetId}.${asset.ext}`
+          await writeFile(join(targetAssetsDir, nextFile), bytes, { flag: 'wx', mode: 0o600 })
+          copiedAssets.push({
+            ...asset,
+            id: nextAssetId,
+            file: nextFile,
+            created: now,
+          })
+        }
+      }
+
+      const cloned: BlenderProject = {
+        ...fields,
+        id: newId,
+        revision: 1,
+        created: now,
+        updated: now,
+        archived: false,
+        assets: copiedAssets,
+        artifacts: [],
+        checkpoints: [],
+      }
+      await this.writeProjectFile(cloned)
+      createdDir = undefined
+      return cloned
+    } catch (error) {
+      if (createdDir) {
+        await rm(createdDir, { recursive: true, force: true }).catch(() => {})
+      }
+      throw error
+    } finally {
+      if (releaseSource) await releaseSource().catch(() => {})
+      await unlockProjects().catch(() => {})
+    }
+  }
+
   async addAsset(
     id: string,
     revision: unknown,
@@ -522,8 +684,8 @@ export class BlenderStore {
           created: new Date().toISOString(),
         }
         const destination = join(assetsDir, asset.file)
-        await writeFile(destination, bytes, { flag: 'wx', mode: 0o600 })
         writtenFile = destination
+        await writeFile(destination, bytes, { flag: 'wx', mode: 0o600 })
         createdAsset = asset
         p.assets.push(asset)
       })
@@ -642,29 +804,78 @@ export class BlenderStore {
     }
   }
 
+  async pruneOldRuns(
+    projectDir: string,
+    keepIds: Iterable<string> = [],
+    maxRetained = 10,
+  ): Promise<string[]> {
+    const removed: string[] = []
+    try {
+      await this.checkPath(projectDir)
+      const runsRoot = join(projectDir, 'runs')
+      const runsInfo = await lstat(runsRoot).catch(() => null)
+      if (!runsInfo || runsInfo.isSymbolicLink() || !runsInfo.isDirectory()) return removed
+      await this.checkPath(runsRoot)
+
+      const limit = Math.max(0, Math.floor(maxRetained))
+      const entries = (await readdir(runsRoot)).filter(entry => UUID_RE.test(entry))
+      const requestedKeep = [...keepIds].filter(id => UUID_RE.test(id))
+      const retained = new Set<string>()
+
+      if (requestedKeep.length > 0) {
+        for (const id of requestedKeep) {
+          if (retained.size >= limit) break
+          retained.add(id)
+        }
+      } else if (limit > 0 && entries.length > 0) {
+        const dated = await Promise.all(
+          entries.map(async entry => {
+            const full = join(runsRoot, entry)
+            const info = await lstat(full).catch(() => null)
+            return info && !info.isSymbolicLink() ? { entry, mtimeMs: info.mtimeMs } : null
+          }),
+        )
+        const sorted = dated
+          .filter((item): item is { entry: string; mtimeMs: number } => item !== null)
+          .sort((a, b) => b.mtimeMs - a.mtimeMs)
+        for (const item of sorted.slice(0, limit)) {
+          retained.add(item.entry)
+        }
+      }
+
+      for (const entry of entries) {
+        if (retained.has(entry)) continue
+        const target = join(runsRoot, entry)
+        const info = await lstat(target).catch(() => null)
+        if (!info || info.isSymbolicLink()) continue
+        await this.checkPath(target)
+        await rm(target, { recursive: true, force: true, maxRetries: 4, retryDelay: 50 })
+        removed.push(entry)
+      }
+    } catch {
+      // best-effort retention cleanup
+    }
+    return removed
+  }
+
   async registerArtifact(id: string, artifact: BlenderArtifact): Promise<BlenderProject> {
     blenderId(artifact.id)
     if (!SAFE_ARTIFACT_FILE_RE.test(artifact.file)) {
       throw new BlenderError('成品文件名无效。', 'BAD_REQUEST', 400)
     }
-    let evictedIds: string[] = []
+    let keptIds: string[] = []
     const project = await this.edit(
       id,
       undefined,
       p => {
         const next = [artifact, ...p.artifacts.filter(item => item.id !== artifact.id)]
-        const kept = new Set(next.slice(0, MAX_PROJECT_ARTIFACTS).map(item => item.id))
-        evictedIds = next
-          .slice(MAX_PROJECT_ARTIFACTS)
-          .map(item => item.id)
-          .filter(oldId => !kept.has(oldId))
         p.artifacts = next.slice(0, MAX_PROJECT_ARTIFACTS)
+        keptIds = p.artifacts.map(item => item.id)
       },
       false,
     )
-    for (const oldId of evictedIds) {
-      await this.safeRemoveRunDir(id, oldId)
-    }
+    const projectDir = await this.path(id)
+    await this.pruneOldRuns(projectDir, keptIds, MAX_PROJECT_ARTIFACTS)
     return project
   }
 
@@ -762,7 +973,7 @@ export class BlenderStore {
       'README.txt': [strToU8(readmeLines.join('\n')), { level: 6 }],
     }
     for (const [file, bytes] of assets) {
-      files[`assets/${file}`] = [bytes, { level: PRECOMPRESSED_RE.test(file) ? 0 : 1 }]
+      files[`assets/${file}`] = [bytes, { level: PRECOMPRESSED_RE.test(file) ? 0 : 6 }]
     }
     return zipAsync(files)
   }

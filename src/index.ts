@@ -13,7 +13,13 @@ export {
   parseBlenderVersionOutput,
 } from './environment.js'
 export type { BlenderCandidate, BlenderEnvironmentOptions, BlenderVersionProber } from './environment.js'
-export { BlenderRunner, parseBlenderProgressLine, parseSceneSummaryFromOutput } from './runner.js'
+export {
+  BlenderRunner,
+  DEFAULT_CYCLES_TIMEOUT_MS,
+  DEFAULT_EEVEE_TIMEOUT_MS,
+  parseBlenderProgressLine,
+  parseSceneSummaryFromOutput,
+} from './runner.js'
 export type { BlenderRunExecutor, BlenderRunRequest, BlenderRunResult, BlenderRunnerOptions } from './runner.js'
 export { PolyHavenClient, validatePolyHavenUrl } from './polyhaven.js'
 export type { PolyHavenClientOptions, PolyHavenDownloadResult } from './polyhaven.js'
@@ -58,10 +64,12 @@ export type {
 export {
   ASPECT_RESOLUTIONS,
   ARTIFACT_MIME_MAP,
+  BLENDER_QUALITY_TIERS,
   BlenderConflict,
   BlenderError,
   blenderId,
   defaultProjectFields,
+  MAX_SCRIPT_CHECKPOINTS,
   resolveRenderResolution,
   sanitizeFileName,
   scrubLogText,
@@ -84,11 +92,19 @@ export type {
   BlenderJobKind,
   BlenderLightingPreset,
   BlenderMaterialPreset,
+  BlenderPipelineOptions,
+  BlenderPipelineSummary,
   BlenderProject,
   BlenderProjectFields,
+  BlenderQualityTier,
   BlenderRenderEngine,
   BlenderSceneObjectSummary,
+  BlenderSceneQcGrade,
+  BlenderSceneQcIssue,
+  BlenderSceneQcReport,
+  BlenderSceneQcSeverity,
   BlenderSceneSummary,
+  BlenderScriptCheckpoint,
   BlenderScriptMode,
   BlenderSettings,
   BlenderTemplateId,
@@ -111,6 +127,7 @@ export const SKILL_NAMES = [
   'blender-rendering-export',
   'blender-grease-pencil',
   'blender-visual-qc',
+  'blender-production-pipeline',
 ] as const
 
 /** Absolute bundled skills directory shipped inside this package. */

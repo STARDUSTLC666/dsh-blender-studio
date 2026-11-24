@@ -1,6 +1,6 @@
 {
   "name": "dsh-blender-studio",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "DeepSeek Harness 3D / 2.5D / 蜡笔 2D 创作与渲染工作室插件：内置 OP-DSH 3D 交互预览工作台、Headless Blender CLI 无头渲染（静帧 / 2x2 四视角质检 / MP4 动画 / GLB·FBX·OBJ·STL 导出）、实时本地 Loopback Socket Bridge、8 个 Blender 3.6–5.x 专业技能与可选 Poly Haven CC0 资产检索。",
   "type": "module",
   "main": "lib/index.js",

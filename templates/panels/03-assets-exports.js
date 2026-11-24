@@ -9,6 +9,7 @@ function BlenderAssetsExportsPanel({
   environment,
   fileRef,
   uploadAsset,
+  uploadFile,
   perform,
   setProject,
   setNotice,
@@ -21,6 +22,7 @@ function BlenderAssetsExportsPanel({
   t,
 }) {
   const [removeTarget, setRemoveTarget] = useState(null);
+  const [dragOver, setDragOver] = useState(false);
   const [artifactFilter, setArtifactFilter] = useState('all');
   const [phQuery, setPhQuery] = useState('');
   const [phType, setPhType] = useState('hdris');
@@ -175,6 +177,70 @@ function BlenderAssetsExportsPanel({
         'aria-label': t('上传 3D 素材副本', 'Upload 3D asset copy'),
         style: { display: 'none' },
       }),
+      h(
+        'div',
+        {
+          className: 'bl-dropzone',
+          'data-dropzone': 'true',
+          'data-drag-active': dragOver ? 'true' : 'false',
+          'data-disabled': running || dirty || assets.length >= 24 ? 'true' : 'false',
+          'data-window-drag-exclude': '',
+          role: 'button',
+          tabIndex: running || dirty || assets.length >= 24 ? -1 : 0,
+          'aria-label': t('拖拽或点击上传 HDRI、3D 模型或贴图', 'Drag and drop or click to upload HDRI, 3D model, or texture'),
+          onClick: () => {
+            if (!running && !dirty && assets.length < 24) fileRef.current?.click();
+          },
+          onKeyDown: e => {
+            if ((e.key === 'Enter' || e.key === ' ') && !running && !dirty && assets.length < 24) {
+              e.preventDefault();
+              fileRef.current?.click();
+            }
+          },
+          onDragEnter: e => {
+            e.preventDefault();
+            if (!running && !dirty && assets.length < 24) setDragOver(true);
+          },
+          onDragOver: e => {
+            e.preventDefault();
+            if (!running && !dirty && assets.length < 24) {
+              if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+              if (!dragOver) setDragOver(true);
+            }
+          },
+          onDragLeave: e => {
+            e.preventDefault();
+            if (!e.currentTarget?.contains?.(e.relatedTarget)) setDragOver(false);
+          },
+          onDrop: e => {
+            e.preventDefault();
+            setDragOver(false);
+            if (running || dirty || assets.length >= 24) return;
+            const dropped = e.dataTransfer?.files?.[0];
+            if (dropped && typeof uploadFile === 'function') uploadFile(dropped);
+          },
+        },
+        h('span', { className: 'bl-dropzone-icon', 'aria-hidden': 'true' }, h(W.Icon, { name: 'upload', size: 20 })),
+        h(
+          'div',
+          { className: 'bl-dropzone-copy' },
+          h(
+            'strong',
+            null,
+            dragOver
+              ? t('松开鼠标即可上传并自动装配到场景', 'Drop file to upload & auto-wire into scene')
+              : t('拖拽文件到此处，或点击选择 HDRI / 3D 模型 / 贴图', 'Drag & drop files here, or click to browse HDRI / 3D Models / Textures'),
+          ),
+          h(
+            'p',
+            { className: 'w-muted' },
+            t(
+              '自动装配：上传 HDRI（.hdr/.exr）自动接管 World 环境光；上传 3D 模型（.glb/.obj/.fbx/.stl）自动归一化尺寸并稳固落位展台。',
+              'Auto-wired: HDRI (.hdr/.exr) automatically lights the World environment; 3D models (.glb/.obj/.fbx/.stl) auto-scale and ground onto the stage pedestal.',
+            ),
+          ),
+        ),
+      ),
       assets.length > 0
         ? h(
             'ul',
@@ -626,6 +692,14 @@ const BLENDER_ASSETS_CSS = `
 .bl-ae-card{display:flex;flex-direction:column;gap:12px;padding:16px 18px;border:var(--dsh-control-border-width,1px) solid var(--w-border);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-settings-card-fill,var(--w-canvas));min-width:0}
 .bl-ae-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .bl-ae-sub{margin:3px 0 0;font-size:12px;line-height:1.45;max-width:72ch}
+.bl-dropzone{display:flex;align-items:center;gap:14px;padding:14px 16px;border:1.5px dashed var(--w-border);border-radius:var(--dsw-radius-md,10px);background:var(--w-bg);cursor:pointer;transition:border-color 140ms ease,background-color 140ms ease}
+.bl-dropzone:hover:not([data-disabled="true"]){border-color:var(--w-accent);background:color-mix(in oklab,var(--w-accent) 6%,var(--w-bg))}
+.bl-dropzone[data-drag-active="true"]{border-style:solid;border-color:var(--w-accent);background:color-mix(in oklab,var(--w-accent) 12%,var(--w-bg))}
+.bl-dropzone[data-disabled="true"]{opacity:0.55;cursor:not-allowed}
+.bl-dropzone-icon{width:40px;height:40px;border-radius:10px;display:inline-grid;place-items:center;flex:none;background:var(--w-canvas);border:var(--dsh-control-border-width,1px) solid var(--w-border);color:var(--w-accent)}
+.bl-dropzone-copy{display:flex;flex-direction:column;gap:3px;min-width:0}
+.bl-dropzone-copy strong{font-size:13px;color:var(--w-text)}
+.bl-dropzone-copy p{margin:0;font-size:11.5px;line-height:1.45}
 .bl-ae-list{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:8px}
 .bl-ae-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 14px;border:var(--dsh-control-border-width,1px) solid var(--w-border);border-radius:var(--dsw-radius-sm,10px);background:var(--w-bg);min-width:0}
 .bl-ae-thumb{width:72px;height:52px;object-fit:cover;border-radius:6px;background:var(--w-soft);flex:none}

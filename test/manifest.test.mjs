@@ -17,6 +17,7 @@ const EXPECTED_SKILLS = [
   'blender-rendering-export',
   'blender-grease-pencil',
   'blender-visual-qc',
+  'blender-production-pipeline',
 ]
 
 test('package.json declares canonical dsh-blender-studio metadata, semver, and engines', () => {
@@ -114,10 +115,40 @@ test('assets/plugin-icon.webp has valid RIFF....WEBP binary magic bytes and SVG 
   assert.match(svg, /<\/svg>/i)
 })
 
-test('all 8 bundled Blender skills exist under skills/', () => {
+test('all 9 bundled Blender skills exist under skills/', () => {
+  assert.equal(EXPECTED_SKILLS.length, 9)
   for (const skill of EXPECTED_SKILLS) {
     const file = join(ROOT, 'skills', skill, 'SKILL.md')
     assert.ok(existsSync(file), `missing skill file: skills/${skill}/SKILL.md`)
     assert.ok(statSync(file).size > 200, `skill file unexpectedly short: ${skill}`)
+  }
+})
+
+test('workflow light/dark bilingual SVGs and v0.2.0 hero/UI WebPs exist under docs/assets/intro/ with valid headers', () => {
+  for (const name of [
+    'workflow-zh-light.svg',
+    'workflow-zh-dark.svg',
+    'workflow-en-light.svg',
+    'workflow-en-dark.svg',
+  ]) {
+    const file = join(ROOT, 'docs/assets/intro', name)
+    assert.ok(existsSync(file), `missing workflow SVG: docs/assets/intro/${name}`)
+    const svg = readFileSync(file, 'utf8')
+    assert.match(svg, /<svg[\s>]/i)
+    assert.match(svg, /<\/svg>/i)
+    assert.ok(svg.length > 400, `workflow SVG unexpectedly small: ${name}`)
+  }
+  for (const webpName of [
+    'hero-turbofan.webp',
+    'hero-racecar.webp',
+    'hero-helicopter.webp',
+    'screen-zh.webp',
+    'screen-qc.webp',
+  ]) {
+    const file = join(ROOT, 'docs/assets/intro', webpName)
+    assert.ok(existsSync(file), `missing showcase WebP: docs/assets/intro/${webpName}`)
+    const buf = readFileSync(file)
+    assert.equal(buf.subarray(0, 4).toString('ascii'), 'RIFF', `${webpName} must start with RIFF`)
+    assert.equal(buf.subarray(8, 12).toString('ascii'), 'WEBP', `${webpName} bytes 8..12 must be WEBP`)
   }
 })

@@ -30,8 +30,13 @@ export declare class BlenderStore {
     list(archived?: boolean): Promise<BlenderProject[]>;
     create(value: unknown): Promise<BlenderProject>;
     edit(id: string, revision: unknown, fn: (project: BlenderProject) => Promise<void> | void, bump?: boolean): Promise<BlenderProject>;
+    private makeCheckpoint;
+    private pushCheckpoint;
     update(id: string, revision: unknown, value: unknown): Promise<BlenderProject>;
+    saveCheckpoint(id: string, revision: unknown, note?: string): Promise<BlenderProject>;
+    restoreCheckpoint(id: string, revision: unknown, checkpointId: string): Promise<BlenderProject>;
     archive(id: string, revision: unknown, restore?: boolean): Promise<BlenderProject>;
+    duplicate(id: string, titleOverride?: string): Promise<BlenderProject>;
     addAsset(id: string, revision: unknown, name: string, bytes: Buffer, options?: AddAssetOptions): Promise<{
         project: BlenderProject;
         asset: BlenderAsset;
@@ -46,6 +51,7 @@ export declare class BlenderStore {
     runDir(id: string, runId: string): Promise<string>;
     safeRemoveRunDir(id: string, runId: string): Promise<void>;
     pruneRunWorkdir(runDirPath: string, keepFiles?: string[]): Promise<void>;
+    pruneOldRuns(projectDir: string, keepIds?: Iterable<string>, maxRetained?: number): Promise<string[]>;
     registerArtifact(id: string, artifact: BlenderArtifact): Promise<BlenderProject>;
     artifactPath(id: string, artifactId: string): Promise<{
         file: string;

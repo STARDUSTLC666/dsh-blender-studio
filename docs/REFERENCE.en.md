@@ -1,4 +1,4 @@
-> Full technical reference. See [README.en.md](../README.en.md) for the quickstart overview; this document covers all 6 Agent tools, the HTTP Workbench API, starter templates, bundled skills, environment variables, security boundaries, and troubleshooting.
+> Full technical reference. See [README.en.md](../README.en.md) for the quickstart overview; this document covers all 6 Agent tools, the HTTP Workbench API, 8 starter templates, the built-in `DSH_KIT` engineering/PBR helper library, 1-click `pipeline`, script checkpoints, auto-wired assets, QC-3D scene auditing, 9 bundled skills, environment variables, security boundaries, and troubleshooting.
 
 # `dsh-blender-studio` Technical Reference
 
@@ -22,11 +22,11 @@
 
 | Tool Name | Actions / Scope | Key Parameters & Behavior |
 | :--- | :--- | :--- |
-| **`blender_health`** | Read-only health check | Verifies all 8 bundled `SKILL.md` files and host registration state, active local Blender version (`BLENDER_EEVEE_NEXT`/`BLENDER_EEVEE`, `gpv3`/`gpv2`), Live Bridge connectivity, and Poly Haven toggle. Does not mutate disk or registry state. |
-| **`blender_project`** | `list` \| `create` \| `get` \| `update` \| `update_script` \| `inspect_scene` \| `archive` \| `restore` | Full project CRUD. Mutating actions (`update`, `update_script`, `archive`, `restore`) require the current `revision` (returns `409 CONFLICT` on stale writes). `inspect_scene` executes a headless inspection returning `BlenderSceneSummary` (counts, polygons, lights, cameras, materials, collections, world bounds). |
-| **`blender_render`** | `preview_still` \| `contact_sheet` \| `render_animation` \| `export_model` \| `job` \| `cancel` | Drives Headless CLI jobs: `preview_still` (PNG), `contact_sheet` (2×2 4-angle QC PNG), `render_animation` (H.264 MP4 / PNG fallback), `export_model` (`format`: `glb` \| `fbx` \| `obj` \| `stl` \| `blend`). Poll or abort running jobs with `jobId`. |
-| **`blender_script`** | `validate` \| `run_headless` \| `run_bridge` | Runs the 13-rule static safety scanner (`validate`) or executes custom `bpy` code in headless mode (`run_headless`) or Live Bridge (`run_bridge`), returning scrubbed logs and updated `sceneSummary`. Rejects unsafe payloads (`SCRIPT_UNSAFE`) unless explicitly authorized with `allowUnsafe: true`. |
-| **`blender_bridge`** | `status` \| `get_addon_info` \| `scene_info` \| `viewport_capture` \| `sync_project` \| `open_gui` | Checks bridge status, locates `dsh_blender_bridge.py`, inspects live scene state, captures the Blender 3D viewport (`width` 64–3840, `height` 64–2160), syncs a project script into Blender, or launches desktop Blender GUI. |
+| **`blender_health`** | Read-only health check | Verifies all 9 bundled `SKILL.md` files and host registration state, active local Blender version (`BLENDER_EEVEE_NEXT`/`BLENDER_EEVEE`, `gpv3`/`gpv2`), Live Bridge connectivity, and Poly Haven toggle. Does not mutate disk or registry state. |
+| **`blender_project`** | `list` \| `create` \| `get` \| `update` \| `update_script` \| `duplicate` \| `save_checkpoint` \| `restore_checkpoint` \| `inspect_scene` \| `archive` \| `restore` | Full project CRUD. `duplicate` clones project fields and uploaded assets safely into a new UUID; editing `customScript` automatically saves up to 10 script checkpoints, with explicit `save_checkpoint` / `restore_checkpoint` rollback; mutating actions require the current `revision` (returns `409 CONFLICT` on stale writes). `inspect_scene` returns `BlenderSceneSummary` plus the deterministic **`QC-3D` score (`0–100`, Grade `A–D`) and issue checklist**. |
+| **`blender_render`** | `preview_still` \| `contact_sheet` \| `render_animation` \| `export_model` \| `pipeline` \| `job` \| `cancel` | Drives Headless CLI jobs: `preview_still` (PNG), `contact_sheet` (2×2 4-angle QC PNG), `render_animation` (H.264 MP4 / PNG fallback), `export_model` (`format`: `glb` \| `fbx` \| `obj` \| `stl` \| `blend`), and **1-click `pipeline`** (chaining `inspect_scene` → `contact_sheet` → `preview_still`/`render_animation` → `export_model` with `qualityTier`: `draft` \| `studio` \| `beauty` and optional `abortOnQcError`). Cycles automatically enables OpenImageDenoise (`RGB_ALBEDO_NORMAL`), adaptive sampling, and AgX. |
+| **`blender_script`** | `validate` \| `run_headless` \| `run_bridge` | Runs the 13-rule static safety scanner (`validate`) or executes custom `bpy` code in headless mode (`run_headless`) or Live Bridge (`run_bridge`), returning scrubbed logs and updated `sceneSummary` (including `QC-3D` score). Rejects unsafe payloads (`SCRIPT_UNSAFE`) unless explicitly authorized with `allowUnsafe: true`. |
+| **`blender_bridge`** | `status` \| `get_addon_info` \| `scene_info` \| `viewport_capture` \| `sync_project` \| `open_gui` | Checks bridge status, locates `dsh_blender_bridge.py`, inspects live scene state (with live `QC-3D` audit), captures the Blender 3D viewport (`width` 64–3840, `height` 64–2160), syncs a project script into Blender, or launches desktop Blender GUI. |
 | **`blender_assets`** | `list` \| `remove` \| `search_polyhaven` \| `import_polyhaven` | Manages uploaded project assets and—when `polyHavenEnabled` is explicitly turned on—searches and imports allowlisted CC0 `hdris`, `textures`, or `models` (`resolution`: `1k` \| `2k`) from Poly Haven. |
 
 ---
@@ -35,7 +35,7 @@
 
 - **Primary endpoint**: `/api/dsh-blender-studio/workbench` (`GET`, `POST`)
 - **Streaming upload endpoint**: `/api/dsh-blender-studio/workbench/upload` (`POST`, `requestBody: 'streaming'`)
-- **CSRF & Origin Guard**: Every `POST` request must include `x-dsh-blender-studio: 1` and pass origin validation (exempts DSH Desktop `Origin: dsh-app://app`). Invalid requests receive HTTP `403 ORIGIN_FORBIDDEN`.
+- **CSRF & Origin Guard**: Every `POST` request must include `x-dsh-blender-studio: 1` (also accepts `x-dsh-blender: 1` for backward compat). Explicitly allows DeepSeek Harness Desktop Electron `Origin: dsh-app://app` (including `Sec-Fetch-Site: cross-site` exemption) and loopback same-origin requests while rejecting untrusted third-party/cross-site origins with HTTP `403 ORIGIN_FORBIDDEN`; JSON body cap `512 KB`.
 
 ### 3.1 `GET /api/dsh-blender-studio/workbench`
 
@@ -50,8 +50,8 @@
 
 `Content-Type: application/json`, returning `{ "ok": true, "value": ... }` or `{ "ok": false, "message": "...", "code": "..." }`:
 
-- **Projects**: `list`, `create`, `get`, `update`, `removeAsset`, `archive`, `restore`, `generatedScript`
-- **Jobs & Rendering**: `preview_still`, `contact_sheet`, `render_animation`, `export_model` (`format`), `inspect_scene`, `run_script` (`code?`, `allowUnsafe?`), `open_gui`, `job`, `cancel`
+- **Projects**: `list`, `create`, `get`, `update`, `duplicate` (`id`, `title?`), `save_checkpoint` (`id`, `revision`, `note?`), `restore_checkpoint` (`id`, `revision`, `checkpointId`), `removeAsset`, `archive`, `restore`, `generatedScript`
+- **Jobs & Rendering**: `preview_still`, `contact_sheet`, `render_animation`, `export_model` (`format`), `pipeline` (`includeContactSheet?`, `renderKind?`, `exportFormat?`, `qualityTier?`, `abortOnQcError?`), `inspect_scene`, `run_script` (`code?`, `allowUnsafe?`), `open_gui`, `job`, `cancel`
 - **Environment & Settings**: `environment`, `configure` (`blenderPath?`, `bridgeHost?`, `bridgePort?`, `bridgeToken?`, `polyHavenEnabled?`), `detect_blender`
 - **Live Bridge**: `bridge_status`, `bridge_scene`, `bridge_execute` (`code`), `bridge_viewport` (`width?`, `height?`), `bridge_sync` (`id`)
 - **External Assets**: `polyhaven_search` (`query`, `type?`, `limit?`), `polyhaven_import` (`id`, `revision`, `assetId`, `assetType`, `resolution?`)
@@ -66,7 +66,7 @@ Raw binary request body with headers:
 
 ---
 
-## 4. Starter Templates & Project Field Constraints
+## 4. 8 Starter Templates, Auto-Wired Assets & Field Constraints
 
 | Template ID | Display Name | Recommended Engine | Default Camera | Default Lighting | Default Material | Default Frames |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -76,27 +76,45 @@ Raw binary request body with headers:
 | `motion-data` | Motion 3D Data | `EEVEE` | `three_quarter` | `neon_cyber` | `frosted_glass` | `72` |
 | `grease-pencil-2d` | Grease Pencil 2D | `EEVEE` | `front` | `clay_overcast` | `toon_cel` | `48` |
 | `blank-stage` | Blank Calibrated Stage | `EEVEE` | `three_quarter` | `studio_3point` | `clay_matte` | `48` |
+| `architectural-pavilion` | Architectural Pavilion | `EEVEE` | `three_quarter` | `soft_daylight` | `clay_matte` | `48` |
+| `procedural-abstract` | Procedural GeoNodes Art | `EEVEE` | `three_quarter` | `dramatic_rim` | `brushed_metal` | `72` |
+
+### Zero-Code Auto-Wired Assets
+- **Uploaded HDRIs (`.hdr` / `.exr`)**: Automatically wired into World `ShaderNodeTexEnvironment -> Background` (preserving studio fallback lighting when absent).
+- **Uploaded 3D Models (`.glb` / `.gltf` / `.obj` / `.fbx` / `.stl`)**: Automatically imported onto the stage, normalized to ~`1.6 m`, and grounded onto the hero pedestal for instant zero-code rendering.
+- **Uploaded Textures / References (`.png` / `.jpg` / `.webp`)**: Exposed cleanly to scripts via the injected `DSH_ASSETS` helper dict.
+
+### Built-In `DSH_KIT` Hard-Surface & Cinema PBR Library
+Every generated template and `customScript` automatically receives cross-version `dsh_*` helpers (Blender 3.6–5.x safe, zero deprecation warnings):
+- **Hard-Surface Geometry & Framing**: `dsh_bevel`, `dsh_smooth`, `dsh_array_radial`, `dsh_tube_along_points`, `dsh_ground_assembly`, `dsh_frame_camera_to_assembly`
+- **Cinema Procedural PBR Shaders**: `dsh_mat_car_paint`, `dsh_mat_carbon_fiber`, `dsh_mat_brushed_metal`, `dsh_mat_tinted_glass`, `dsh_mat_rubber_tire`, `dsh_mat_emissive_led`, `dsh_mat_matte_armor`
+- **Hero Studios & Post**: `dsh_setup_hero_studio` (`dark_cyclorama`, `wet_asphalt`, `engineering_bay`, `helipad`), `dsh_setup_compositor` (`FOG_GLOW` glare), `dsh_add_dof`
+
+### Deterministic `QC-3D` Scene Quality Audit
+Headless `inspect_scene`, `blender_script`, and Live Bridge `scene_info` return `sceneSummary.qc` (`score`: `0–100`, `grade`: `A|B|C|D`, `issues[]`) checking 8 rules: `EMPTY_SCENE`, `NO_CAMERA`, `NO_LIGHTS`, `UNASSIGNED_MATERIAL`, `FLAT_UNBEVELED_PRIMITIVE`, `FLOATING_HERO` (assembly-aware), `OFF_FRAME_HERO` (camera NDC frustum projection), and `HIGH_POLYCOUNT`.
 
 ### Valid Field Ranges
 
 - **`aspect`**: `landscape` (`1280×720`), `portrait` (`720×1280`), `square` (`1024×1024`)
 - **`resolutionScale`**: `50` \| `100` \| `150` \| `200` (%)
-- **`engine`**: `EEVEE` (resolves to `BLENDER_EEVEE_NEXT` on 4.2+ automatically) \| `CYCLES` \| `WORKBENCH`
+- **`engine`**: `EEVEE` (resolves to `BLENDER_EEVEE_NEXT` on 4.2+ automatically) \| `CYCLES` (auto OpenImageDenoise + adaptive sampling) \| `WORKBENCH`
+- **Workbench 1-Click Quality Presets**: `Draft` (`EEVEE` 16 spp 50%) \| `Studio` (`EEVEE` 32 spp 100%) \| `Cycles` (`CYCLES` 128 spp 100%)
 - **`samples`**: integer `4`–`1024` (defaults: `32` EEVEE, `64` Cycles, `16` Workbench)
 - **`fps` / `frameStart` / `frameEnd`**: `24` \| `30` \| `60`; `frameStart >= 1`; `frameEnd <= frameStart + 600`
 - **`cameraPreset`**: `three_quarter` \| `front` \| `isometric` \| `top` \| `closeup` \| `turntable`
 - **`lightingPreset`**: `studio_3point` \| `soft_daylight` \| `dramatic_rim` \| `neon_cyber` \| `clay_overcast`
 - **`materialPreset`**: `clay_matte` \| `brushed_metal` \| `frosted_glass` \| `ceramic_gloss` \| `toon_cel`
-- **`scriptMode`**: `template` \| `custom` (`customScript` up to `64 KB`)
+- **`scriptMode`**: `template` \| `custom` (`customScript` up to `256 KB`)
 - **`accentColor`**: `#RRGGBB`; `transparentBg`: RGBA transparent PNG output
 
 ---
 
-## 5. Bundled Blender 3.6–5.x Skills (8 Skills)
+## 5. Bundled Blender 3.6–5.x Skills (9 Skills)
 
 | Skill Name (`skills/<name>/SKILL.md`) | Domain Coverage |
 | :--- | :--- |
-| `blender-scene-architecture` | DSH tool choreography, Z-Up metric 1m scale, collection layout, non-destructive modifiers, and zero-float grounding |
+| `blender-production-pipeline` | 5-phase AAA 3D production loop: `DSH_KIT` hard-surface & cinema PBR library, script checkpoints & rollback, `QC-3D` + 4-view critique, and Cycles OIDN `pipeline` exports |
+| `blender-scene-architecture` | DSH tool choreography, Z-Up metric 1m scale, 8 templates, collection layout, non-destructive modifiers, and zero-float grounding |
 | `blender-bpy-scripting` | `bpy.data`/`bmesh` over `bpy.ops`, headless safety, Blender 3.6/4.x/5.x API compatibility matrix, and static safety rules |
 | `blender-materials-lighting` | Physical PBR limits, Principled BSDF 4.0+ recipes, radius-scaled 3-point lighting, HDRI world nodes, and AgX/Filmic |
 | `blender-geometry-nodes` | `GeometryNodeTree`, 4.0+ `interface.new_socket` + 3.6 fallback, radial/grid arrays, Poisson scattering, curves, and data bars |
@@ -105,7 +123,7 @@ Raw binary request body with headers:
 | `blender-grease-pencil` | Unified GPv2 (3.6–4.2 `GPENCIL`) and GPv3 (4.3–5.x `GREASEPENCIL`) drawing, 2.5D parallax planes, and Line Art |
 | `blender-visual-qc` | 6-gate visual & structural inspection protocol over 2×2 `contact_sheet` renders and `sceneSummary` with remediation table |
 
-All 8 skills follow the open Agent Skills format and can be copied into `~/.claude/skills/`, `.cursor/skills/`, `~/.gemini/skills/`, or `~/.codex/skills/`.
+All 9 skills follow the open Agent Skills format and can be copied into `~/.claude/skills/`, `.cursor/skills/`, `~/.gemini/skills/`, or `~/.codex/skills/`.
 
 ---
 
@@ -128,7 +146,7 @@ All 8 skills follow the open Agent Skills format and can be copied into `~/.clau
 - Max active projects: **30** (archived projects do not consume active slots and can be restored anytime)
 - Max assets per project: **24** files, **50 MB** per file, **120 MB** total per project
 - Accepted formats (validated by both extension and magic bytes): `.hdr`, `.exr`, `.png`, `.jpg`/`.jpeg`, `.webp`, `.glb`, `.gltf`, `.obj`, `.fbx`, `.stl`, `.blend` (uncompressed, gzip, or zstd)
-- Max stored artifacts per project: **20**; max artifact download size: **200 MB**; max rolling job log buffer: **80 lines**
+- Automatic artifact retention (latest 12 artifacts) & orphaned run-directory pruning (`pruneOldRuns`, plus automatic cleanup of failed/cancelled runs); max project metadata size: **4 MB** (`customScript` up to **256 KB**, up to **10** auto-saved script checkpoints); max artifact download size: **200 MB**; max rolling job log buffer: **80 lines**; source backup ZIP uses Store mode (`level: 0`) for already-compressed media (`.png`/`.jpg`/`.webp`/`.mp4`/`.glb`/`.blend`/`.exr`).
 
 ---
 

@@ -2,43 +2,48 @@
 
 # Blender 3D Studio
 
-> **在 DeepSeek Harness 中用 Blender 创作、实时预览、四视角质检并导出 3D 模型、静帧与高清 MP4 动画。**
+> **在 DeepSeek Harness 中完成高精度 3D 建模、实时预览、自动体检（QC-3D）、快照迭代与 Cycles 电影级渲染导出。**
 
-内置 **OP-DSH 3D 工作室交互预览工作台**、**Headless Blender CLI 无头渲染引擎**、**本地回环 Live Bridge 插件**、6 套跨版本 `bpy` 工程模板与 8 个 Blender 3.6–5.x 专业技能。
+内置 **OP-DSH 3D 工作室交互预览工作台**、**Headless Blender CLI 无头渲染引擎**、**16 项内置 `DSH_KIT` 硬表面与 PBR 辅助库**、**一键全流程 `pipeline`**、**本地回环 Live Bridge 插件**、8 套跨版本 `bpy` 模板与 9 个 Blender 3.6–5.x 专业技能。
 
 [![npm](https://img.shields.io/npm/v/dsh-blender-studio)](https://www.npmjs.com/package/dsh-blender-studio) [![downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-blender-studio-downloads.svg)](https://www.npmjs.com/package/dsh-blender-studio) [![total downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-blender-studio-total-downloads.svg)](https://www.npmjs.com/package/dsh-blender-studio)
 
-**[核心能力](#核心能力) · [安装](#安装) · [快速上手](#开始使用) · [完整说明](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/docs/REFERENCE.zh.md) · [Live Bridge 指南](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/docs/BRIDGE.md)**
+**[核心能力](#核心能力) · [实渲画廊](#实渲画廊) · [安装](#安装) · [快速上手](#开始使用) · [完整说明](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/docs/REFERENCE.zh.md) · [Live Bridge 指南](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/docs/BRIDGE.md)**
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/workflow-zh-dark.svg">
+  <img src="https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/workflow-zh-light.svg" alt="dsh-blender-studio 高质量 3D 生产四步流程示意" width="100%">
+</picture>
+
+## 实渲画廊
+
+以下全部复杂机械与工程作品均直接通过 **`dsh-blender-studio` v0.2.0** 工作台 API、`DSH_KIT` 后期泛光、脚本快照与本机 **Blender 5.3.0 Cycles + OpenImageDenoise + AgX** 端到端构建渲染，均通过 **`QC-3D 100/A`** 零缺陷体检：
+
+![AERO-X900 高涵道比剖视涡扇发动机（Blender 5.3.0 Cycles 实渲 · QC-3D 100/A）](https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/hero-turbofan.webp)
+
+| APEX-09 赛博 GT 超跑（81 对象 · 96 spp Cycles） | VANGUARD H-145X 双发救援直升机（43 对象 · 64 spp Cycles） |
+| :---: | :---: |
+| ![APEX-09 赛博 GT 超跑实渲](https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/hero-racecar.webp) | ![VANGUARD H-145X 双发直升机实渲](https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/hero-helicopter.webp) |
+
+<details>
+<summary>查看 OP-DSH 3D 工作室实景截图（v0.2.0 交互视口、一键全流程、QC-3D 大纲与四视角质检）</summary>
+
+![OP-DSH 3D 工作室实时视口与工作台](https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/screen-zh.webp)
+
+![OP-DSH 3D 工作室四视角质检与 QC-3D 场景大纲](https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/screen-qc.webp)
+
+图片来自本地 DeepSeek Harness 验证环境与本机 Blender 5.3.0 Cycles / EEVEE 实渲输出。
+
+</details>
 
 ## 核心能力
 
 | 模块 | 核心特性 |
 | :--- | :--- |
-| **OP-DSH 3D 工作室** | 零外部依赖 Canvas 3D 实时预览舞台（轨道拖拽、缩放、三轴指示、6 套模板线框/面片与 Turntable 预演），无缝切换静帧 PNG / **2×2 四视角质检图** / MP4 回放与场景大纲、`bpy` 脚本检查器；1 键切回经典「表单」 |
-| **双轨驱动架构** | **Track A（默认）**：无需打开 Blender 窗口，自动探测本机 Blender 3.6–5.x 执行无头 CLI 渲染与导出；**Track B（可选）**：内置单文件 `dsh_blender_bridge.py` 仅监听 `127.0.0.1` 回环实时联动；**Track C**：一键在桌面 Blender GUI 中打开工程 `.blend` |
-| **6 套模板与 8 项专业技能** | 内置 `product-studio` / `logo-3d` / `isometric-room` / `motion-data` / `grease-pencil-2d` / `blank-stage` 模板与 8 个原生技能，自动适配 `BLENDER_EEVEE_NEXT`、Principled BSDF 4.0+、AgX 与 GPv3，并支持 AI 四视角视觉自检闭环 |
-| **安全边界与统一外观** | 13 条静态 `bpy` 脚本安全校验、UUID 乐观锁存储、默认关闭的白名单 Poly Haven CC0 资产检索；适配 DSH `>=0.2.2-rc.3`，内置 13 套明亮风格主题与 8 套中英双层字体（默认幼圆等宽），跨插件实时同步 |
-
-<details>
-<summary>查看工作台实景截图与 Blender 实渲示例</summary>
-
-#### OP-DSH 3D 工作室（实时草图视口 & 2×2 四视角质检 + 场景大纲）
-
-![OP-DSH 3D 工作室实时草图视口](https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/screen-zh.webp)
-
-![OP-DSH 3D 工作室四视角质检与场景大纲](https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/screen-qc.webp)
-
-#### 内置模板真实 Blender 无头渲染成品
-
-| 等距微缩房间 (`isometric-room`) | 3D 立体徽标 (`logo-3d`) |
-| :---: | :---: |
-| ![等距微缩房间实渲](https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/render-isometric.webp) | ![3D 立体徽标实渲](https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/render-logo.webp) |
-| **动态 3D 数据柱 (`motion-data`)** | **蜡笔 2D / 三渲二 (`grease-pencil-2d`)** |
-| ![动态 3D 数据柱实渲](https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/render-motion.webp) | ![蜡笔 2D 实渲](https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/render-gp2d.webp) |
-
-图片来自本地 DeepSeek Harness 验证环境与本机 Blender 5.3.0 无头 CLI 实渲输出，使用内置示例模板。
-
-</details>
+| **高质量 3D 生产全流程** | 内置 **16 项 `DSH_KIT` 硬表面与电影级 PBR 辅助库**（车漆 / 碳纤维 / 拉丝金属 / 深色玻璃 / 轮胎 / LED / 装甲 + 四套棚拍舞台 + Fog Glow 泛光）、**一键全流程 `pipeline`**（`Draft` / `Studio` / `Beauty Cycles` 串联体检→四视角→渲染→导出 GLB）与**自动脚本版本快照（Checkpoints）**一键回滚 |
+| **OP-DSH 3D 工作室** | 零外部依赖 Canvas 3D 交互舞台（8 套模板轮廓、轨道拖拽、缩放、快捷键 `Space`/`1–4`/`R`/`Ctrl+S` 与一键画质预设），无缝切换静帧 PNG / **2×2 四视角质检图** / MP4 回放、顶部 **`QC-3D` 评分徽章**大纲与 `DSH_KIT` 代码速插条；1 键切回经典「表单」 |
+| **双轨驱动与自动资产装配** | **Track A（默认）**：无需打开 Blender 窗口，自动探测本机 Blender 3.6–5.x 无头执行（Cycles 自动启用 OpenImageDenoise + AgX），拖放上传 HDRI 自动打光、拖放 GLB/OBJ/FBX/STL 自动落台；**Track B（可选）**：`dsh_blender_bridge.py` 仅监听 `127.0.0.1` 实时同步与直播 `QC-3D`；**Track C**：一键桌面 Blender 打开 `.blend` |
+| **8 套模板、9 项技能与安全边界** | 内置 `product-studio` / `logo-3d` / `isometric-room` / `motion-data` / `grease-pencil-2d` / `blank-stage` / `architectural-pavilion` / `procedural-abstract` 与 9 个原生技能；支持 `256 KB` 自定义脚本、13 条静态安全校验、UUID 乐观锁、默认关闭的 Poly Haven CC0 白名单客户端；配备 DSH v3 的 13 套明亮主题与 8 套双层字体 |
 
 ## 安装
 
@@ -52,25 +57,25 @@ dsh plugin --profile desktop add dsh-blender-studio
 
 ## 开始使用
 
-1. **检查本机 Blender**：从左侧栏打开 **Blender 3D**，进入「桥接与环境」页确认已自动探测到本机 Blender `3.6–5.x`（或在设置 / 环境变量 `DSH_BLENDER_EXECUTABLE` 中指定路径）。
-2. **选模板或写 `bpy` 起稿**：新建 3D 工程，默认进入 **OP-DSH 3D 工作室**（右上角随时切回「表单」）；挑选模板、画幅（`16:9` / `9:16` / `1:1`）、引擎（EEVEE / Cycles / Workbench）、采样、灯光、材质与相机预设，在 Canvas 视口拖拽核对构图，或切换到自定义 `bpy` 脚本模式。
-3. **管理素材与可选 CC0 资产**：保存工程后，在「素材与成品」页上传本地 HDRI（`.hdr`/`.exr`）、贴图（`.png`/`.jpg`/`.webp`）或模型（`.glb`/`.gltf`/`.obj`/`.fbx`/`.stl`/`.blend`）；如需外部 CC0 资产，可在设置中显式开启 Poly Haven 检索。
-4. **四视角质检与正式出图**：先点击 **四视角自检（Contact Sheet）** 生成 2×2 四视角拼图检查穿模、悬空、曝光与构图，确认无误后导出静帧 PNG、Turntable/关键帧 MP4 动画，或通用 3D 文件（`GLB` / `FBX` / `OBJ` / `STL` / `.blend`）与完整工程 ZIP 备份。
-5. **可选实时桥接（Live Bridge）**：在「桥接与环境」页一键下载 `dsh_blender_bridge.py` 并在 Blender 中启用，即可实时同步工程、截取 Blender 视口或在线执行 `bpy` 片段；详见 [Live Bridge 指南](docs/BRIDGE.md)。
+1. **检查本机 Blender**：从左侧栏打开 **Blender 3D**，进入「桥接与环境」页确认已自动探测到本机 Blender `3.6–5.x`（或设置 `DSH_BLENDER_EXECUTABLE`）。
+2. **模板起稿或 `DSH_KIT` 建模**：新建工程进入 **OP-DSH 3D 工作室**（随时 1 键切「表单」），选择 8 套跨版本模板之一，或切换到自定义 `bpy` 脚本模式使用内置 `dsh_*` 硬表面与 PBR 辅助函数；点击「复制」可随时拉出方案分支。
+3. **拖放素材自动装配**：在「素材与成品」页直接拖放本地 HDRI（`.hdr`/`.exr` 自动打光）、贴图或 3D 模型（`.glb`/`.obj`/`.fbx`/`.stl` 自动归一化落台）；也可显式开启 Poly Haven 检索 CC0 资产。
+4. **`QC-3D` 体检、快照迭代与一键全流程**：点击 **一键全流程（Pipeline）** 或分步运行 `QC-3D` 大纲体检与 **2×2 四视角质检**；每次修改脚本都会自动保存快照，支持随时 1 键回滚；确认构图和布光后切换 `Beauty Cycles` 导出高清 PNG、MP4 或 `GLB` / `FBX` / `OBJ` / `STL` / `.blend` 与源工程 ZIP 备份。
+5. **可选实时桥接（Live Bridge）**：在「桥接与环境」页下载 `dsh_blender_bridge.py` 并在 Blender 中启用，即可实时同步工程、拉取实时 `QC-3D`、抓取视口或在线执行 `bpy`；详见 [Live Bridge 指南](docs/BRIDGE.md)。
 
 ### 常用对话示例
 
-> 用 Blender 建一个磨砂玻璃与拉丝铝质感的产品展示台工程，先出 2×2 四视角质检图检查穿模和布光，没问题后用 Cycles 渲染 1280×720 静帧并导出 GLB。
+> 按 `blender-production-pipeline` 5 阶段流程建一台剖视高涵道比涡扇发动机：先用 `DSH_KIT` 搭建转子叶片、压气机与铜管流道，保存快照后跑 `QC-3D` 和 2×2 四视角自检确认无穿模无悬空，最后用 `pipeline` (`qualityTier: 'beauty'`) 渲染 1280×720 Cycles OIDN 精渲图并导出 GLB。
 
-> 帮我做一个等轴测微型书房（isometric-room）场景，开启 360° Turntable 相机动画，先用 EEVEE 预演 72 帧 MP4，再同步到我本机打开的 Blender 窗口。
+> 用 `architectural-pavilion` 模板新建一个建筑展馆工程，拖入我的 HDRI 环境图自动打光，先用 Draft 预演，确认后用 Cycles 精渲静帧。
 
-> 创建一个 Grease Pencil 2D 分层插画场景，兼容我本机的 Blender 4.4+ GPv3，并把完整 `.blend` 工程保存到工作台。
+> 用 `procedural-abstract` 创建一个 Geometry Nodes 扭转参数化几何雕塑，开启 72 帧 360° Turntable 动画导出 MP4，并同步到我本机打开的 Blender 窗口。
 
 ## 开始前要知道
 
-- **本机依赖**：插件不自带数百 MB 的 Blender 二进制，需本机已安装 [Blender 3.6–5.x](https://www.blender.org/download/)。若未加入系统 `PATH`，可在「桥接与环境」页手动配置路径或设置 `DSH_BLENDER_EXECUTABLE`。
-- **默认安全策略**：自定义 `bpy` 脚本执行前自动经过静态安全扫描（拦截系统命令、破坏性删除、任意网络请求与目录穿越），除非显式确认放行；Poly Haven 外部资产检索默认关闭，开启后也严格限制官方主机白名单。
-- **跨平台技能复用**：`skills/` 下 8 个技能采用开放 Agent Skills（`SKILL.md`）格式，可复制到 Claude Code、Cursor、Gemini CLI 或 OpenAI Codex 直接使用。
+- **本机依赖**：插件不自带 Blender 二进制，需本机已安装 [Blender 3.6–5.x](https://www.blender.org/download/)。若未加入系统 `PATH`，可在「桥接与环境」页手动配置路径或设置 `DSH_BLENDER_EXECUTABLE`。
+- **默认安全策略**：自定义 `bpy` 脚本执行前自动经过 13 条静态安全扫描（拦截系统命令、破坏性删除、网络套接字与目录穿越，不误报 Blender `NodeSocket` 代码），除非显式放行；Poly Haven 外部资产检索默认关闭，开启后严格限制官方 HTTPS 主机白名单。
+- **跨平台技能复用**：`skills/` 下 9 个技能采用开放 Agent Skills（`SKILL.md`）格式，可复制到 Claude Code、Cursor、Gemini CLI 或 OpenAI Codex 直接使用。
 
 ## 插件更新
 
@@ -78,7 +83,7 @@ dsh plugin --profile desktop add dsh-blender-studio
 
 ## 文档与反馈
 
-- [完整工具、API 与配置说明](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/docs/REFERENCE.zh.md) · [Live Bridge 协议与排错](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/docs/BRIDGE.md) · [更新记录](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/CHANGELOG.md) · [测试与验证说明](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/docs/VALIDATION.md)
+- [完整工具、API 与 `DSH_KIT` 参考](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/docs/REFERENCE.zh.md) · [Live Bridge 协议与排错](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/docs/BRIDGE.md) · [更新记录](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/CHANGELOG.md) · [测试与验证说明](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/docs/VALIDATION.md)
 - 欢迎 Star、提交 [Issues](https://github.com/STARDUSTLC666/dsh-blender-studio/issues) 与 [PR](https://github.com/STARDUSTLC666/dsh-blender-studio/pulls)（反馈请附插件版本、Blender 版本与复现步骤，并移除令牌等敏感信息）。
 
 ## License

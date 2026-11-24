@@ -2,6 +2,23 @@
 
 [返回简介](README.md) · [完整说明](docs/REFERENCE.zh.md) · [Live Bridge 指南](docs/BRIDGE.md) · [验证说明](docs/VALIDATION.md)
 
+## [0.2.0] - 2026-11-24
+
+- **高质量 3D 生产全流程（`DSH_KIT` + 一键 `pipeline` + 脚本版本快照）**：
+  - **内置 `DSH_KIT` 硬表面建模与电影级 PBR 辅助库**：向全部模板与自定义 `customScript` 自动注入 16 个兼容 Blender 3.6–5.x 的 `dsh_*` 辅助函数（`dsh_bevel`、`dsh_smooth`、`dsh_array_radial`、`dsh_tube_along_points`、`dsh_ground_assembly`、`dsh_frame_camera_to_assembly`；车漆/碳纤维/拉丝金属/深色玻璃/轮胎橡胶/LED 发光/哑光装甲 PBR 材质；`dsh_setup_hero_studio` 四套棚拍舞台、`dsh_setup_compositor` 泛光与 `dsh_add_dof` 景深）。
+  - **一键全流程任务（`pipeline`）**：串联 `inspect_scene`（`QC-3D` 体检，支持 `abortOnQcError` 早停）→ `contact_sheet`（2×2 四视角质检）→ `preview_still` / `render_animation`（支持 `draft` / `studio` / `beauty` 三档画质）→ `export_model`；Cycles 默认启用 OpenImageDenoise（`RGB_ALBEDO_NORMAL`）+ 自适应采样 + `AgX - Medium High Contrast`。
+  - **无畏迭代快照（Script Checkpoints）**：每次修改 `customScript` 自动留存最近 10 份历史快照，并新增 `save_checkpoint` / `restore_checkpoint`（工作台与 `blender_project` 工具同步支持）。
+- **新增 2 套旗舰模板（共 8 套）与零代码自动资产装配**：
+  - 新增 `architectural-pavilion`（参数化建筑展馆）与 `procedural-abstract`（跨版本原生 `GeometryNodeTree` 程序化几何雕塑）；支持复制工程（`duplicate`）。
+  - 上传 HDRI（`.hdr`/`.exr`）自动接入 World 环境节点，上传 3D 模型（`.glb`/`.gltf`/`.obj`/`.fbx`/`.stl`）自动归一化导入并精准落台，上传贴图自动暴露给脚本。
+- **确定性 `QC-3D` 场景体检与第 9 项专业技能**：
+  - Headless `inspect_scene`、自定义脚本与 Live Bridge `scene_info` 均自动输出 `QC-3D` 评分（`0–100` / `A–D`）与 8 类结构/构图问题诊断（含装配体感知 `FLOATING_HERO` 与相机视锥 `OFF_FRAME_HERO`），并在工作台「大纲」顶部实时展示。
+  - 新增第 9 个内置技能 `blender-production-pipeline`（5 阶段 AAA 3D 生产规范）。
+- **OP-DSH 工作台体验、安全边界与 CI 加固**：
+  - 工作台新增一键画质预设（`Draft` / `Studio` / `Cycles`）、一键全流程条、`DSH_KIT` 代码速插条、脚本快照管理、拖放式素材上传区、活跃工程「复制」按钮、任务实时计时器与网络瞬断重试、快捷键（`Space` / `1–4` / `R` / `Ctrl+S`）及英文顶栏优化。
+  - `customScript` 上限提升至 `256 KB`（`project.json` 上限 `4 MB`，POST JSON 上限 `512 KB`）；优化 `checkScriptSafety` 避免误报 Blender `NodeSocket` 代码；加固 DSH Desktop `Origin: dsh-app://app`（含 `Sec-Fetch-Site: cross-site` 豁免）与跨源 `403 ORIGIN_FORBIDDEN` 拦截；补齐上传失败回滚、旧运行目录自动回收（`pruneOldRuns`）与 Store 模式加速 ZIP 打包；CI 升级为 5 节点并发可控矩阵（Linux/Windows Node 22+24、macOS Node 24）。
+- **High-Quality 3D Production Workflow Release (`0.2.0`)**: adds the built-in 16-helper `DSH_KIT` hard-surface & cinema PBR library (Blender 3.6–5.x safe), 1-click chained `pipeline` (`draft`/`studio`/`beauty` Cycles OIDN + AgX with `abortOnQcError`), automatic & explicit script checkpoints (`save_checkpoint`/`restore_checkpoint`), 2 new templates (`architectural-pavilion` & `procedural-abstract`, 8 total), auto-wired uploaded HDRI & 3D model staging, deterministic `QC-3D` auditing across CLI and Live Bridge, 9th bundled skill (`blender-production-pipeline`), `duplicate` project cloning, drag-and-drop asset upload, keyboard shortcuts, `256 KB` custom scripts, tightened `NodeSocket`-safe script scanning, hardened DSH Desktop `Origin: dsh-app://app` + `403 ORIGIN_FORBIDDEN` CSRF guard, run-directory retention pruning, Store-mode ZIP exports, light/dark workflow SVGs, and 5-job CI reliability hardening.
+
 ## [0.1.1] - 2026-11-24
 
 - **工作台交互可发现性修复**：为已归档工程卡片与素材/成品导出行操作区显式标记 `data-always-visible="true"`，使「恢复工程 / 下载 / 移除 / 在舞台查看」按钮无需悬停即可始终可见且可点击。

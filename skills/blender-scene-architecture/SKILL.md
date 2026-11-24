@@ -12,20 +12,25 @@ Use this skill whenever designing, structuring, or refactoring a 3D scene in `ds
 Follow this deterministic loop when building a 3D asset or render in DeepSeek Harness:
 
 1. **Check environment first (`blender_health`)**: Verify installed Blender version (`3.6` / `4.x` / `5.x`), resolved EEVEE engine (`BLENDER_EEVEE_NEXT` vs `BLENDER_EEVEE`), Grease Pencil API (`gpv3` vs `gpv2`), and whether Live Bridge is connected.
-2. **Create or inspect the project (`blender_project`)**:
-   - Pick the closest built-in template (`product-studio`, `logo-3d`, `isometric-room`, `motion-data`, `grease-pencil-2d`, `blank-stage`) and set `aspect`, `engine`, `samples`, `lightingPreset`, `materialPreset`, `cameraPreset`, and `accentColor`.
+2. **Create, duplicate, or inspect the project (`blender_project`)**:
+   - Pick the closest built-in template (`product-studio`, `logo-3d`, `isometric-room`, `motion-data`, `grease-pencil-2d`, `blank-stage`, `architectural-pavilion`, `procedural-abstract`) and set `aspect`, `engine`, `samples`, `lightingPreset`, `materialPreset`, `cameraPreset`, and `accentColor`.
+   - Use `action: "duplicate"` to clone an existing project (including uploaded assets) before testing alternative lighting, materials, or geometry variants.
    - Always pass the current `revision` on `update` / `update_script` to respect optimistic locking (avoids `409 CONFLICT`).
-3. **Prepare optional external assets (`blender_assets`)**: List uploaded local assets (`hdr`, `exr`, `png`, `glb`, `obj`, `fbx`, `blend`) or—only when enabled and needed—search/import CC0 HDRIs, textures, or models via `search_polyhaven` / `import_polyhaven`.
+3. **Prepare local or CC0 assets (`blender_assets` — Auto-Wired in v0.2.0)**:
+   - Uploaded **HDRIs (`.hdr`/`.exr`)** are automatically wired into World `ShaderNodeTexEnvironment -> Background` (falling back to studio lights if absent).
+   - Uploaded **3D models (`.glb`/`.gltf`/`.obj`/`.fbx`/`.stl`)** are automatically imported onto the stage, normalized to ~`1.6 m`, and grounded cleanly on top of the hero pedestal so zero-code renders work out of the box.
+   - Uploaded **image textures (`.png`/`.jpg`/`.webp`)** are exposed to generated and custom scripts via the `DSH_ASSETS` helper dict.
+   - Only when `polyHavenEnabled` is on and external assets are needed, search/import CC0 HDRIs, textures, or models via `search_polyhaven` / `import_polyhaven`.
 4. **Author & validate custom `bpy` logic (`blender_script`)**:
-   - Run `validate` before execution so static safety checks catch forbidden host calls or syntax issues early.
+   - Run `validate` before execution so static safety checks catch forbidden host calls or syntax issues early (`customScript` supports up to `256 KB` for multi-part engineering assemblies).
    - Persist custom code to the project (`blender_project` `update_script`, `scriptMode: 'custom'`) before headless rendering so artifacts stay tied to a saved revision.
-5. **Render fast QC before final export (`blender_render`)**:
-   - Start with `contact_sheet` (2×2 multi-angle sheet: front, three-quarter, top, active camera) at low samples (`16–32` EEVEE or `32` Cycles) to catch floating objects, clipping, scale errors, and framing flaws.
-   - Run `inspect_scene` to verify object counts, polygon budget, active camera, and world-space bounding dimensions.
-   - Only after visual QC passes (see `blender-visual-qc`), run final `preview_still`, `render_animation`, or `export_model` (`glb`, `fbx`, `obj`, `stl`, `blend`).
-6. **Optional live handoff (`blender_bridge`)**: If the user has Blender open with `dsh_blender_bridge.py`, use `sync_project`, `viewport_capture`, or `open_gui` for interactive refinement.
+5. **Run automated `QC-3D` + fast visual QC before final export (`blender_project` & `blender_render`)**:
+   - Run `inspect_scene` to verify object counts, polygon budget, active camera, bounding dimensions, and the automated **`QC-3D` audit score (`0–100`, Grade `A–D`)** checking `EMPTY_SCENE`, `NO_CAMERA`, `NO_LIGHTS`, `UNASSIGNED_MATERIAL`, `FLAT_UNBEVELED_PRIMITIVE`, `FLOATING_HERO`, `OFF_FRAME_HERO`, and `HIGH_POLYCOUNT`.
+   - Run `contact_sheet` (2×2 multi-angle sheet: front, three-quarter, top, active camera) at low samples (`16–32` EEVEE or `32` Cycles) to visually verify framing, proportions, contact shadows, and lighting.
+   - Only after both `QC-3D` and visual QC pass (see `blender-visual-qc`), run final `preview_still`, `render_animation`, or `export_model` (`glb`, `fbx`, `obj`, `stl`, `blend`).
+6. **Optional live handoff (`blender_bridge`)**: If the user has Blender open with `dsh_blender_bridge.py`, use `sync_project`, `scene_info` (also reports live `QC-3D`), `viewport_capture`, or `open_gui` for interactive refinement.
 
-## 2. Selecting the Right Built-In Template
+## 2. Selecting the Right Built-In Template (8 Templates)
 
 | Template ID | Best For | Default Camera & Stage |
 | :--- | :--- | :--- |
@@ -34,7 +39,9 @@ Follow this deterministic loop when building a 3D asset or render in DeepSeek Ha
 | `isometric-room` | Miniature architectural dioramas, cutaway rooms | Orthogonal/telephoto `isometric` framing, cutaway walls + floor slab |
 | `motion-data` | 3D bar charts, KPI monuments, procedural data columns | Grid floor, parametric instanced bars, clean architectural contrast |
 | `grease-pencil-2d` | 2D / 2.5D hand-drawn storyboard & NPR cel art | GPv3/GPv2 multi-layer canvas with parallax depth |
-| `blank-stage` | Fully custom `bpy` scenes built from scratch | Clean world + minimal floor/camera scaffold ready for `customScript` |
+| `blank-stage` | Fully custom `bpy` scenes or auto-imported external 3D models | Clean metric 1m reference stage + auto-wired model/HDRI hook |
+| `architectural-pavilion` | Minimalist architecture, spatial concept renders | Curved concrete/timber pavilion canopy, skylight ribs, reflective water pool, warm interior accent |
+| `procedural-abstract` | Parametric art, kinetic branding, Geometry Nodes demos | Cross-version `GeometryNodeTree` twisted ring/ribbon sculpture with iridescent metallic/glass shading |
 
 Use `scriptMode: 'template'` when tuning visual presets quickly; switch to `scriptMode: 'custom'` when building bespoke geometry, custom rigs, or multi-part hero assemblies.
 

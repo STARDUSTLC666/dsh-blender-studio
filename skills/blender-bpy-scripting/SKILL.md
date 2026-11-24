@@ -187,6 +187,6 @@ Keep custom scripts pure and self-contained using `bpy`, `bmesh`, `mathutils`, `
 
 ## 5. Headless Diagnostics & Asset Path Handling
 
-- In `dsh-blender-studio` runner scripts, uploaded project assets live in the injected `DSH_ASSETS_DIR` (or `ASSETS_DIR` constant in generated template scripts). Always resolve paths with `os.path.join(ASSETS_DIR, filename)` and check `os.path.isfile(...)` before calling `bpy.data.images.load(...)`.
+- In `dsh-blender-studio` runner scripts, `customScript` accepts up to `256 KB` of pure `bpy` Python code. Uploaded project assets live in the injected `DSH_ASSETS_DIR` / `ASSETS_DIR` (and are cataloged in `DSH_ASSETS` by role: HDRIs auto-wire into World `ShaderNodeTexEnvironment`, 3D models auto-import onto the hero pedestal, and uploaded images stay accessible by filename). Always resolve paths with `os.path.join(ASSETS_DIR, filename)` and check `os.path.isfile(...)` before calling `bpy.data.images.load(...)`.
 - Never call `bpy.ops.wm.redraw_timer()` or access `bpy.context.space_data` / `bpy.context.region_3d` without guarding `if not bpy.app.background:` — those objects are `None` in headless mode.
 - Keep `print()` logs concise and structured (the runner keeps a rolling 80-line ring buffer); avoid printing per-vertex loops.

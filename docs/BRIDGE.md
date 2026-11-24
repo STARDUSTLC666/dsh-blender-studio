@@ -100,13 +100,13 @@ Health probe returning active Blender metadata.
   ```
 
 #### 2. `scene_info`
-Returns a structured `BlenderSceneSummary` (capped at `250` detailed object records to keep payloads compact).
+Returns a structured `BlenderSceneSummary` (capped at `250` detailed object records to keep payloads compact), including a live deterministic **`qc` (`QC-3D`) audit** (`score` 0–100, `grade` `A–D`, and `issues[]` checking `EMPTY_SCENE`, `NO_CAMERA`, `NO_LIGHTS`, `UNASSIGNED_MATERIAL`, `HIGH_POLYCOUNT`, and `OFF_FRAME_HERO`) surfaced directly in the Workbench Outliner and Agent tool output.
 - **Params**: `{}`
 - **Result**:
   ```json
   {
-    "capturedAt": "2026-11-23T15:00:00Z",
-    "blenderVersion": "4.3.2",
+    "capturedAt": "2026-11-24T06:00:00Z",
+    "blenderVersion": "5.3.0",
     "engine": "BLENDER_EEVEE_NEXT",
     "objectCount": 6,
     "meshCount": 3,
@@ -126,7 +126,12 @@ Returns a structured `BlenderSceneSummary` (capped at `250` detailed object reco
         "vertices": 512,
         "polygons": 480
       }
-    ]
+    ],
+    "qc": {
+      "score": 100,
+      "grade": "A",
+      "issues": []
+    }
   }
   ```
 

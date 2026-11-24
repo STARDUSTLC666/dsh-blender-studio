@@ -10,7 +10,7 @@ window.__ModuleLoader__.load({
 
     const ROUTE = 'api/dsh-blender-studio/workbench';
     const MAX_ASSET_BYTES = 50 * 1024 * 1024;
-    const MAX_SCRIPT_BYTES = 64 * 1024;
+    const MAX_SCRIPT_BYTES = 256 * 1024;
 
     const FALLBACK_TEMPLATES = [
       {
@@ -85,6 +85,30 @@ window.__ModuleLoader__.load({
         defaultMaterial: 'clay_matte',
         defaultFrames: 48,
       },
+      {
+        id: 'architectural-pavilion',
+        zh: '参数化建筑展馆',
+        en: 'Architectural Pavilion',
+        description: '弧形清水混凝土与木格栅展馆、镜面浅水池与暖光挑高空间，适合建筑与空间表现。',
+        descriptionEn: 'Minimalist curved timber-and-concrete pavilion with skylight ribs, reflective pool, and warm glow.',
+        recommendedEngine: 'CYCLES',
+        defaultCamera: 'three_quarter',
+        defaultLighting: 'soft_daylight',
+        defaultMaterial: 'clay_matte',
+        defaultFrames: 48,
+      },
+      {
+        id: 'procedural-abstract',
+        zh: '程序化几何雕塑',
+        en: 'Procedural GeoNodes Art',
+        description: '基于 Blender Geometry Nodes 的扭转参数化环带雕塑与炫彩金属材质，适合概念封面与动态艺术。',
+        descriptionEn: 'Parametric twisted ribbon-and-ring Geometry Nodes sculpture with iridescent metal sheen and rim light.',
+        recommendedEngine: 'EEVEE',
+        defaultCamera: 'three_quarter',
+        defaultLighting: 'dramatic_rim',
+        defaultMaterial: 'brushed_metal',
+        defaultFrames: 60,
+      },
     ];
 
     const CAMERA_PRESETS = [
@@ -150,7 +174,7 @@ window.__ModuleLoader__.load({
         SAMPLES_INVALID: 'Samples must be an integer between 4 and 1024.',
         FRAMES_INVALID: 'Frame range must start at ≥1 with end ≥ start and span ≤ 600 frames.',
         COLOR_INVALID: 'Accent color must be a #RRGGBB hex code.',
-        SCRIPT_TOO_LARGE: 'Custom bpy script cannot exceed 64 KB.',
+        SCRIPT_TOO_LARGE: 'Custom bpy script cannot exceed 256 KB.',
         SCRIPT_UNSAFE: 'Custom script contains blocked system/network calls. Review the script or enable unsafe override explicitly.',
         TEMPLATE_INVALID: 'Select a supported 3D template.',
         EXPORT_FORMAT_INVALID: 'Export format must be glb, fbx, obj, stl, or blend.',
@@ -190,6 +214,7 @@ window.__ModuleLoader__.load({
         OUTPUT_TOO_LARGE: 'Output artifact exceeds the 200 MB safety limit.',
         ORIGIN_FORBIDDEN: 'Request origin or CSRF header check failed.',
         DOWNLOAD_INVALID: 'Invalid download parameters.',
+        CHECKPOINT_NOT_FOUND: 'Requested script checkpoint was not found.',
         PLUGIN_DISPOSED: 'Plugin is unloading. Wait for reload and retry.',
       };
       if (code && byCode[code]) return byCode[code];
@@ -301,6 +326,13 @@ window.__ModuleLoader__.load({
       return matches.slice().sort((a, b) => Date.parse(b.created || 0) - Date.parse(a.created || 0))[0];
     }
 
+    function formatElapsed(seconds) {
+      const safe = Math.max(0, Math.floor(Number(seconds) || 0));
+      const mins = Math.floor(safe / 60);
+      const secs = safe % 60;
+      return String(mins).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
+    }
+
     function jobKindLabel(kind, t) {
       const map = {
         preview_still: t('预览静帧', 'Preview Still'),
@@ -310,8 +342,24 @@ window.__ModuleLoader__.load({
         inspect_scene: t('场景大纲检查', 'Inspect Scene'),
         run_script: t('执行 bpy 脚本', 'Run bpy Script'),
         build_blend: t('生成 .blend 工程', 'Build .blend'),
+        pipeline: t('一键全流程', 'Production Pipeline'),
       };
       return map[kind] || kind || t('Blender 任务', 'Blender Job');
+    }
+
+    function computePipelineStepIndex(job) {
+      if (!job) return 0;
+      if (job.pipeline?.stoppedEarly) return 0;
+      const code = String(job.stageCode || '').toLowerCase();
+      if (code.includes('export') || code.includes('glb') || job.pipeline?.modelArtifactId) return 3;
+      if (code.includes('render') || code.includes('still') || code.includes('anim') || job.pipeline?.primaryRenderId) return 2;
+      if (code.includes('contact') || code.includes('sheet') || code.includes('qc_sheet') || job.pipeline?.contactSheetId) return 1;
+      if (code.includes('inspect') || code.includes('audit') || code.includes('qc')) return 0;
+      const pct = Number(job.progress) || 0;
+      if (pct >= 80) return 3;
+      if (pct >= 52) return 2;
+      if (pct >= 25) return 1;
+      return 0;
     }
 
     const CLIENT_BASE_CSS = `
@@ -332,7 +380,16 @@ window.__ModuleLoader__.load({
 .dbw .dbw-job-banner details{width:100%}
 .dbw .dbw-job-banner summary{cursor:pointer;font-size:12px;color:var(--w-muted);user-select:none}
 .dbw .dbw-job-progress{width:180px;flex:none}
-.dbw .dbw-job-pct{font-family:var(--dsh-font-mono,ui-monospace,monospace);font-variant-numeric:tabular-nums;font-size:12px;color:var(--w-muted)}
+.dbw .dbw-job-pct,.dbw .dbw-job-elapsed{font-family:var(--dsh-font-mono,ui-monospace,monospace);font-variant-numeric:tabular-nums;font-size:12px;color:var(--w-muted)}
+.dbw .dbw-job-elapsed{padding:1px 7px;border-radius:999px;background:var(--w-bg);border:var(--dsh-control-border-width,1px) solid var(--w-border)}
+.dbw .dbw-pipeline-steps{display:flex;align-items:center;gap:6px;flex-wrap:wrap;width:100%;padding-top:2px;font-size:11.5px}
+.dbw .dbw-pipe-step{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;border:var(--dsh-control-border-width,1px) solid var(--w-border);background:var(--w-bg);color:var(--w-muted);font-weight:600}
+.dbw .dbw-pipe-step[data-step-state="active"]{border-color:var(--w-accent);background:var(--w-selected);color:var(--w-accent)}
+.dbw .dbw-pipe-step[data-step-state="done"]{border-color:color-mix(in oklab,#10b981 45%,var(--w-border));background:color-mix(in oklab,#10b981 10%,var(--w-bg));color:#047857}
+[data-theme="dark"] .dbw .dbw-pipe-step[data-step-state="done"]{color:#6ee7b7}
+.dbw .dbw-pipe-step[data-step-state="stopped"]{border-color:color-mix(in oklab,#e11d48 45%,var(--w-border));background:color-mix(in oklab,#e11d48 10%,var(--w-bg));color:#be123c}
+.dbw .dbw-pipe-arrow{color:var(--w-muted);font-size:11px}
+.dbw .dbw-pipe-result{margin-inline-start:auto;font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:11px;font-weight:700;color:var(--w-text)}
 .dbw .dbw-export-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:12px 0}
 .dbw .dbw-export-choice{display:flex;flex-direction:column;align-items:flex-start;gap:3px;padding:10px 12px;border-radius:var(--dsw-radius-sm,8px);border:var(--dsh-control-border-width,1px) solid var(--w-border);background:var(--w-bg);color:var(--w-text);cursor:pointer;text-align:left}
 .dbw .dbw-export-choice[aria-pressed="true"]{border-color:var(--w-accent);background:var(--w-selected);box-shadow:inset 0 0 0 1px var(--w-accent)}
@@ -350,6 +407,10 @@ window.__ModuleLoader__.load({
   .dbw>.dsh-header .dsh-header-tabs{flex:0 1 auto;overflow:visible}
   .dbw>.dsh-header .w-tabs{flex-wrap:wrap;overflow:visible}
   .dbw>.dsh-header>.w-header-actions{margin-inline-start:auto;flex-wrap:wrap;gap:4px}
+}
+@container dsh-workbench (max-width:760px){
+  .dbw>.dsh-header>.w-header-actions{margin-inline-start:0;width:100%;justify-content:flex-start}
+  .dbw .dbw-job-progress{width:120px}
 }
 `;
 
@@ -382,6 +443,7 @@ window.__ModuleLoader__.load({
       const [exportOpen, setExportOpen] = useState(false);
       const [exportFormat, setExportFormat] = useState('glb');
       const [titleTouched, setTitleTouched] = useState(false);
+      const [, setElapsedTick] = useState(0);
 
       const busyRef = useRef(false);
       const fileRef = useRef(null);
@@ -468,6 +530,12 @@ window.__ModuleLoader__.load({
 
       useEffect(() => {
         if (!job || job.state !== 'running') return undefined;
+        const tick = setInterval(() => setElapsedTick(v => (v + 1) % 100000), 1000);
+        return () => clearInterval(tick);
+      }, [job?.id, job?.state]);
+
+      useEffect(() => {
+        if (!job || job.state !== 'running') return undefined;
         let live = true;
         let polling = false;
         let consecutiveFailures = 0;
@@ -485,13 +553,33 @@ window.__ModuleLoader__.load({
                 if (next.kind === 'preview_still') setStageView('still');
                 else if (next.kind === 'contact_sheet') setStageView('contact_sheet');
                 else if (next.kind === 'render_animation') setStageView('animation');
+                else if (next.kind === 'pipeline') {
+                  if (next.pipeline?.stoppedEarly) {
+                    setNotice(
+                      t('全流程在 QC-3D 体检阶段提前中止：', 'Pipeline stopped during QC-3D audit: ') +
+                        (next.pipeline.stopReason || t('检测到严重场景错误', 'critical scene error found')),
+                    );
+                  } else {
+                    if (next.pipeline?.primaryRenderId) setStageView('still');
+                    else if (next.pipeline?.contactSheetId) setStageView('contact_sheet');
+                    const count = Array.isArray(next.pipeline?.artifactIds) ? next.pipeline.artifactIds.length : 0;
+                    const qcTag = next.pipeline?.qc ? ' · QC-3D ' + next.pipeline.qc.score + '/' + next.pipeline.qc.grade : '';
+                    setNotice(
+                      t(
+                        `一键全流程完成（生成 ${count} 项产物${qcTag}）。`,
+                        `Production pipeline completed (${count} artifacts${qcTag}).`,
+                      ),
+                    );
+                  }
+                }
               }
             }
           } catch (e) {
             if (!live) return;
             consecutiveFailures += 1;
             const gone = e?.code === 'JOB_NOT_FOUND' || /不存在/.test(e?.message || '');
-            if (gone || consecutiveFailures >= 4) {
+            // Tolerate up to 3 consecutive transient network hiccups before surfacing poll error.
+            if (gone || consecutiveFailures > 3) {
               setError(e);
               setJob(null);
             }
@@ -589,8 +677,7 @@ window.__ModuleLoader__.load({
         return next;
       }
 
-      async function uploadAsset(event) {
-        const file = event.target.files?.[0];
+      async function uploadFile(file) {
         if (!file) return;
         await perform(async () => {
           if (!project || dirty) {
@@ -626,7 +713,31 @@ window.__ModuleLoader__.load({
           setProject(result.value);
           setNotice(t('素材副本已保存至工程目录，原文件不受影响。', 'Asset copy saved to the project; original file unchanged.'));
         });
+      }
+
+      async function uploadAsset(event) {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        await uploadFile(file);
         event.target.value = '';
+      }
+
+      async function duplicateProject(item) {
+        if (!item) return;
+        await perform(async () => {
+          const cloned = await api({ action: 'duplicate', id: item.id });
+          await refresh();
+          if (cloned?.id) {
+            setProject(cloned);
+            syncFields(fieldsOf(cloned));
+            setCreating(false);
+            setDirty(false);
+            setConflict(false);
+            setEditorTab('studio');
+            setStageView('stage');
+          }
+          setNotice(t('已复制 3D 工程：', 'Duplicated 3D project: ') + (cloned?.title || item.title));
+        });
       }
 
       async function startJob(action, extra = {}) {
@@ -658,6 +769,49 @@ window.__ModuleLoader__.load({
           const res = await api({ action: 'open_gui', id: project.id, revision: project.revision });
           if (res?.job?.id) setJob(res.job);
           setNotice(t('已请求在本地 Blender 桌面端打开工程。', 'Requested launching this project in desktop Blender.'));
+        });
+      }
+
+      async function saveCheckpoint(note = '') {
+        return perform(async () => {
+          if (!project) {
+            throw new Error(t('请先保存工程，再创建脚本快照。', 'Save your project before creating a script checkpoint.'));
+          }
+          const cleaned = String(note || '').trim().slice(0, 120);
+          const next = await api({
+            action: 'save_checkpoint',
+            id: project.id,
+            revision: project.revision,
+            ...(cleaned ? { note: cleaned } : {}),
+          });
+          if (next?.id) {
+            setProject(next);
+            if (!dirty) syncFields(fieldsOf(next));
+          }
+          await refresh();
+          setNotice(t('已保存当前脚本版本快照。', 'Script checkpoint saved.'));
+          return next;
+        });
+      }
+
+      async function restoreCheckpoint(checkpointId) {
+        return perform(async () => {
+          if (!project || !checkpointId) return undefined;
+          const next = await api({
+            action: 'restore_checkpoint',
+            id: project.id,
+            revision: project.revision,
+            checkpointId,
+          });
+          if (next?.id) {
+            setProject(next);
+            syncFields(fieldsOf(next));
+            setDirty(false);
+            setConflict(false);
+          }
+          await refresh();
+          setNotice(t('已回滚至所选脚本版本快照。', 'Restored selected script checkpoint.'));
+          return next;
         });
       }
 
@@ -729,7 +883,7 @@ window.__ModuleLoader__.load({
         : !colorValid
         ? t('主题色需为 #RRGGBB 格式。', 'Accent color must be #RRGGBB.')
         : !scriptValid
-        ? t('自定义脚本超出 64 KB 上限。', 'Custom script exceeds 64 KB.')
+        ? t('自定义脚本超出 256 KB 上限。', 'Custom script exceeds 256 KB.')
         : project && !dirty
         ? t('当前没有未保存修改。', 'No unsaved changes.')
         : null;
@@ -800,8 +954,8 @@ window.__ModuleLoader__.load({
         onChange: project || creating ? setEditorTab : setLibraryTab,
         items: project || creating
           ? [
-              { id: 'studio', icon: 'cube', 'data-tour': 'blender-tab-studio', label: t('3D 工作室', '3D Studio') },
-              { id: 'assets-exports', icon: 'box', label: t('素材与成品', 'Assets & Exports'), count: assetArtifactCount },
+              { id: 'studio', icon: 'cube', 'data-tour': 'blender-tab-studio', label: t('3D 工作室', 'Studio') },
+              { id: 'assets-exports', icon: 'box', label: t('素材与成品', 'Assets'), count: assetArtifactCount },
               { id: 'bridge-env', icon: 'plug', label: t('桥接与环境', 'Bridge & Env') },
             ]
           : [
@@ -839,7 +993,7 @@ window.__ModuleLoader__.load({
             tourSteps,
             tourStorageKey,
             onTourCopyPrompt: copyTourPrompt,
-            title: t('Blender 3D 工作室', 'Blender 3D Studio'),
+            title: t('Blender 3D 工作室', 'Blender Studio'),
             subtitle: t('交互式 3D 建模、四视角视觉质检、动画渲染与 Live Bridge 联动。', 'Interactive 3D staging, 4-view visual QC, animation rendering & Live Bridge.'),
             className: 'dbw blender-workbench',
             'aria-busy': busy ? 'true' : undefined,
@@ -871,6 +1025,9 @@ window.__ModuleLoader__.load({
       }
 
       const jobPct = Math.max(0, Math.min(100, Math.round(Number(job?.progress || 0))));
+      const jobStartMs = job?.startedAt ? Date.parse(job.startedAt) : NaN;
+      const jobEndMs = job?.finishedAt ? Date.parse(job.finishedAt) : Date.now();
+      const jobElapsedSec = Number.isFinite(jobStartMs) ? Math.max(0, Math.floor(((Number.isFinite(jobEndMs) ? jobEndMs : Date.now()) - jobStartMs) / 1000)) : null;
 
       return h(
         W.Page,
@@ -883,7 +1040,7 @@ window.__ModuleLoader__.load({
           tourSteps,
           tourStorageKey,
           onTourCopyPrompt: copyTourPrompt,
-          title: t('Blender 3D 工作室', 'Blender 3D Studio'),
+          title: t('Blender 3D 工作室', 'Blender Studio'),
           subtitle: t('交互式 3D 建模、四视角视觉质检、动画渲染与 Live Bridge 联动。', 'Interactive 3D staging, 4-view visual QC, animation rendering & Live Bridge.'),
           className: 'dbw blender-workbench',
           'aria-busy': running ? 'true' : undefined,
@@ -905,7 +1062,7 @@ window.__ModuleLoader__.load({
                     disabled: running,
                     onClick: () => navigate('new'),
                   },
-                  t('新建 3D 工程', 'New 3D Scene'),
+                  t('新建 3D 工程', 'New Scene'),
                 ),
             project || creating
               ? h(
@@ -939,7 +1096,7 @@ window.__ModuleLoader__.load({
                       : t('导出 GLB / FBX / OBJ / STL / .blend', 'Export GLB / FBX / OBJ / STL / .blend'),
                     onClick: () => setExportOpen(true),
                   },
-                  t('导出 3D', 'Export 3D'),
+                  t('导出 3D', 'Export'),
                 )
               : null,
           ),
@@ -1015,6 +1172,9 @@ window.__ModuleLoader__.load({
                 'aria-live': job.state === 'failed' ? 'assertive' : 'polite',
               },
               h('strong', null, jobKindLabel(job.kind, t) + ' · ' + (job.stage || job.state)),
+              jobElapsedSec !== null
+                ? h('span', { className: 'dbw-job-elapsed', 'data-job-elapsed': 'true', 'aria-label': t('任务已用时', 'Elapsed time') }, formatElapsed(jobElapsedSec))
+                : null,
               job.state === 'running'
                 ? h(
                     React.Fragment,
@@ -1068,6 +1228,43 @@ window.__ModuleLoader__.load({
                     t('收起', 'Dismiss'),
                   )
                 : null,
+              job.kind === 'pipeline'
+                ? (() => {
+                    const stepIdx = computePipelineStepIndex(job);
+                    const stopped = Boolean(job.pipeline?.stoppedEarly);
+                    const doneAll = job.state === 'done' && !stopped;
+                    const steps = [
+                      t('体检', 'QC-3D'),
+                      t('四视角', '4-View'),
+                      t('渲染', 'Render'),
+                      t('导出 GLB', 'GLB'),
+                    ];
+                    const items = [];
+                    steps.forEach((label, idx) => {
+                      if (idx > 0) items.push(h('span', { key: 'arr-' + idx, className: 'dbw-pipe-arrow', 'aria-hidden': 'true' }, '→'));
+                      const st = stopped
+                        ? idx === 0
+                          ? 'stopped'
+                          : 'pending'
+                        : doneAll || idx < stepIdx
+                        ? 'done'
+                        : idx === stepIdx && job.state === 'running'
+                        ? 'active'
+                        : 'pending';
+                      items.push(h('span', { key: 'st-' + idx, className: 'dbw-pipe-step', 'data-step-state': st }, label));
+                    });
+                    const summaryBits = [];
+                    if (job.pipeline?.qc) summaryBits.push('QC-3D ' + job.pipeline.qc.score + '/' + job.pipeline.qc.grade);
+                    if (Array.isArray(job.pipeline?.artifactIds) && job.pipeline.artifactIds.length > 0) {
+                      summaryBits.push(t(job.pipeline.artifactIds.length + ' 项产物', job.pipeline.artifactIds.length + ' artifacts'));
+                    }
+                    if (stopped) summaryBits.push(t('已提前中止', 'Stopped early'));
+                    if (summaryBits.length > 0) {
+                      items.push(h('span', { key: 'res', className: 'dbw-pipe-result' }, summaryBits.join(' · ')));
+                    }
+                    return h('div', { className: 'dbw-pipeline-steps', 'data-pipeline-steps': 'true' }, ...items);
+                  })()
+                : null,
               (Array.isArray(job.lines) && job.lines.length > 0) || job.scriptOutput
                 ? h(
                     'details',
@@ -1119,6 +1316,7 @@ window.__ModuleLoader__.load({
                     navigate(id);
                   },
                   onCreate: tplId => navigate(tplId ? { newTemplate: tplId } : 'new'),
+                  onDuplicate: duplicateProject,
                   onArchiveRequest: item => setArchiveTarget(item),
                   onRestore: item =>
                     perform(async () => {
@@ -1152,6 +1350,7 @@ window.__ModuleLoader__.load({
                 environment,
                 fileRef,
                 uploadAsset,
+                uploadFile,
                 perform,
                 setProject,
                 setNotice,
@@ -1193,6 +1392,10 @@ window.__ModuleLoader__.load({
                 colorValid,
                 scriptBytes,
                 scriptValid,
+                canSave,
+                onSave: () => perform(save),
+                onSaveCheckpoint: saveCheckpoint,
+                onRestoreCheckpoint: restoreCheckpoint,
                 startJob,
                 openInBlenderGui,
                 onOpenExport: () => setExportOpen(true),

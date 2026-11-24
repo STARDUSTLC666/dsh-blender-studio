@@ -76,7 +76,26 @@ const SAMPLE_PROJECT = {
       { name: 'Product_Body', type: 'MESH', location: [0, 0, 1.0], dimensions: [1.2, 1.2, 1.4], vertices: 128, polygons: 256 },
       { name: 'DSH_Camera', type: 'CAMERA', location: [4.2, -4.7, 3.0] },
     ],
+    qc: {
+      score: 96,
+      grade: 'A',
+      issues: [],
+    },
   },
+  checkpoints: [
+    {
+      id: '33333333-4444-4555-8666-777777777777',
+      revision: 1,
+      created: '2026-11-24T00:00:00Z',
+      note: 'Initial clean pass',
+      scriptMode: 'custom',
+      scriptLength: 26,
+      customScript: 'import bpy\nprint("cp-v1")\n',
+      engine: 'EEVEE',
+      samples: 32,
+      qcScore: 96,
+    },
+  ],
 }
 
 const SAMPLE_ARCHIVED_PROJECT = {
@@ -289,6 +308,86 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
     if (body.action === 'get') {
       return { ok: true, status: 200, json: async () => ({ ok: true, value: SAMPLE_PROJECT }) }
     }
+    if (body.action === 'duplicate') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          value: { ...SAMPLE_PROJECT, id: '44444444-5555-4666-8777-888888888888', title: SAMPLE_PROJECT.title + ' (副本)' },
+        }),
+      }
+    }
+    if (body.action === 'pipeline') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          value: {
+            id: '55555555-6666-4777-8888-999999999999',
+            kind: 'pipeline',
+            projectId: SAMPLE_PROJECT.id,
+            revision: SAMPLE_PROJECT.revision,
+            state: 'done',
+            stageCode: 'done',
+            stage: '全流程完成',
+            progress: 100,
+            lines: ['pipeline complete'],
+            pipeline: {
+              qc: SAMPLE_PROJECT.sceneSummary.qc,
+              artifactIds: [SAMPLE_PROJECT.artifacts[0].id],
+              primaryRenderId: SAMPLE_PROJECT.artifacts[0].id,
+            },
+            startedAt: '2026-11-24T00:00:00Z',
+            finishedAt: '2026-11-24T00:00:05Z',
+          },
+        }),
+      }
+    }
+    if (body.action === 'save_checkpoint') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          value: {
+            ...SAMPLE_PROJECT,
+            revision: SAMPLE_PROJECT.revision + 1,
+            checkpoints: [
+              ...SAMPLE_PROJECT.checkpoints,
+              {
+                id: '66666666-7777-4888-8999-aaaaaaaaaaaa',
+                revision: SAMPLE_PROJECT.revision,
+                created: '2026-11-24T00:01:00Z',
+                note: body.note || 'Manual snapshot',
+                scriptMode: 'custom',
+                scriptLength: 40,
+                customScript: 'import bpy\nprint("saved")\n',
+                engine: 'EEVEE',
+                samples: 32,
+                qcScore: 96,
+              },
+            ],
+          },
+        }),
+      }
+    }
+    if (body.action === 'restore_checkpoint') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          value: {
+            ...SAMPLE_PROJECT,
+            revision: SAMPLE_PROJECT.revision + 2,
+            scriptMode: 'custom',
+            customScript: 'import bpy\nprint("cp-v1")\n',
+          },
+        }),
+      }
+    }
     return {
       ok: true,
       status: 200,
@@ -299,8 +398,14 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
           archivedProjects: [SAMPLE_ARCHIVED_PROJECT],
           environment: SAMPLE_ENV,
           templates: [
-            { id: 'product-studio', zh: '产品棚拍展台', en: 'Product Studio', recommendedEngine: 'EEVEE' },
-            { id: 'logo-3d', zh: '3D 立体标题', en: '3D Logo & Title', recommendedEngine: 'EEVEE' },
+            { id: 'product-studio', zh: '产品影棚', en: 'Product Studio', recommendedEngine: 'EEVEE' },
+            { id: 'logo-3d', zh: '3D 立体徽标', en: '3D Logo & Title', recommendedEngine: 'EEVEE' },
+            { id: 'isometric-room', zh: '等距微缩房间', en: 'Isometric Room', recommendedEngine: 'CYCLES' },
+            { id: 'motion-data', zh: '动态 3D 数据柱', en: 'Motion Data Grid', recommendedEngine: 'EEVEE' },
+            { id: 'grease-pencil-2d', zh: '蜡笔 2D / 三渲二', en: 'Grease Pencil 2D', recommendedEngine: 'EEVEE' },
+            { id: 'blank-stage', zh: '空白校准舞台', en: 'Blank Studio Stage', recommendedEngine: 'EEVEE' },
+            { id: 'architectural-pavilion', zh: '参数化建筑展馆', en: 'Architectural Pavilion', recommendedEngine: 'CYCLES' },
+            { id: 'procedural-abstract', zh: '程序化几何雕塑', en: 'Procedural GeoNodes Art', recommendedEngine: 'EEVEE' },
           ],
           jobs: [],
         },
@@ -455,6 +560,24 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
     projectsTab.click()
   })
 
+  // 2c. v0.2.0 Duplicate quick action on active project card
+  const dupBtn = container.querySelector('button[data-action="duplicate"]')
+  assert.ok(dupBtn, 'Duplicate quick action button renders on active project card')
+  await act(async () => {
+    dupBtn.click()
+    await new Promise((r) => setTimeout(r, 30))
+  })
+  assert.ok(apiCalls.some((c) => c.body.action === 'duplicate' && c.body.id === SAMPLE_PROJECT.id), 'Duplicate invokes POST { action: "duplicate" }')
+
+  // Return to library if duplicate opened cloned project, then open SAMPLE_PROJECT
+  const backAfterDup = [...container.querySelectorAll('.dsh-header button')].find((b) => /返回|Back/.test(b.textContent || ''))
+  if (backAfterDup) {
+    await act(async () => {
+      backAfterDup.click()
+      await new Promise((r) => setTimeout(r, 20))
+    })
+  }
+
   // 3. Open the project from the library -> OP-DSH 3D Studio Console + Canvas 3D viewport
   const openBtn = container.querySelector('button.w-row-button')
   assert.ok(openBtn, 'project row button present in library')
@@ -467,6 +590,82 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
   const canvas = container.querySelector('canvas.bl-stage-canvas')
   assert.ok(canvas, 'Canvas 3D viewport renders in Studio mode')
   assert.ok(canvasDrawCalls > 10, `Canvas 3D renderer drew frame (${canvasDrawCalls} calls)`)
+
+  // 3b. v0.2.0: 8 templates, Quality Presets, Pipeline Bar, and Studio Keyboard Shortcuts
+  const tplGroup = container.querySelector('[aria-label="场景模板选择"], [aria-label="Template selection"]')
+  assert.ok(tplGroup, 'Template selection pill group renders')
+  const tplButtons = [...tplGroup.querySelectorAll('button.bl-tpl-pill')]
+  assert.equal(tplButtons.length, 8, 'all 8 templates render in Studio inspector')
+
+  // Trigger Pipeline button BEFORE making edits (pipeline requires clean saved state)
+  const pipelineBar = container.querySelector('[data-pipeline-bar="true"]')
+  assert.ok(pipelineBar, 'Production Pipeline bar renders in Studio')
+  const beautyTierBtn = pipelineBar.querySelector('button[data-pipeline-tier="beauty"]')
+  assert.ok(beautyTierBtn, 'Beauty Cycles pipeline tier selector renders')
+  await act(async () => {
+    beautyTierBtn.click()
+  })
+  const runPipelineBtn = [...pipelineBar.querySelectorAll('button')].find((b) => /一键全流程|Run Pipeline/.test(b.textContent || ''))
+  assert.ok(runPipelineBtn, 'Run Pipeline button renders')
+  await act(async () => {
+    runPipelineBtn.click()
+    await new Promise((r) => setTimeout(r, 30))
+  })
+  assert.ok(
+    apiCalls.some((c) => c.body.action === 'pipeline' && c.body.qualityTier === 'beauty'),
+    'Run Pipeline invokes POST { action: "pipeline", qualityTier: "beauty" }',
+  )
+
+  // Keyboard shortcuts: Space toggles turntable, '2' switches to Still, '1' back to Stage, 'R' resets orbit
+  assert.ok(container.querySelector('[data-shortcut-bar="true"]'), 'Keyboard shortcut hint bar renders')
+  const turntableBtn = container.querySelector('button.bl-turntable-btn')
+  assert.equal(turntableBtn?.getAttribute('data-playing'), 'false')
+  await act(async () => {
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: ' ', code: 'Space', bubbles: true }))
+  })
+  assert.equal(container.querySelector('button.bl-turntable-btn')?.getAttribute('data-playing'), 'true', 'Space toggles turntable playback')
+  await act(async () => {
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'r', bubbles: true }))
+  })
+  assert.equal(container.querySelector('button.bl-turntable-btn')?.getAttribute('data-playing'), 'false', 'R resets camera and stops turntable')
+  await act(async () => {
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: '2', bubbles: true }))
+  })
+  const viewTabsAfter2 = [...container.querySelectorAll('.bl-stage-view-tabs button')]
+  assert.equal(viewTabsAfter2[1]?.getAttribute('aria-selected'), 'true', 'Key 2 switches monitor to Still view')
+  await act(async () => {
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: '1', bubbles: true }))
+  })
+  assert.equal(
+    container.querySelectorAll('.bl-stage-view-tabs button')[0]?.getAttribute('aria-selected'),
+    'true',
+    'Key 1 switches monitor back to 3D Stage',
+  )
+
+  // Quality Presets (Draft / Studio / Cycles) + new template Canvas rendering
+  const qualityBar = container.querySelector('[data-quality-presets="true"]')
+  assert.ok(qualityBar, 'One-click Quality Presets bar renders')
+  const qualityBtns = [...qualityBar.querySelectorAll('button[data-quality-preset]')]
+  assert.equal(qualityBtns.length, 3, '3 Quality Presets (Draft / Studio / Cycles) render')
+  await act(async () => {
+    qualityBar.querySelector('button[data-quality-preset="cycles"]').click()
+  })
+  assert.match(container.querySelector('.bl-stage-readout')?.textContent || '', /CYCLES.*128 spp/)
+  const drawsBeforeNewTpl = canvasDrawCalls
+  await act(async () => {
+    tplButtons[6].click() // architectural-pavilion
+  })
+  await act(async () => {
+    tplButtons[7].click() // procedural-abstract
+  })
+  assert.ok(canvasDrawCalls > drawsBeforeNewTpl, 'new v0.2.0 templates draw Canvas 3D geometry')
+  // Discard dirty edits so Export modal / Assets & Exports stay clean
+  const discardBtn = [...container.querySelectorAll('button')].find((b) => /放弃未保存修改|Discard changes/.test(b.textContent || ''))
+  if (discardBtn) {
+    await act(async () => {
+      discardBtn.click()
+    })
+  }
 
   // 4. Studio / Form mode toggle
   const formToggle = container.querySelector('button[data-studio-mode="form"]')
@@ -481,7 +680,7 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
   })
   assert.ok(container.querySelector('[data-studio-console="true"]'), 'toggles back to Studio mode')
 
-  // 5. Scene Outliner & Script tabs in inspector
+  // 5. Scene Outliner (with QC-3D badge) & Script tabs (with DSH_KIT snippets & Checkpoints) in inspector
   const inspectorTabs = [...container.querySelectorAll('button.bl-inspector-tab')]
   assert.equal(inspectorTabs.length, 3, 'Inspector has Params, Outliner, Script tabs')
 
@@ -490,12 +689,56 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
   })
   assert.match(container.textContent || '', /Product_Body/)
   assert.match(container.textContent || '', /256/)
+  const qcBadge = container.querySelector('[data-qc-badge="true"]')
+  assert.ok(qcBadge, 'QC-3D badge renders in Scene Outliner')
+  assert.equal(qcBadge.getAttribute('data-qc-tone'), 'good')
+  assert.match(qcBadge.textContent || '', /QC-3D.*96\/100.*A/)
 
   await act(async () => {
     inspectorTabs[2].click() // Script
   })
   const scriptEditor = container.querySelector('textarea.bl-code-editor')
   assert.ok(scriptEditor, 'bpy script editor textarea renders')
+
+  // DSH_KIT quick-insert bar & Script Checkpoints
+  const kitBar = container.querySelector('[data-dsh-kit-bar="true"]')
+  assert.ok(kitBar, 'DSH_KIT quick-insert bar renders in Script tab')
+  const kitChips = [...kitBar.querySelectorAll('button[data-kit-snippet]')]
+  assert.equal(kitChips.length, 7, '7 DSH_KIT quick-insert snippet chips render')
+  await act(async () => {
+    kitChips[0].click()
+  })
+  assert.match(container.querySelector('textarea.bl-code-editor')?.value || '', /dsh_mat_/)
+
+  const cpCard = container.querySelector('[data-checkpoints="true"]')
+  assert.ok(cpCard, 'Script Checkpoints card renders')
+  assert.match(cpCard.textContent || '', /Initial clean pass/)
+  const saveCpBtn = cpCard.querySelector('button[data-action="save-checkpoint"]')
+  assert.ok(saveCpBtn, 'Save Snapshot button renders')
+  await act(async () => {
+    saveCpBtn.click()
+    await new Promise((r) => setTimeout(r, 20))
+  })
+  assert.ok(apiCalls.some((c) => c.body.action === 'save_checkpoint'), 'Save Snapshot invokes save_checkpoint')
+
+  const restoreCpBtn = cpCard.querySelector('button[data-action="restore-checkpoint"]')
+  assert.ok(restoreCpBtn, 'Restore checkpoint button renders')
+  await act(async () => {
+    restoreCpBtn.click()
+    await new Promise((r) => setTimeout(r, 20))
+  })
+  assert.ok(apiCalls.some((c) => c.body.action === 'restore_checkpoint'), 'Restore button invokes restore_checkpoint')
+
+  // Discard any script dirty state before opening Export modal
+  await act(async () => {
+    inspectorTabs[0].click()
+  })
+  const discardAfterScript = [...container.querySelectorAll('button')].find((b) => /放弃未保存修改|Discard changes/.test(b.textContent || ''))
+  if (discardAfterScript) {
+    await act(async () => {
+      discardAfterScript.click()
+    })
+  }
 
   // 6. Export modal opens and closes cleanly on Escape key
   const exportBtn = [...container.querySelectorAll('.bl-stage-actions button')].find((b) =>
@@ -525,6 +768,7 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
   })
   assert.match(container.textContent || '', /studio_soft\.hdr/)
   assert.match(container.textContent || '', /Poly Haven/)
+  assert.ok(container.querySelector('[data-dropzone="true"]'), 'Drag-and-Drop asset dropzone renders in Assets & Exports')
   assert.ok(container.querySelector('a[href*="kind=source"]'), 'Source ZIP backup link renders')
   const assetArtifactActions = [...container.querySelectorAll('.bl-ae-row .dsh-row-actions')]
   assert.ok(
@@ -548,4 +792,16 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
   assert.match(container.textContent || '', /Live Socket Bridge/)
   assert.ok(container.querySelector('a[href*="kind=addon"]'), 'dsh_blender_bridge.py download link renders')
   assert.match(container.textContent || '', /4\.3\.2/)
+
+  // 9. English (en) locale header renders cleanly
+  const enLocale = { getSnapshot: () => ({ active: 'en-US' }) }
+  await act(async () => {
+    root.render(React.createElement(mainSlot.component, { workbench: true, locale: enLocale }))
+    await new Promise((r) => setTimeout(r, 30))
+  })
+  const enHeaderText = container.querySelector('.dsh-header')?.textContent || ''
+  assert.match(enHeaderText, /Blender (3D )?Studio/)
+  assert.match(enHeaderText, /Studio|Projects/)
+  assert.match(enHeaderText, /Assets/)
+  assert.match(enHeaderText, /Bridge & Env/)
 })

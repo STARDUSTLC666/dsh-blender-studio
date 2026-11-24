@@ -1,7 +1,7 @@
 bl_info = {
     "name": "DSH Blender Bridge",
     "author": "stardustlc / DeepSeek Harness",
-    "version": (0, 1, 0),
+    "version": (0, 2, 0),
     "blender": (3, 6, 0),
     "location": "View3D > Sidebar (N) > DSH Bridge",
     "description": "Loopback-only JSON-RPC live bridge for DeepSeek Harness (dsh-blender-studio)",
@@ -32,6 +32,11 @@ try:
     import mathutils
 except ImportError:
     mathutils = None
+
+try:
+    from bpy_extras.object_utils import world_to_camera_view as _world_to_camera_view
+except Exception:
+    _world_to_camera_view = None
 
 
 BRIDGE_HOST = "127.0.0.1"
@@ -84,6 +89,192 @@ def _resolve_eevee_engine():
         except Exception:
             return "BLENDER_EEVEE_NEXT"
     return "BLENDER_EEVEE"
+
+
+_RENDERABLE_TYPES = ("MESH", "FONT", "CURVE", "SURFACE", "META", "GPENCIL", "GREASEPENCIL", "VOLUME")
+_STAGE_NAME_PREFIXES = (
+    "Studio_",
+    "Backdrop_",
+    "Softbox_",
+    "Cyclorama",
+    "Logo_Floor",
+    "Stage_Floor",
+    "GP_Paper_Card",
+    "Pavilion_Ground",
+    "Pavilion_Water",
+)
+
+
+def _is_stage_backdrop(obj):
+    name = str(getattr(obj, "name", ""))
+    for prefix in _STAGE_NAME_PREFIXES:
+        if name.startswith(prefix):
+            return True
+    try:
+        col_names = {col.name for col in obj.users_collection}
+        if "DSH_Stage" in col_names and "DSH_Hero" not in col_names:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _has_world_lighting(scene):
+    world = getattr(scene, "world", None)
+    if world is None:
+        return False
+    node_tree = getattr(world, "node_tree", None)
+    if node_tree is not None:
+        try:
+            for node in node_tree.nodes:
+                if node.type == "TEX_ENVIRONMENT" and getattr(node, "image", None) is not None:
+                    return True
+                if node.type == "BACKGROUND":
+                    strength = node.inputs.get("Strength")
+                    if strength is not None and float(strength.default_value) >= 0.4:
+                        col = node.inputs.get("Color")
+                        if col is not None:
+                            rgba = col.default_value
+                            if (float(rgba[0]) + float(rgba[1]) + float(rgba[2])) / 3.0 >= 0.25:
+                                return True
+        except Exception:
+            pass
+    return False
+
+
+def _is_object_in_camera_frame(scene, cam, obj):
+    if _world_to_camera_view is None or cam is None:
+        return True
+    points = []
+    try:
+        mat = obj.matrix_world
+        if mathutils is not None and hasattr(obj, "bound_box") and obj.bound_box:
+            corners = [mat @ mathutils.Vector(corner) for corner in obj.bound_box]
+            points.extend(corners)
+            cx = sum(p.x for p in corners) / len(corners)
+            cy = sum(p.y for p in corners) / len(corners)
+            cz = sum(p.z for p in corners) / len(corners)
+            points.append(mathutils.Vector((cx, cy, cz)))
+        else:
+            points.append(mat.translation)
+    except Exception:
+        return True
+
+    for pt in points:
+        try:
+            co = _world_to_camera_view(scene, cam, pt)
+            if -0.05 <= co.x <= 1.05 and -0.05 <= co.y <= 1.05 and co.z > 0.0:
+                return True
+        except Exception:
+            return True
+    return False
+
+
+def _evaluate_scene_qc(scene, all_objs, light_count, camera_count, total_polygons):
+    score = 100
+    issues = []
+
+    renderable = [obj for obj in all_objs if str(obj.type) in _RENDERABLE_TYPES]
+    hero_objs = [obj for obj in renderable if not _is_stage_backdrop(obj)] or renderable
+
+    if not renderable:
+        issues.append({
+            "code": "EMPTY_SCENE",
+            "severity": "error",
+            "message": "Scene has no renderable geometry objects.",
+        })
+        score -= 50
+
+    if scene.camera is None:
+        if camera_count == 0:
+            issues.append({
+                "code": "NO_CAMERA",
+                "severity": "error",
+                "message": "Scene has no camera object.",
+            })
+            score -= 25
+        else:
+            issues.append({
+                "code": "NO_CAMERA",
+                "severity": "warn",
+                "message": "No active camera is assigned to scene.camera.",
+            })
+            score -= 15
+
+    if light_count == 0 and not _has_world_lighting(scene):
+        issues.append({
+            "code": "NO_LIGHTS",
+            "severity": "warn",
+            "message": "Scene has no lights and no bright world/HDRI illumination.",
+        })
+        score -= 15
+
+    unassigned_penalties = 0
+    unassigned_reported = 0
+    for obj in hero_objs:
+        if str(obj.type) not in ("MESH", "FONT", "CURVE"):
+            continue
+        has_mat = False
+        try:
+            for slot in obj.material_slots:
+                if slot.material is not None:
+                    has_mat = True
+                    break
+        except Exception:
+            has_mat = True
+        if not has_mat:
+            if unassigned_reported < 5:
+                issues.append({
+                    "code": "UNASSIGNED_MATERIAL",
+                    "severity": "warn",
+                    "message": "Hero object has no assigned material.",
+                    "object": obj.name,
+                })
+                unassigned_reported += 1
+            if unassigned_penalties < 24:
+                score -= 8
+                unassigned_penalties += 8
+
+    engine_name = str(scene.render.engine)
+    if total_polygons > 500000:
+        is_eevee = "EEVEE" in engine_name.upper()
+        issues.append({
+            "code": "HIGH_POLYCOUNT",
+            "severity": "warn" if is_eevee else "info",
+            "message": "Scene polygon count ({}) exceeds 500,000.".format(total_polygons),
+        })
+        score -= 10 if is_eevee else 5
+
+    if scene.camera is not None and hero_objs:
+        any_visible = False
+        for obj in hero_objs:
+            if _is_object_in_camera_frame(scene, scene.camera, obj):
+                any_visible = True
+                break
+        if not any_visible:
+            issues.append({
+                "code": "OFF_FRAME_HERO",
+                "severity": "warn",
+                "message": "Hero geometry appears completely outside the active camera frame.",
+                "object": hero_objs[0].name,
+            })
+            score -= 15
+
+    score = max(0, min(100, int(score)))
+    if score >= 85:
+        grade = "A"
+    elif score >= 70:
+        grade = "B"
+    elif score >= 50:
+        grade = "C"
+    else:
+        grade = "D"
+
+    return {
+        "score": score,
+        "grade": grade,
+        "issues": issues,
+    }
 
 
 def _collect_scene_summary():
@@ -158,6 +349,7 @@ def _collect_scene_summary():
         "materials": materials,
         "collections": collections,
         "objects": objects,
+        "qc": _evaluate_scene_qc(scene, all_objs, light_count, camera_count, total_polygons),
     }
     if scene.camera is not None:
         summary["activeCamera"] = scene.camera.name

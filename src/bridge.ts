@@ -409,7 +409,7 @@ const SCRIPT_SAFETY_RULES: readonly SafetyRule[] = [
   {
     rule: 'os-shell',
     pattern:
-      /\bos\s*\.\s*(?:system|popen|execl|execle|execlp|execlpe|execv|execve|execvp|execvpe|spawnl|spawnle|spawnlp|spawnlpe|spawnv|spawnve|spawnvp|spawnvpe|fork|kill|remove|unlink|rmdir|removedirs)\s*\(/,
+      /(?<![.\w])os\s*\.\s*(?:system|popen|execl|execle|execlp|execlpe|execv|execve|execvp|execvpe|spawnl|spawnle|spawnlp|spawnlpe|spawnv|spawnve|spawnvp|spawnvpe|fork|kill|remove|unlink|rmdir|removedirs)\s*\(/,
     detail: '检测到高危系统调用（os.system / os.popen / os.exec / os.remove 等）。',
   },
   {
@@ -420,58 +420,62 @@ const SCRIPT_SAFETY_RULES: readonly SafetyRule[] = [
   },
   {
     rule: 'subprocess',
-    pattern: /\b(?:import\s+subprocess\b|from\s+subprocess\s+import\b|subprocess\s*\.)/,
+    pattern: /(?:\bimport\s+(?:[\w.]+(?:\s+as\s+\w+)?\s*,\s*)*subprocess\b|\bfrom\s+subprocess\s+import\b|(?<![.\w])subprocess\s*\.)/,
     detail: '检测到 subprocess 外部进程调用。',
   },
   {
     rule: 'shutil-rmtree',
-    pattern: /\b(?:shutil\s*\.\s*rmtree\s*\(|from\s+shutil\s+import\b[^#\n]*\brmtree\b)/,
+    pattern: /(?:(?<![.\w])shutil\s*\.\s*rmtree\s*\(|\bfrom\s+shutil\s+import\b[^#\n]*\brmtree\b)/,
     detail: '检测到递归目录删除调用（shutil.rmtree）。',
   },
   {
     rule: 'ctypes',
-    pattern: /\b(?:import\s+ctypes\b|from\s+ctypes\s+import\b|ctypes\s*\.)/,
+    pattern: /(?:\bimport\s+(?:[\w.]+(?:\s+as\s+\w+)?\s*,\s*)*ctypes\b|\bfrom\s+ctypes\s+import\b|(?<![.\w])ctypes\s*\.)/,
     detail: '检测到原生内存/库加载模块（ctypes）。',
   },
   {
     rule: 'network-socket',
-    pattern: /\b(?:import\s+socket\b|from\s+socket\s+import\b|socket\s*\.)/,
+    pattern:
+      /(?:\bimport\s+(?:[\w.]+(?:\s+as\s+\w+)?\s*,\s*)*socket\b|\bfrom\s+socket\s+import\b|(?<![.\w])socket\s*\.\s*(?:socket|create_connection|create_server|fromfd|socketpair|getaddrinfo|gethost\w*|getfqdn|inet_\w*|AF_INET|AF_INET6|SOCK_STREAM|SOCK_DGRAM)\b)/,
     detail: '检测到原始网络套接字调用（socket）。',
   },
   {
     rule: 'network-urllib',
-    pattern: /\b(?:import\s+urllib\b|from\s+urllib(?:\.\w+)?\s+import\b|urllib\s*\.)/,
+    pattern: /(?:\bimport\s+(?:[\w.]+(?:\s+as\s+\w+)?\s*,\s*)*urllib(?:\.\w+)?\b|\bfrom\s+urllib(?:\.\w+)?\s+import\b|(?<![.\w])urllib\s*\.)/,
     detail: '检测到外部网络请求模块（urllib）。',
   },
   {
     rule: 'network-requests',
-    pattern: /\b(?:import\s+(?:requests|httpx|aiohttp)\b|from\s+(?:requests|httpx|aiohttp)\s+import\b|(?:requests|httpx|aiohttp)\s*\.)/,
+    pattern:
+      /(?:\bimport\s+(?:[\w.]+(?:\s+as\s+\w+)?\s*,\s*)*(?:requests|httpx|aiohttp)\b|\bfrom\s+(?:requests|httpx|aiohttp)\s+import\b|(?<![.\w])(?:requests|httpx|aiohttp)\s*\.)/,
     detail: '检测到外部 HTTP 客户端模块（requests / httpx / aiohttp）。',
   },
   {
     rule: 'network-http-client',
-    pattern: /\b(?:import\s+http\.(?:client|server)\b|from\s+http\.(?:client|server)\s+import\b|http\s*\.\s*(?:client|server)\b)/,
+    pattern:
+      /(?:\bimport\s+(?:[\w.]+(?:\s+as\s+\w+)?\s*,\s*)*http\.(?:client|server)\b|\bfrom\s+http\.(?:client|server)\s+import\b|(?<![.\w])http\s*\.\s*(?:client|server)\b)/,
     detail: '检测到 Python 内置 HTTP 客户端/服务端（http.client / http.server）。',
   },
   {
     rule: 'dynamic-exec',
-    pattern: /\b(?:eval|exec|__import__)\s*\(/,
+    pattern: /(?<![.\w])(?:eval|exec|__import__)\s*\(/,
     detail: '检测到动态代码执行或动态导入（eval / exec / __import__）。',
   },
   {
     rule: 'dynamic-importlib',
-    pattern: /\b(?:import\s+importlib\b|from\s+importlib(?:\.\w+)?\s+import\b|importlib\s*\.\s*import_module\s*\()/,
+    pattern:
+      /(?:\bimport\s+(?:[\w.]+(?:\s+as\s+\w+)?\s*,\s*)*importlib\b|\bfrom\s+importlib(?:\.\w+)?\s+import\b|(?<![.\w])importlib\s*\.\s*import_module\s*\()/,
     detail: '检测到动态模块加载（importlib）。',
   },
   {
     rule: 'path-traversal',
-    pattern: /\b(?:open|Path|os\.path\.\w+|shutil\.\w+)\s*\([^#\n]*(?:\.\.[\\/]|['"]\.\.['"])/,
+    pattern: /(?<![.\w])(?:open|Path|os\.path\.\w+|shutil\.\w+)\s*\([^#\n]*(?:\.\.[\\/]|['"]\.\.['"])/,
     detail: '检测到包含上级目录穿越（..）的文件路径访问。',
   },
   {
     rule: 'external-file-write',
     pattern:
-      /\bopen\s*\(\s*[rRfFbBuU]*['"](?:\/|[A-Za-z]:[\\/]|\\\\)[^'"]*['"]\s*,\s*['"][^'"]*[wax+][^'"]*['"]/,
+      /(?<![.\w])open\s*\(\s*[rRfFbBuU]*['"](?:\/|[A-Za-z]:[\\/]|\\\\)[^'"]*['"]\s*,\s*['"][^'"]*[wax+][^'"]*['"]/,
     detail: '检测到直接向项目外的绝对路径执行文件写入。',
   },
 ]
@@ -516,8 +520,29 @@ export function checkScriptSafety(code: string): ScriptSafetyResult {
   }
   const findings: ScriptSafetyFinding[] = []
   const lines = code.split(/\r\n|\n|\r/)
+  let activeDocstring: '"""' | "'''" | null = null
 
   for (let i = 0; i < lines.length; i++) {
+    const rawTrimmed = lines[i].trim()
+    if (!rawTrimmed) continue
+
+    // Skip standalone triple-quoted docstring blocks so documentation prose
+    // never triggers false positives on legitimate bpy / bmesh scripts.
+    if (activeDocstring) {
+      if (rawTrimmed.includes(activeDocstring)) {
+        activeDocstring = null
+      }
+      continue
+    }
+    if (rawTrimmed.startsWith('"""') || rawTrimmed.startsWith("'''")) {
+      const delim: '"""' | "'''" = rawTrimmed.startsWith('"""') ? '"""' : "'''"
+      const rest = rawTrimmed.slice(3)
+      if (!rest.includes(delim)) {
+        activeDocstring = delim
+      }
+      continue
+    }
+
     const stripped = stripPythonComment(lines[i]).trim()
     if (!stripped) continue
     for (const { rule, pattern, detail } of SCRIPT_SAFETY_RULES) {

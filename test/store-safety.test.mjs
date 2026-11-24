@@ -6,7 +6,16 @@ import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { unzipSync } from 'fflate'
 import { BlenderStore, validateAssetUpload } from '../lib/store.js'
-import { defaultProjectFields, validateProjectFields, MAX_ACTIVE_PROJECTS, MAX_PROJECT_ASSETS } from '../lib/types.js'
+import {
+  defaultProjectFields,
+  validateProjectFields,
+  MAX_ACTIVE_PROJECTS,
+  MAX_PROJECT_ASSETS,
+  MAX_PROJECT_ARTIFACTS,
+  MAX_CUSTOM_SCRIPT_BYTES,
+  MAX_PROJECT_JSON_BYTES,
+  MAX_SCRIPT_CHECKPOINTS,
+} from '../lib/types.js'
 
 const testRoot = dirname(fileURLToPath(import.meta.url))
 
@@ -93,10 +102,19 @@ test('BlenderStore CRUD, optimistic revision conflict (409), and field validatio
     [{ ...baseFields, frameStart: 10, frameEnd: 5 }, 'FRAMES_INVALID'],
     [{ ...baseFields, frameStart: 1, frameEnd: 700 }, 'FRAMES_INVALID'],
     [{ ...baseFields, accentColor: 'red' }, 'COLOR_INVALID'],
-    [{ ...baseFields, customScript: 'a'.repeat(70 * 1024) }, 'SCRIPT_TOO_LARGE'],
+    [{ ...baseFields, customScript: 'a'.repeat(MAX_CUSTOM_SCRIPT_BYTES + 1024) }, 'SCRIPT_TOO_LARGE'],
   ]) {
     assert.throws(() => validateProjectFields(bad), (err) => err.code === code && err.status === 400, code)
   }
+
+  // v0.2.0 raised script/project/checkpoint/artifact limits
+  assert.equal(MAX_CUSTOM_SCRIPT_BYTES, 256 * 1024)
+  assert.ok(MAX_PROJECT_JSON_BYTES >= 1024 * 1024, 'MAX_PROJECT_JSON_BYTES must be >= 1 MB')
+  assert.equal(MAX_PROJECT_ARTIFACTS, 12)
+  assert.equal(MAX_SCRIPT_CHECKPOINTS, 10)
+  // 200 KB custom script must be accepted cleanly
+  const bigScript = '# ' + 'x'.repeat(200 * 1024)
+  assert.equal(validateProjectFields({ ...baseFields, scriptMode: 'custom', customScript: bigScript }).customScript.length, bigScript.length)
 })
 
 test('BlenderStore archive/restore preserves assets & runs and enforces max 30 active slot limit', async (t) => {
@@ -251,10 +269,12 @@ test('BlenderStore validates magic bytes for all supported 3D/image/HDRI formats
   await assert.rejects(stat(victimFile), /ENOENT/)
 })
 
-test('BlenderStore buildSourceZip produces valid archive with project.json, scene.py, README.txt, and assets', async (t) => {
+test('BlenderStore buildSourceZip produces valid archive with project.json, scene.py, README.txt, assets, and Store-mode for precompressed media', async (t) => {
   const { store } = await makeStore(t)
   let project = await store.create(baseFields)
   project = await store.upload(project.id, project.revision, 'studio.hdr', HDR_BYTES)
+  project = await store.upload(project.id, project.revision, 'albedo.png', PNG_BYTES)
+  project = await store.upload(project.id, project.revision, 'hero.glb', GLB_BYTES)
 
   const zipBytes = await store.buildSourceZip(project.id)
   assert.ok(zipBytes.byteLength > 100)
@@ -263,9 +283,29 @@ test('BlenderStore buildSourceZip produces valid archive with project.json, scen
   assert.ok(files['project.json'], 'ZIP must include project.json')
   assert.ok(files['scene.py'], 'ZIP must include scene.py')
   assert.ok(files['README.txt'], 'ZIP must include README.txt')
-  const assetEntry = `assets/${project.assets[0].file}`
-  assert.ok(files[assetEntry], `ZIP must include ${assetEntry}`)
-  assert.deepEqual(Buffer.from(files[assetEntry]), HDR_BYTES)
+  for (const asset of project.assets) {
+    const assetEntry = `assets/${asset.file}`
+    assert.ok(files[assetEntry], `ZIP must include ${assetEntry}`)
+  }
+  assert.deepEqual(Buffer.from(files[`assets/${project.assets[0].file}`]), HDR_BYTES)
+  assert.deepEqual(Buffer.from(files[`assets/${project.assets[1].file}`]), PNG_BYTES)
+  assert.deepEqual(Buffer.from(files[`assets/${project.assets[2].file}`]), GLB_BYTES)
+
+  // Verify precompressed .png and .glb entries use ZIP Store mode (compression method === 0)
+  const buf = Buffer.from(zipBytes)
+  const methodsByName = new Map()
+  for (let off = 0; off + 30 < buf.length; ) {
+    if (buf.readUInt32LE(off) !== 0x04034b50) break
+    const method = buf.readUInt16LE(off + 8)
+    const compSize = buf.readUInt32LE(off + 18)
+    const nameLen = buf.readUInt16LE(off + 26)
+    const extraLen = buf.readUInt16LE(off + 28)
+    const entryName = buf.subarray(off + 30, off + 30 + nameLen).toString('utf8')
+    methodsByName.set(entryName, method)
+    off += 30 + nameLen + extraLen + compSize
+  }
+  assert.equal(methodsByName.get(`assets/${project.assets[1].file}`), 0, '.png asset must use Store mode (level: 0)')
+  assert.equal(methodsByName.get(`assets/${project.assets[2].file}`), 0, '.glb asset must use Store mode (level: 0)')
 
   const parsedJson = JSON.parse(Buffer.from(files['project.json']).toString('utf8'))
   assert.equal(parsedJson.id, project.id)
@@ -274,4 +314,104 @@ test('BlenderStore buildSourceZip produces valid archive with project.json, scen
   const scenePy = Buffer.from(files['scene.py']).toString('utf8')
   assert.match(scenePy, /import bpy/)
   assert.match(scenePy, /dsh_build_template/)
+})
+
+test('BlenderStore v0.2.0: duplicate(), script checkpoints, upload rollback, and pruneOldRuns retention', async (t) => {
+  const { store } = await makeStore(t)
+
+  // 1. Duplicate clones fields & deep-copies assets with new UUIDs without mutating original
+  let orig = await store.create({ ...baseFields, template: 'architectural-pavilion', title: 'Pavilion Original' })
+  orig = await store.upload(orig.id, orig.revision, 'sky.hdr', HDR_BYTES)
+  orig = await store.upload(orig.id, orig.revision, 'hero.glb', GLB_BYTES)
+
+  const cloned = await store.duplicate(orig.id, 'Pavilion Clone')
+  assert.notEqual(cloned.id, orig.id)
+  assert.equal(cloned.revision, 1)
+  assert.equal(cloned.title, 'Pavilion Clone')
+  assert.equal(cloned.template, 'architectural-pavilion')
+  assert.equal(cloned.assets.length, 2)
+  assert.notEqual(cloned.assets[0].id, orig.assets[0].id)
+  assert.deepEqual(await store.assetBytes(cloned.id, cloned.assets[0]), HDR_BYTES)
+  assert.deepEqual(await store.assetBytes(cloned.id, cloned.assets[1]), GLB_BYTES)
+  assert.deepEqual(await store.assetBytes(orig.id, orig.assets[0]), HDR_BYTES)
+
+  // 2. Script checkpoints: auto-capture on customScript update, manual saveCheckpoint, restoreCheckpoint + 409/404 guards
+  let p = await store.update(cloned.id, cloned.revision, {
+    scriptMode: 'custom',
+    customScript: 'import bpy\nprint("v1")\n',
+  })
+  const p2 = await store.update(p.id, p.revision, {
+    customScript: 'import bpy\nprint("v2")\n',
+  })
+  assert.ok((p2.checkpoints?.length ?? 0) >= 1, 'changing customScript must auto-capture previous snapshot')
+  assert.match(p2.checkpoints[0].customScript, /print\("v1"\)/)
+
+  const pSaved = await store.saveCheckpoint(p2.id, p2.revision, 'Before bevel tweak')
+  assert.ok(pSaved.checkpoints.some((c) => c.note === 'Before bevel tweak' && c.customScript.includes('v2')))
+
+  const v1Checkpoint = pSaved.checkpoints.find((c) => c.customScript.includes('v1'))
+  assert.ok(v1Checkpoint)
+
+  // Stale revision rejected with 409 CONFLICT; unknown checkpoint rejected with 404 CHECKPOINT_NOT_FOUND
+  await assert.rejects(
+    store.restoreCheckpoint(pSaved.id, pSaved.revision - 1, v1Checkpoint.id),
+    (err) => err.code === 'CONFLICT' && err.status === 409,
+  )
+  await assert.rejects(
+    store.restoreCheckpoint(pSaved.id, pSaved.revision, randomUUID()),
+    (err) => err.code === 'CHECKPOINT_NOT_FOUND' && err.status === 404,
+  )
+
+  const restored = await store.restoreCheckpoint(pSaved.id, pSaved.revision, v1Checkpoint.id)
+  assert.match(restored.customScript, /print\("v1"\)/)
+  assert.ok(restored.checkpoints.length <= MAX_SCRIPT_CHECKPOINTS)
+
+  // Push >12 checkpoints -> capped at MAX_SCRIPT_CHECKPOINTS (10)
+  let cur = restored
+  for (let i = 0; i < 12; i++) {
+    cur = await store.update(cur.id, cur.revision, { customScript: `import bpy\nprint("iter-${i}")\n` })
+  }
+  assert.equal(cur.checkpoints.length, MAX_SCRIPT_CHECKPOINTS)
+
+  // 3. Upload rollback: stale revision fails cleanly and leaves ZERO orphan files in assets/
+  const assetsDir = join(await store.path(cur.id), 'assets')
+  const filesBefore = (await readdir(assetsDir)).sort()
+  await assert.rejects(
+    store.addAsset(cur.id, cur.revision - 1, 'should-rollback.png', PNG_BYTES),
+    (err) => err.code === 'CONFLICT' && err.status === 409,
+  )
+  assert.deepEqual((await readdir(assetsDir)).sort(), filesBefore, 'failed upload must roll back orphan file on disk')
+
+  // 4. Artifact cap (12) + pruneOldRuns deletes orphaned run folders outside retained set
+  const projDir = await store.path(cur.id)
+  const orphanRunId = randomUUID()
+  await mkdir(join(projDir, 'runs', orphanRunId), { recursive: true })
+  await writeFile(join(projDir, 'runs', orphanRunId, 'stale.png'), PNG_BYTES)
+
+  const runIds = []
+  let afterArt = cur
+  for (let i = 0; i < MAX_PROJECT_ARTIFACTS + 3; i++) {
+    const artId = randomUUID()
+    runIds.push(artId)
+    const rDir = await store.runDir(cur.id, artId)
+    await writeFile(join(rDir, 'render.png'), PNG_BYTES)
+    afterArt = await store.registerArtifact(cur.id, {
+      id: artId,
+      kind: 'still',
+      revision: cur.revision,
+      file: 'render.png',
+      mime: 'image/png',
+      size: PNG_BYTES.length,
+      engine: 'EEVEE',
+      samples: 16,
+      width: 1280,
+      height: 720,
+      durationMs: 50,
+      created: new Date(Date.now() + i * 1000).toISOString(),
+    })
+  }
+  assert.equal(afterArt.artifacts.length, MAX_PROJECT_ARTIFACTS, 'artifacts capped at 12')
+  await assert.rejects(stat(join(projDir, 'runs', orphanRunId)), /ENOENT/, 'orphan run dir pruned')
+  await assert.rejects(stat(join(projDir, 'runs', runIds[0])), /ENOENT/, 'evicted oldest artifact run dir pruned')
+  await stat(join(projDir, 'runs', runIds.at(-1), 'render.png'))
 })

@@ -1,4 +1,4 @@
-export type BlenderTemplateId = 'product-studio' | 'logo-3d' | 'isometric-room' | 'motion-data' | 'grease-pencil-2d' | 'blank-stage';
+export type BlenderTemplateId = 'product-studio' | 'logo-3d' | 'isometric-room' | 'motion-data' | 'grease-pencil-2d' | 'blank-stage' | 'architectural-pavilion' | 'procedural-abstract';
 export type BlenderRenderEngine = 'EEVEE' | 'CYCLES' | 'WORKBENCH';
 export type BlenderAspect = 'landscape' | 'portrait' | 'square';
 export type BlenderCameraPreset = 'three_quarter' | 'front' | 'isometric' | 'top' | 'closeup' | 'turntable';
@@ -11,7 +11,36 @@ export type BlenderExportFormat = 'glb' | 'fbx' | 'obj' | 'stl' | 'blend';
 export type BlenderFps = 24 | 30 | 60;
 export type BlenderResolutionScale = 50 | 100 | 150 | 200;
 export type PolyHavenAssetType = 'hdris' | 'textures' | 'models';
-export type BlenderJobKind = 'preview_still' | 'contact_sheet' | 'render_animation' | 'export_model' | 'inspect_scene' | 'run_script' | 'build_blend';
+export type BlenderQualityTier = 'draft' | 'studio' | 'beauty';
+export type BlenderJobKind = 'preview_still' | 'contact_sheet' | 'render_animation' | 'export_model' | 'inspect_scene' | 'run_script' | 'build_blend' | 'pipeline';
+export interface BlenderPipelineOptions {
+    includeContactSheet?: boolean;
+    renderKind?: 'still' | 'animation';
+    exportFormat?: BlenderExportFormat | 'none';
+    qualityTier?: BlenderQualityTier;
+    abortOnQcError?: boolean;
+}
+export interface BlenderPipelineSummary {
+    qc?: BlenderSceneQcReport;
+    artifactIds: string[];
+    contactSheetId?: string;
+    primaryRenderId?: string;
+    modelArtifactId?: string;
+    stoppedEarly?: boolean;
+    stopReason?: string;
+}
+export interface BlenderScriptCheckpoint {
+    id: string;
+    revision: number;
+    created: string;
+    note: string;
+    scriptMode: BlenderScriptMode;
+    scriptLength: number;
+    customScript: string;
+    engine: BlenderRenderEngine;
+    samples: number;
+    qcScore?: number;
+}
 export interface BlenderProjectFields {
     template: BlenderTemplateId;
     title: string;
@@ -52,6 +81,19 @@ export interface BlenderSceneObjectSummary {
     vertices?: number;
     polygons?: number;
 }
+export type BlenderSceneQcSeverity = 'error' | 'warn' | 'info';
+export type BlenderSceneQcGrade = 'A' | 'B' | 'C' | 'D';
+export interface BlenderSceneQcIssue {
+    code: string;
+    severity: BlenderSceneQcSeverity;
+    message: string;
+    object?: string;
+}
+export interface BlenderSceneQcReport {
+    score: number;
+    grade: BlenderSceneQcGrade;
+    issues: BlenderSceneQcIssue[];
+}
 export interface BlenderSceneSummary {
     capturedAt: string;
     blenderVersion: string;
@@ -65,6 +107,7 @@ export interface BlenderSceneSummary {
     materials: string[];
     collections: string[];
     objects: BlenderSceneObjectSummary[];
+    qc?: BlenderSceneQcReport;
 }
 export interface BlenderArtifact {
     id: string;
@@ -89,6 +132,7 @@ export interface BlenderProject extends BlenderProjectFields {
     assets: BlenderAsset[];
     artifacts: BlenderArtifact[];
     sceneSummary?: BlenderSceneSummary;
+    checkpoints?: BlenderScriptCheckpoint[];
 }
 export interface BlenderExecutableInfo {
     path: string;
@@ -141,6 +185,7 @@ export interface BlenderJob {
     artifactKind?: BlenderArtifactKind;
     sceneSummary?: BlenderSceneSummary;
     scriptOutput?: string;
+    pipeline?: BlenderPipelineSummary;
     startedAt: string;
     finishedAt?: string;
 }
@@ -176,7 +221,7 @@ export interface PolyHavenAssetItem {
     thumbnailUrl: string;
     maxResolution?: [number, number];
 }
-export type BlenderErrorCode = 'ID_INVALID' | 'BAD_REQUEST' | 'BAD_ACTION' | 'TITLE_INVALID' | 'DESCRIPTION_TOO_LONG' | 'HEADLINE_TOO_LONG' | 'SAMPLES_INVALID' | 'FRAMES_INVALID' | 'COLOR_INVALID' | 'SCRIPT_TOO_LARGE' | 'SCRIPT_UNSAFE' | 'TEMPLATE_INVALID' | 'EXPORT_FORMAT_INVALID' | 'CONFLICT' | 'JOB_CONFLICT' | 'PROJECT_LIMIT' | 'PROJECT_EXISTS' | 'PROJECT_NOT_FOUND' | 'ASSET_NOT_FOUND' | 'ASSET_CHANGED' | 'ARTIFACT_NOT_FOUND' | 'JOB_NOT_FOUND' | 'JOB_LIMIT' | 'JOB_CANCELLED' | 'ENV_NOT_READY' | 'BLENDER_PATH_INVALID' | 'BLENDER_PROBE_FAILED' | 'BRIDGE_UNREACHABLE' | 'BRIDGE_AUTH_FAILED' | 'BRIDGE_TIMEOUT' | 'BRIDGE_PROTOCOL_ERROR' | 'BRIDGE_HOST_FORBIDDEN' | 'ASSET_REQUIRED' | 'ASSET_SIZE' | 'ASSET_FORMAT' | 'ASSET_LIMIT' | 'POLYHAVEN_DISABLED' | 'POLYHAVEN_FAILED' | 'POLYHAVEN_NOT_FOUND' | 'STORAGE_UNSAFE' | 'PROJECT_CORRUPT' | 'CONFIRM_REQUIRED' | 'JOB_TIMEOUT' | 'LOCK_LOST' | 'CLI_FAILED' | 'OUTPUT_INVALID' | 'OUTPUT_TOO_LARGE' | 'ORIGIN_FORBIDDEN' | 'DOWNLOAD_INVALID' | 'PLUGIN_DISPOSED';
+export type BlenderErrorCode = 'ID_INVALID' | 'BAD_REQUEST' | 'BAD_ACTION' | 'TITLE_INVALID' | 'DESCRIPTION_TOO_LONG' | 'HEADLINE_TOO_LONG' | 'SAMPLES_INVALID' | 'FRAMES_INVALID' | 'COLOR_INVALID' | 'SCRIPT_TOO_LARGE' | 'SCRIPT_UNSAFE' | 'TEMPLATE_INVALID' | 'EXPORT_FORMAT_INVALID' | 'CONFLICT' | 'JOB_CONFLICT' | 'PROJECT_LIMIT' | 'PROJECT_EXISTS' | 'PROJECT_NOT_FOUND' | 'ASSET_NOT_FOUND' | 'ASSET_CHANGED' | 'ARTIFACT_NOT_FOUND' | 'CHECKPOINT_NOT_FOUND' | 'JOB_NOT_FOUND' | 'JOB_LIMIT' | 'JOB_CANCELLED' | 'ENV_NOT_READY' | 'BLENDER_PATH_INVALID' | 'BLENDER_PROBE_FAILED' | 'BRIDGE_UNREACHABLE' | 'BRIDGE_AUTH_FAILED' | 'BRIDGE_TIMEOUT' | 'BRIDGE_PROTOCOL_ERROR' | 'BRIDGE_HOST_FORBIDDEN' | 'ASSET_REQUIRED' | 'ASSET_SIZE' | 'ASSET_FORMAT' | 'ASSET_LIMIT' | 'POLYHAVEN_DISABLED' | 'POLYHAVEN_FAILED' | 'POLYHAVEN_NOT_FOUND' | 'STORAGE_UNSAFE' | 'PROJECT_CORRUPT' | 'CONFIRM_REQUIRED' | 'JOB_TIMEOUT' | 'LOCK_LOST' | 'CLI_FAILED' | 'OUTPUT_INVALID' | 'OUTPUT_TOO_LARGE' | 'ORIGIN_FORBIDDEN' | 'DOWNLOAD_INVALID' | 'PLUGIN_DISPOSED';
 export declare const BLENDER_TEMPLATE_IDS: readonly BlenderTemplateId[];
 export declare const BLENDER_ENGINES: readonly BlenderRenderEngine[];
 export declare const BLENDER_ASPECTS: readonly BlenderAspect[];
@@ -187,6 +232,7 @@ export declare const BLENDER_LIGHTING_PRESETS: readonly BlenderLightingPreset[];
 export declare const BLENDER_MATERIAL_PRESETS: readonly BlenderMaterialPreset[];
 export declare const BLENDER_SCRIPT_MODES: readonly BlenderScriptMode[];
 export declare const BLENDER_EXPORT_FORMATS: readonly BlenderExportFormat[];
+export declare const BLENDER_QUALITY_TIERS: readonly BlenderQualityTier[];
 export declare const BLENDER_ARTIFACT_KINDS: readonly BlenderArtifactKind[];
 export declare const ASPECT_RESOLUTIONS: Record<BlenderAspect, [number, number]>;
 export declare const ARTIFACT_MIME_MAP: Record<string, string>;
@@ -194,10 +240,11 @@ export declare const MAX_ACTIVE_PROJECTS = 30;
 export declare const MAX_PROJECT_ASSETS = 24;
 export declare const MAX_ASSET_BYTES: number;
 export declare const MAX_PROJECT_ASSETS_BYTES: number;
-export declare const MAX_PROJECT_ARTIFACTS = 20;
+export declare const MAX_PROJECT_ARTIFACTS = 12;
 export declare const MAX_ARTIFACT_DOWNLOAD_BYTES: number;
 export declare const MAX_CUSTOM_SCRIPT_BYTES: number;
 export declare const MAX_PROJECT_JSON_BYTES: number;
+export declare const MAX_SCRIPT_CHECKPOINTS = 10;
 export declare const MAX_JOB_LOG_LINES = 80;
 export declare const SCENE_JSON_MARKER = "__DSH_SCENE_JSON__=";
 export declare const DEFAULT_BRIDGE_HOST = "127.0.0.1";
