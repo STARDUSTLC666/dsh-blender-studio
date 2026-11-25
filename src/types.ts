@@ -15,7 +15,7 @@ export type BlenderLightingPreset = 'studio_3point' | 'soft_daylight' | 'dramati
 export type BlenderMaterialPreset = 'clay_matte' | 'brushed_metal' | 'frosted_glass' | 'ceramic_gloss' | 'toon_cel'
 export type BlenderScriptMode = 'template' | 'custom'
 export type BlenderAssetKind = 'hdri' | 'texture' | 'model' | 'blend' | 'reference'
-export type BlenderArtifactKind = 'still' | 'contact_sheet' | 'animation' | 'glb' | 'fbx' | 'obj' | 'stl' | 'blend'
+export type BlenderArtifactKind = 'still' | 'contact_sheet' | 'shot' | 'animation' | 'glb' | 'fbx' | 'obj' | 'stl' | 'blend'
 export type BlenderExportFormat = 'glb' | 'fbx' | 'obj' | 'stl' | 'blend'
 export type BlenderFps = 24 | 30 | 60
 export type BlenderResolutionScale = 50 | 100 | 150 | 200
@@ -24,7 +24,29 @@ export type PolyHavenAssetType = 'hdris' | 'textures' | 'models'
 export type BlenderQualityTier = 'draft' | 'studio' | 'beauty'
 export type BlenderComputeDevice = 'auto' | 'gpu' | 'cpu'
 export type BlenderGpuBackend = 'OPTIX' | 'CUDA' | 'METAL' | 'HIP' | 'ONEAPI' | 'CPU'
-export type BlenderExemplarCategory = 'vehicle' | 'aerospace' | 'robotics' | 'architecture'
+export type BlenderExemplarCategory = 'vehicle' | 'aerospace' | 'robotics' | 'architecture' | 'horology'
+export type BlenderShotPresetId = 'hero_3q' | 'low_dramatic' | 'macro_dof' | 'side_profile' | 'top_plan'
+
+export interface BlenderShotPresetMeta {
+  id: BlenderShotPresetId
+  zh: string
+  en: string
+  lensMm: number
+  azimuthDeg: number
+  elevationDeg: number
+  margin: number
+  dofFstop?: number
+}
+
+export interface BlenderShotResult {
+  shotId: BlenderShotPresetId
+  labelZh: string
+  labelEn: string
+  artifactId: string
+  lensMm: number
+  width: number
+  height: number
+}
 
 export interface BlenderGpuInfo {
   available: boolean
@@ -54,6 +76,7 @@ export interface BlenderExemplarDefinition extends BlenderExemplarSummary {
 export type BlenderJobKind =
   | 'preview_still'
   | 'contact_sheet'
+  | 'render_shots'
   | 'render_animation'
   | 'export_model'
   | 'inspect_scene'
@@ -109,6 +132,9 @@ export interface BlenderProjectFields {
   materialPreset: BlenderMaterialPreset
   accentColor: string
   transparentBg: boolean
+  lensMm?: number
+  exposure?: number
+  clayMode?: boolean
   scriptMode: BlenderScriptMode
   customScript: string
 }
@@ -180,6 +206,8 @@ export interface BlenderArtifact {
   height?: number
   durationMs: number
   created: string
+  shotId?: BlenderShotPresetId
+  label?: string
 }
 
 export interface BlenderProject extends BlenderProjectFields {
@@ -254,6 +282,7 @@ export interface BlenderJob {
   sceneSummary?: BlenderSceneSummary
   scriptOutput?: string
   pipeline?: BlenderPipelineSummary
+  shots?: BlenderShotResult[]
   startedAt: string
   finishedAt?: string
 }
@@ -304,6 +333,8 @@ export type BlenderErrorCode =
   | 'SAMPLES_INVALID'
   | 'FRAMES_INVALID'
   | 'COLOR_INVALID'
+  | 'LENS_INVALID'
+  | 'EXPOSURE_INVALID'
   | 'SCRIPT_TOO_LARGE'
   | 'SCRIPT_UNSAFE'
   | 'SCRIPT_PATCH_NOT_FOUND'
@@ -395,12 +426,69 @@ export const BLENDER_COMPUTE_DEVICES: readonly BlenderComputeDevice[] = ['auto',
 export const BLENDER_ARTIFACT_KINDS: readonly BlenderArtifactKind[] = [
   'still',
   'contact_sheet',
+  'shot',
   'animation',
   'glb',
   'fbx',
   'obj',
   'stl',
   'blend',
+] as const
+
+export const BLENDER_SHOT_PRESETS: readonly BlenderShotPresetMeta[] = [
+  {
+    id: 'hero_3q',
+    zh: '主 3/4 视',
+    en: 'Hero 3/4',
+    lensMm: 58,
+    azimuthDeg: 35,
+    elevationDeg: 22,
+    margin: 1.18,
+  },
+  {
+    id: 'low_dramatic',
+    zh: '低角度仰拍',
+    en: 'Low Dramatic',
+    lensMm: 35,
+    azimuthDeg: -42,
+    elevationDeg: 8,
+    margin: 1.15,
+  },
+  {
+    id: 'macro_dof',
+    zh: '微距景深特写',
+    en: 'Macro DOF',
+    lensMm: 85,
+    azimuthDeg: 22,
+    elevationDeg: 14,
+    margin: 0.78,
+    dofFstop: 2.8,
+  },
+  {
+    id: 'side_profile',
+    zh: '正侧轮廓',
+    en: 'Side Profile',
+    lensMm: 70,
+    azimuthDeg: 90,
+    elevationDeg: 6,
+    margin: 1.16,
+  },
+  {
+    id: 'top_plan',
+    zh: '正俯工程图',
+    en: 'Top Plan',
+    lensMm: 50,
+    azimuthDeg: 0,
+    elevationDeg: 86,
+    margin: 1.18,
+  },
+] as const
+
+export const DEFAULT_MULTI_SHOT_IDS: readonly BlenderShotPresetId[] = [
+  'hero_3q',
+  'low_dramatic',
+  'macro_dof',
+  'top_plan',
 ] as const
 
 export const ASPECT_RESOLUTIONS: Record<BlenderAspect, [number, number]> = {
@@ -429,13 +517,14 @@ export const MAX_ACTIVE_PROJECTS = 30
 export const MAX_PROJECT_ASSETS = 24
 export const MAX_ASSET_BYTES = 50 * 1024 * 1024
 export const MAX_PROJECT_ASSETS_BYTES = 120 * 1024 * 1024
-export const MAX_PROJECT_ARTIFACTS = 12
+export const MAX_PROJECT_ARTIFACTS = 20
 export const MAX_ARTIFACT_DOWNLOAD_BYTES = 200 * 1024 * 1024
 export const MAX_CUSTOM_SCRIPT_BYTES = 256 * 1024
 export const MAX_PROJECT_JSON_BYTES = 4 * 1024 * 1024
 export const MAX_SCRIPT_CHECKPOINTS = 10
 export const MAX_JOB_LOG_LINES = 80
 export const SCENE_JSON_MARKER = '__DSH_SCENE_JSON__='
+export const SHOT_DONE_MARKER = '__DSH_SHOT_DONE__='
 export const DEFAULT_BRIDGE_HOST = '127.0.0.1'
 export const DEFAULT_BRIDGE_PORT = 9876
 
@@ -498,6 +587,9 @@ export function defaultProjectFields(overrides: Partial<BlenderProjectFields> = 
     materialPreset: overrides.materialPreset ?? 'ceramic_gloss',
     accentColor: (overrides.accentColor ?? '#3B82F6').toUpperCase(),
     transparentBg: overrides.transparentBg ?? false,
+    lensMm: overrides.lensMm ?? 50,
+    exposure: overrides.exposure ?? 0,
+    clayMode: overrides.clayMode ?? false,
     scriptMode: overrides.scriptMode ?? 'template',
     customScript: overrides.customScript ?? '',
   }
@@ -647,6 +739,25 @@ export function validateProjectFields(
   }
   const transparentBg = rawTransparentBg
 
+  // Optional v0.4.0 live lookdev override fields stay backward-compatible with pre-0.4.0 project.json files even under strict: true
+  const rawLensMm = v.lensMm !== undefined ? v.lensMm : (defaults?.lensMm ?? 50)
+  if (typeof rawLensMm !== 'number' || !Number.isFinite(rawLensMm) || rawLensMm < 18 || rawLensMm > 135) {
+    throw new BlenderError('相机焦段需在 18–135mm 之间。', 'LENS_INVALID', 400)
+  }
+  const lensMm = Math.round(rawLensMm * 10) / 10
+
+  const rawExposure = v.exposure !== undefined ? v.exposure : (defaults?.exposure ?? 0)
+  if (typeof rawExposure !== 'number' || !Number.isFinite(rawExposure) || rawExposure < -3 || rawExposure > 3) {
+    throw new BlenderError('画面曝光补偿需在 -3 至 +3 EV 之间。', 'EXPOSURE_INVALID', 400)
+  }
+  const exposure = Math.round(rawExposure * 100) / 100
+
+  const rawClayMode = v.clayMode !== undefined ? v.clayMode : (defaults?.clayMode ?? false)
+  if (typeof rawClayMode !== 'boolean') {
+    throw new BlenderError('白模体检开关必须为布尔值。', 'BAD_REQUEST', 400)
+  }
+  const clayMode = rawClayMode
+
   const rawScriptMode = pick('scriptMode', 'template')
   if (
     typeof rawScriptMode !== 'string' ||
@@ -682,9 +793,28 @@ export function validateProjectFields(
     materialPreset,
     accentColor,
     transparentBg,
+    lensMm,
+    exposure,
+    clayMode,
     scriptMode,
     customScript,
   }
+}
+
+export function validateShotPresetIds(value: unknown): BlenderShotPresetId[] {
+  if (value === undefined || value === null) return [...DEFAULT_MULTI_SHOT_IDS]
+  if (!Array.isArray(value) || value.length === 0 || value.length > BLENDER_SHOT_PRESETS.length) {
+    throw new BlenderError('分镜预设列表需包含 1–5 个有效分镜编号。', 'BAD_REQUEST', 400)
+  }
+  const validIds = new Set<string>(BLENDER_SHOT_PRESETS.map(p => p.id))
+  const seen = new Set<BlenderShotPresetId>()
+  for (const item of value) {
+    if (typeof item !== 'string' || !validIds.has(item)) {
+      throw new BlenderError(`不支持的分镜机位预设：${String(item)}`, 'BAD_REQUEST', 400)
+    }
+    seen.add(item as BlenderShotPresetId)
+  }
+  return [...seen]
 }
 
 export function validateExportFormat(value: unknown): BlenderExportFormat {

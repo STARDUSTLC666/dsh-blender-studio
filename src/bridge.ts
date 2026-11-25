@@ -75,6 +75,78 @@ export interface BridgeLoadScriptResult {
   sceneSummary: BlenderSceneSummary
 }
 
+export type BridgeVec3 = [number, number, number]
+
+export interface BridgeSetCameraOptions {
+  location?: BridgeVec3
+  target?: BridgeVec3
+  lensMm?: number
+  dofFstop?: number
+  timeoutMs?: number
+}
+
+export interface BridgeSetCameraResult {
+  camera: {
+    name: string
+    location: BridgeVec3
+    rotationDeg: BridgeVec3
+    lensMm: number
+    useDof: boolean
+    dofFstop: number
+  }
+  sceneSummary: BlenderSceneSummary
+}
+
+export interface BridgeTransformObjectOptions {
+  name: string
+  location?: BridgeVec3
+  rotationDeg?: BridgeVec3
+  scale?: BridgeVec3
+  timeoutMs?: number
+}
+
+export interface BridgeTransformObjectResult {
+  object: {
+    name: string
+    type: string
+    location: BridgeVec3
+    rotationDeg: BridgeVec3
+    scale: BridgeVec3
+  }
+  sceneSummary: BlenderSceneSummary
+}
+
+export interface BridgeSetMaterialColorOptions {
+  materialName: string
+  color: string
+  metallic?: number
+  roughness?: number
+  timeoutMs?: number
+}
+
+export interface BridgeSetMaterialColorResult {
+  material: {
+    name: string
+    color: string
+    metallic: number
+    roughness: number
+  }
+  sceneSummary: BlenderSceneSummary
+}
+
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/
+
+function validateBridgeVec3(value: unknown, label: string): BridgeVec3 {
+  if (
+    !Array.isArray(value) ||
+    value.length !== 3 ||
+    value.some(v => typeof v !== 'number' || !Number.isFinite(v))
+  ) {
+    throw new BlenderError(`参数 ${label} 必须为包含 3 个有限数值的数组 [x, y, z]。`, 'BAD_REQUEST', 400)
+  }
+  return [value[0], value[1], value[2]]
+}
+
 interface BridgeRequestFrame {
   id: string
   token?: string
@@ -378,6 +450,83 @@ export class BlenderBridgeClient {
     }
     if (opts.timeoutMs) params.timeoutMs = opts.timeoutMs
     return this.request<BridgeLoadScriptResult>('load_script', params, opts.timeoutMs ?? 90_000)
+  }
+
+  async setCamera(opts: BridgeSetCameraOptions): Promise<BridgeSetCameraResult> {
+    if (!opts || typeof opts !== 'object') {
+      throw new BlenderError('请提供有效的相机控制参数。', 'BAD_REQUEST', 400)
+    }
+    const params: Record<string, unknown> = {}
+    if (opts.location !== undefined) params.location = validateBridgeVec3(opts.location, 'location')
+    if (opts.target !== undefined) params.target = validateBridgeVec3(opts.target, 'target')
+    if (opts.lensMm !== undefined) {
+      if (typeof opts.lensMm !== 'number' || !Number.isFinite(opts.lensMm) || opts.lensMm < 10 || opts.lensMm > 300) {
+        throw new BlenderError('相机焦距 lensMm 必须为 10–300 之间的数值。', 'BAD_REQUEST', 400)
+      }
+      params.lensMm = opts.lensMm
+    }
+    if (opts.dofFstop !== undefined) {
+      if (typeof opts.dofFstop !== 'number' || !Number.isFinite(opts.dofFstop) || opts.dofFstop < 0.7 || opts.dofFstop > 64) {
+        throw new BlenderError('景深光圈 dofFstop 必须为 0.7–64 之间的数值。', 'BAD_REQUEST', 400)
+      }
+      params.dofFstop = opts.dofFstop
+    }
+    if (Object.keys(params).length === 0) {
+      throw new BlenderError('setCamera 至少需要提供 location、target、lensMm 或 dofFstop 之一。', 'BAD_REQUEST', 400)
+    }
+    if (opts.timeoutMs) params.timeoutMs = opts.timeoutMs
+    return this.request<BridgeSetCameraResult>('set_camera', params, opts.timeoutMs ?? 20_000)
+  }
+
+  async transformObject(opts: BridgeTransformObjectOptions): Promise<BridgeTransformObjectResult> {
+    if (!opts || typeof opts !== 'object' || typeof opts.name !== 'string' || !opts.name.trim()) {
+      throw new BlenderError('transformObject 需要提供非空对象名称 name。', 'BAD_REQUEST', 400)
+    }
+    const params: Record<string, unknown> = { name: opts.name.trim() }
+    if (opts.location !== undefined) params.location = validateBridgeVec3(opts.location, 'location')
+    if (opts.rotationDeg !== undefined) params.rotationDeg = validateBridgeVec3(opts.rotationDeg, 'rotationDeg')
+    if (opts.scale !== undefined) params.scale = validateBridgeVec3(opts.scale, 'scale')
+    if (
+      opts.location === undefined &&
+      opts.rotationDeg === undefined &&
+      opts.scale === undefined
+    ) {
+      throw new BlenderError('transformObject 至少需要提供 location、rotationDeg 或 scale 之一。', 'BAD_REQUEST', 400)
+    }
+    if (opts.timeoutMs) params.timeoutMs = opts.timeoutMs
+    return this.request<BridgeTransformObjectResult>('transform_object', params, opts.timeoutMs ?? 20_000)
+  }
+
+  async setMaterialColor(opts: BridgeSetMaterialColorOptions): Promise<BridgeSetMaterialColorResult> {
+    if (
+      !opts ||
+      typeof opts !== 'object' ||
+      typeof opts.materialName !== 'string' ||
+      !opts.materialName.trim()
+    ) {
+      throw new BlenderError('setMaterialColor 需要提供非空材质名称 materialName。', 'BAD_REQUEST', 400)
+    }
+    if (typeof opts.color !== 'string' || !HEX_COLOR_RE.test(opts.color.trim())) {
+      throw new BlenderError('材质颜色必须为 #RRGGBB 十六进制格式。', 'COLOR_INVALID', 400)
+    }
+    const params: Record<string, unknown> = {
+      materialName: opts.materialName.trim(),
+      color: opts.color.trim().toUpperCase(),
+    }
+    if (opts.metallic !== undefined) {
+      if (typeof opts.metallic !== 'number' || !Number.isFinite(opts.metallic) || opts.metallic < 0 || opts.metallic > 1) {
+        throw new BlenderError('金属度 metallic 必须为 0–1 之间的数值。', 'BAD_REQUEST', 400)
+      }
+      params.metallic = opts.metallic
+    }
+    if (opts.roughness !== undefined) {
+      if (typeof opts.roughness !== 'number' || !Number.isFinite(opts.roughness) || opts.roughness < 0 || opts.roughness > 1) {
+        throw new BlenderError('粗糙度 roughness 必须为 0–1 之间的数值。', 'BAD_REQUEST', 400)
+      }
+      params.roughness = opts.roughness
+    }
+    if (opts.timeoutMs) params.timeoutMs = opts.timeoutMs
+    return this.request<BridgeSetMaterialColorResult>('set_material_color', params, opts.timeoutMs ?? 20_000)
   }
 
   async status(timeoutMs = 2_500): Promise<BlenderBridgeStatus> {

@@ -31,7 +31,10 @@ A `bpy` script that exits with code `0` can still produce a broken image: a hero
    - **Top-Right**: Three-quarter hero view — verifies overall silhouette, depth, and lighting modeling.
    - **Bottom-Left**: Top-down plan view (`+Z → -Z`) — reveals hidden interpenetration, spacing, and wall clearance.
    - **Bottom-Right**: Active project camera — verifies exact final framing, lens distortion, backdrop edges, and exposure.
-3. **Evaluate All `QC-3D` Codes + All 6 Visual Gates** before approving final output.
+3. **Optional Clay Mode & Multi-Shot Lookdev Pack (`v0.4.0`)**:
+   - Toggle `clayMode: true` (via `blender_project(action: 'update')` or the Studio Inspector) to apply `dsh_render_clay_override(True)` across the entire scene — strips distracting reflections/textures so bevel catches, silhouette tension, and key-to-fill lighting ratios are immediately obvious.
+   - Run `blender_render(action: 'render_shots', shots: ['hero_3q', 'low_dramatic', 'macro_dof', 'top_plan'])` to generate a single-launch multi-camera lookdev pack, then compare Clay vs PBR or R1 vs R2 directly in the workbench **A/B Compare** split-wipe view.
+4. **Evaluate All `QC-3D` Codes + All 6 Visual Gates** before approving final output.
 
 ## 2. Deterministic `QC-3D` Issue Codes Reference
 

@@ -116,6 +116,40 @@ async function startMockBridgeServer(t) {
           case 'load_script':
             result = { stdout: 'synced ' + String(req.params?.projectTitle ?? ''), stderr: '', sceneSummary: MOCK_SCENE_SUMMARY }
             break
+          case 'set_camera':
+            result = {
+              camera: {
+                name: 'DSH_Camera',
+                location: req.params?.location ?? [4, -4, 3],
+                lensMm: req.params?.lensMm ?? 50,
+                dofFstop: req.params?.dofFstop,
+              },
+              sceneSummary: MOCK_SCENE_SUMMARY,
+            }
+            break
+          case 'transform_object':
+            result = {
+              object: {
+                name: String(req.params?.name ?? 'Product_Body'),
+                type: 'MESH',
+                location: req.params?.location ?? [0, 0, 1],
+                rotationDeg: req.params?.rotationDeg ?? [0, 0, 0],
+                scale: req.params?.scale ?? [1, 1, 1],
+              },
+              sceneSummary: MOCK_SCENE_SUMMARY,
+            }
+            break
+          case 'set_material_color':
+            result = {
+              material: {
+                name: String(req.params?.materialName ?? 'Mat_Hero_Body'),
+                color: String(req.params?.color ?? '#1d4ed8'),
+                metallic: req.params?.metallic ?? 0.85,
+                roughness: req.params?.roughness ?? 0.2,
+              },
+              sceneSummary: MOCK_SCENE_SUMMARY,
+            }
+            break
           default:
             socket.write(JSON.stringify({ id: req.id, ok: false, result: null, error: { code: 'BRIDGE_PROTOCOL_ERROR', message: 'Unknown' } }) + '\n')
             continue
@@ -165,7 +199,22 @@ async function createWorkbenchFixture(t, extra = {}) {
     }
 
     const code = req.scriptContent || ''
-    if (code.includes('render.png')) {
+    const mockShots = []
+    if (code.includes('def _dsh_render_multi_shots(')) {
+      const shotsDir = join(req.cwd, 'shots')
+      const allShotIds = ['hero_3q', 'low_dramatic', 'macro_dof', 'side_profile', 'top_plan'].filter((sid) =>
+        code.includes(`"${sid}"`) || code.includes(`\\"${sid}\\"`),
+      )
+      const chosen = allShotIds.length > 0 ? allShotIds : ['hero_3q', 'low_dramatic', 'macro_dof', 'top_plan']
+      for (let idx = 0; idx < chosen.length; idx++) {
+        const sid = chosen[idx]
+        const file = `shot_${sid}.png`
+        await writeFile(join(shotsDir, file), MOCK_PNG)
+        const shotObj = { shotId: sid, file, lensMm: sid === 'macro_dof' ? 85 : 50, width: 1280, height: 720, index: idx + 1, total: chosen.length }
+        mockShots.push(shotObj)
+        req.onShotDone?.(shotObj)
+      }
+    } else if (code.includes('render.png')) {
       await writeFile(join(req.cwd, 'render.png'), MOCK_PNG)
     } else if (code.includes('contact_sheet.png')) {
       await writeFile(join(req.cwd, 'contact_sheet.png'), MOCK_PNG)
@@ -183,6 +232,7 @@ async function createWorkbenchFixture(t, extra = {}) {
       stdout: `mock-blender-stdout\n${SCENE_JSON_MARKER}${JSON.stringify(mockSummary)}`,
       stderr: '',
       sceneSummary: mockSummary,
+      shots: mockShots.length > 0 ? mockShots : undefined,
       savedFiles: [],
       durationMs: 42,
     }
@@ -1006,13 +1056,13 @@ test('v0.3.0 HTTP API & Agent tools: Pro Exemplars, surgical patch_script, one-c
   // 1. POST list includes exemplars + POST list_exemplars + POST create_from_exemplar + 404 guard
   const listRes = await (await post({ action: 'list' })).json()
   assert.equal(listRes.ok, true)
-  assert.equal(listRes.value.exemplars?.length, 4)
+  assert.equal(listRes.value.exemplars?.length, 5)
 
   const exListRes = await (await post({ action: 'list_exemplars' })).json()
   assert.equal(exListRes.ok, true)
   assert.deepEqual(
     exListRes.value.exemplars.map((e) => e.id),
-    ['aero-x900-turbofan', 'apex-09-racecar', 'vanguard-h145x-helicopter', 'kuka-6axis-robot-arm'],
+    ['aero-x900-turbofan', 'apex-09-racecar', 'vanguard-h145x-helicopter', 'kuka-6axis-robot-arm', 'chronograph-tourbillon-watch'],
   )
 
   const badEx = await post({ action: 'create_from_exemplar', exemplarId: 'no-such-exemplar' })
@@ -1150,7 +1200,7 @@ test('v0.3.0 HTTP API & Agent tools: Pro Exemplars, surgical patch_script, one-c
 
   const projTool = tools.get('blender_project')
   const toolExList = await projTool.execute({ action: 'list_exemplars' })
-  assert.equal(toolExList.exemplars?.length, 4)
+  assert.equal(toolExList.exemplars?.length, 5)
   assert.match(projTool.output.render({ action: 'list_exemplars' }, toolExList)[0].text, /kuka-6axis-robot-arm/)
 
   const toolExCreated = await projTool.execute({ action: 'create_from_exemplar', exemplarId: 'aero-x900-turbofan' })
@@ -1179,4 +1229,144 @@ test('v0.3.0 HTTP API & Agent tools: Pro Exemplars, surgical patch_script, one-c
   assert.equal(toolInstall.enabled, true)
   assert.equal(installCalls.length, 2)
   assert.match(bridgeTool.output.render({ action: 'install_addon' }, toolInstall)[0].text, /install|安装|启用/i)
+})
+
+test('v0.4.0 HTTP API & Agent tools: single-launch render_shots, Live Lookdev fields, and Live Bridge v2 direct controls', async (t) => {
+  const mockBridge = await startMockBridgeServer(t)
+  const bridgeClient = new BlenderBridgeClient({ host: '127.0.0.1', port: mockBridge.port })
+  const { workbench, post, seenScripts } = await createWorkbenchFixture(t, { bridge: bridgeClient })
+
+  // 1. POST list exposes shotPresets (5 presets)
+  const listed = await (await post({ action: 'list' })).json()
+  assert.equal(listed.ok, true)
+  assert.equal(listed.value.shotPresets?.length, 5)
+
+  // 2. Create project with Live Lookdev fields (lensMm, exposure, clayMode) & run POST render_shots
+  const proj = (
+    await (
+      await post({
+        action: 'create',
+        fields: defaultProjectFields({
+          title: 'Multi-Shot Lookdev Scene',
+          lensMm: 85,
+          exposure: 0.5,
+          clayMode: true,
+        }),
+      })
+    ).json()
+  ).value
+  assert.equal(proj.lensMm, 85)
+  assert.equal(proj.exposure, 0.5)
+  assert.equal(proj.clayMode, true)
+
+  const shotsBefore = seenScripts.length
+  const shotJob = (
+    await (
+      await post({
+        action: 'render_shots',
+        id: proj.id,
+        revision: proj.revision,
+        shots: ['hero_3q', 'low_dramatic', 'macro_dof', 'top_plan'],
+        qualityTier: 'draft',
+      })
+    ).json()
+  ).value
+  const shotDone = await workbench.waitForJob(shotJob.id)
+  assert.equal(shotDone.state, 'done')
+  assert.equal(seenScripts.length, shotsBefore + 1, 'render_shots executes in ONE single Blender launch')
+  assert.equal(shotDone.shots?.length, 4)
+
+  const refreshed = await workbench.store.get(proj.id)
+  const shotArtifacts = refreshed.artifacts.filter((a) => a.kind === 'shot')
+  assert.equal(shotArtifacts.length, 4)
+  assert.deepEqual(
+    shotArtifacts.map((a) => a.shotId).sort(),
+    ['hero_3q', 'low_dramatic', 'macro_dof', 'top_plan'].sort(),
+  )
+  // Verify each registered shot artifact exists on disk and streams 200 OK
+  for (const art of shotArtifacts) {
+    const res = await workbench.fetch(
+      new Request(`http://dsh.test${workbench.route}?kind=artifact&id=${proj.id}&artifact=${art.id}`),
+    )
+    assert.equal(res.status, 200)
+  }
+
+  // 3. Live Bridge v2 HTTP direct controls (bridge_set_camera, bridge_transform_object, bridge_set_material)
+  const camHttp = await (
+    await post({ action: 'bridge_set_camera', location: [5, -5, 3], target: [0, 0, 1], lensMm: 75, dofFstop: 2.0 })
+  ).json()
+  assert.equal(camHttp.ok, true)
+  assert.equal(camHttp.value.camera.lensMm, 75)
+
+  const txHttp = await (
+    await post({ action: 'bridge_transform_object', name: 'Product_Body', location: [0, 0, 1.5], rotationDeg: [0, 0, 30] })
+  ).json()
+  assert.equal(txHttp.ok, true)
+  assert.equal(txHttp.value.object.name, 'Product_Body')
+
+  const matHttp = await (
+    await post({ action: 'bridge_set_material', materialName: 'Mat_Hero_Body', color: '#1d4ed8', metallic: 0.9, roughness: 0.2 })
+  ).json()
+  assert.equal(matHttp.ok, true)
+  assert.equal(matHttp.value.material.color.toLowerCase(), '#1d4ed8')
+
+  const badColorHttp = await post({ action: 'bridge_set_material', materialName: 'Mat_Hero_Body', color: 'badhex' })
+  assert.equal(badColorHttp.status, 400)
+  assert.equal((await badColorHttp.json()).code, 'COLOR_INVALID')
+
+  // 4. Agent tools v0.4.0: blender_render(render_shots), blender_bridge(set_camera/transform_object/set_material), blender_project(lensMm/exposure/clayMode)
+  const tools = new Map()
+  const ctx = {
+    skills: { register: () => () => {} },
+    tools: {
+      register(def) {
+        tools.set(def.name, def)
+        return () => tools.delete(def.name)
+      },
+    },
+    connection: { fetch: { register: () => () => {} } },
+    inject(_deps, fn) {
+      fn(ctx)
+    },
+    on() {},
+  }
+  installBlenderWorkbench(ctx, { workbench })
+
+  const renderTool = tools.get('blender_render')
+  const toolShotsStart = await renderTool.execute({
+    action: 'render_shots',
+    id: proj.id,
+    revision: refreshed.revision,
+    shots: ['hero_3q', 'macro_dof'],
+    qualityTier: 'draft',
+  })
+  await workbench.waitForJob(toolShotsStart.id)
+  const toolShots = await renderTool.execute({ action: 'job', job: toolShotsStart.id })
+  assert.equal(toolShots.shots?.length, 2)
+  assert.ok(toolShots.shots.every((s) => typeof s.path === 'string' && s.path.endsWith('.png')), 'job lookup enriches shot PNG paths')
+  const toolShotsText = renderTool.output.render({ action: 'job' }, toolShots)[0].text
+  assert.match(toolShotsText, /hero_3q|macro_dof/)
+  assert.match(toolShotsText, /shot_hero_3q\.png|read_file/i)
+
+  const bridgeTool = tools.get('blender_bridge')
+  const bCam = await bridgeTool.execute({ action: 'set_camera', lensMm: 65, location: [4, -4, 2.5] })
+  assert.equal(bCam.camera.lensMm, 65)
+  assert.match(bridgeTool.output.render({ action: 'set_camera' }, bCam)[0].text, /65/)
+
+  const bTx = await bridgeTool.execute({ action: 'transform_object', name: 'Product_Body', rotationDeg: [0, 0, 90] })
+  assert.equal(bTx.object.name, 'Product_Body')
+  assert.match(bridgeTool.output.render({ action: 'transform_object' }, bTx)[0].text, /Product_Body/)
+
+  const bMat = await bridgeTool.execute({ action: 'set_material', materialName: 'Mat_Hero_Body', color: '#0ea5e9', roughness: 0.15 })
+  assert.equal(bMat.material.name, 'Mat_Hero_Body')
+  assert.match(bridgeTool.output.render({ action: 'set_material' }, bMat)[0].text, /#0ea5e9/i)
+
+  const projTool = tools.get('blender_project')
+  const toolCreatedLookdev = await projTool.execute({
+    action: 'create',
+    fields: { title: 'Agent Lookdev', lensMm: 35, exposure: -0.4, clayMode: true },
+  })
+  assert.equal(toolCreatedLookdev.lensMm, 35)
+  assert.equal(toolCreatedLookdev.exposure, -0.4)
+  assert.equal(toolCreatedLookdev.clayMode, true)
 })

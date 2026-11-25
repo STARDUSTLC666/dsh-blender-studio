@@ -49,6 +49,58 @@ export interface BridgeLoadScriptResult {
     stderr?: string;
     sceneSummary: BlenderSceneSummary;
 }
+export type BridgeVec3 = [number, number, number];
+export interface BridgeSetCameraOptions {
+    location?: BridgeVec3;
+    target?: BridgeVec3;
+    lensMm?: number;
+    dofFstop?: number;
+    timeoutMs?: number;
+}
+export interface BridgeSetCameraResult {
+    camera: {
+        name: string;
+        location: BridgeVec3;
+        rotationDeg: BridgeVec3;
+        lensMm: number;
+        useDof: boolean;
+        dofFstop: number;
+    };
+    sceneSummary: BlenderSceneSummary;
+}
+export interface BridgeTransformObjectOptions {
+    name: string;
+    location?: BridgeVec3;
+    rotationDeg?: BridgeVec3;
+    scale?: BridgeVec3;
+    timeoutMs?: number;
+}
+export interface BridgeTransformObjectResult {
+    object: {
+        name: string;
+        type: string;
+        location: BridgeVec3;
+        rotationDeg: BridgeVec3;
+        scale: BridgeVec3;
+    };
+    sceneSummary: BlenderSceneSummary;
+}
+export interface BridgeSetMaterialColorOptions {
+    materialName: string;
+    color: string;
+    metallic?: number;
+    roughness?: number;
+    timeoutMs?: number;
+}
+export interface BridgeSetMaterialColorResult {
+    material: {
+        name: string;
+        color: string;
+        metallic: number;
+        roughness: number;
+    };
+    sceneSummary: BlenderSceneSummary;
+}
 /** Normalize and verify that a host strictly refers to local loopback. */
 export declare function normalizeLoopbackHost(host: string): string;
 export declare function isLoopbackHost(host: string): boolean;
@@ -73,6 +125,9 @@ export declare class BlenderBridgeClient {
     execute(code: string, opts?: BridgeExecuteOptions): Promise<BridgeExecuteResult>;
     viewportCapture(opts?: BridgeViewportOptions): Promise<BridgeViewportResult>;
     loadScript(code: string, opts?: BridgeLoadScriptOptions): Promise<BridgeLoadScriptResult>;
+    setCamera(opts: BridgeSetCameraOptions): Promise<BridgeSetCameraResult>;
+    transformObject(opts: BridgeTransformObjectOptions): Promise<BridgeTransformObjectResult>;
+    setMaterialColor(opts: BridgeSetMaterialColorOptions): Promise<BridgeSetMaterialColorResult>;
     status(timeoutMs?: number): Promise<BlenderBridgeStatus>;
 }
 /**

@@ -1,10 +1,10 @@
-import { BlenderBridgeClient, checkScriptSafety, type BridgeAddonInstallExecutor, type BridgeExecuteOptions, type BridgeExecuteResult, type BridgeLoadScriptOptions, type BridgeLoadScriptResult, type BridgeViewportOptions, type BridgeViewportResult, type InstallBridgeAddonResult, type LaunchBlenderGuiResult } from './bridge.js';
+import { BlenderBridgeClient, checkScriptSafety, type BridgeAddonInstallExecutor, type BridgeExecuteOptions, type BridgeExecuteResult, type BridgeLoadScriptOptions, type BridgeLoadScriptResult, type BridgeSetCameraOptions, type BridgeSetCameraResult, type BridgeSetMaterialColorOptions, type BridgeSetMaterialColorResult, type BridgeTransformObjectOptions, type BridgeTransformObjectResult, type BridgeViewportOptions, type BridgeViewportResult, type InstallBridgeAddonResult, type LaunchBlenderGuiResult } from './bridge.js';
 import { BlenderEnvironment, type BlenderCandidate, type BlenderGpuProber, type BlenderVersionProber } from './environment.js';
 import { PolyHavenClient } from './polyhaven.js';
 import { BlenderRunner, type BlenderRunExecutor } from './runner.js';
 import type { SkillBundleHealthReport, SkillsPluginContext } from './skill-bundle.js';
 import { BlenderStore, type TrashPathFn, type TrashPathsFn } from './store.js';
-import { type BlenderBridgeStatus, type BlenderEnvironmentStatus, type BlenderExportFormat, type BlenderJob, type BlenderJobKind, type BlenderPipelineOptions, type BlenderProject, type BlenderSceneSummary, type BlenderSettings } from './types.js';
+import { type BlenderBridgeStatus, type BlenderEnvironmentStatus, type BlenderExportFormat, type BlenderJob, type BlenderJobKind, type BlenderPipelineOptions, type BlenderProject, type BlenderQualityTier, type BlenderSceneSummary, type BlenderSettings, type BlenderShotPresetId } from './types.js';
 export interface StartJobOptions {
     format?: BlenderExportFormat;
     frame?: number;
@@ -12,6 +12,8 @@ export interface StartJobOptions {
     allowUnsafe?: boolean;
     timeoutMs?: number;
     pipeline?: BlenderPipelineOptions;
+    shots?: BlenderShotPresetId[];
+    qualityTier?: BlenderQualityTier;
 }
 export interface BlenderWorkbenchOptions {
     root?: string;
@@ -57,6 +59,9 @@ export declare class BlenderWorkbench {
         allowUnsafe?: boolean;
     }): Promise<BridgeExecuteResult>;
     bridgeViewport(opts?: BridgeViewportOptions): Promise<BridgeViewportResult>;
+    bridgeSetCamera(opts: BridgeSetCameraOptions): Promise<BridgeSetCameraResult>;
+    bridgeTransformObject(opts: BridgeTransformObjectOptions): Promise<BridgeTransformObjectResult>;
+    bridgeSetMaterialColor(opts: BridgeSetMaterialColorOptions): Promise<BridgeSetMaterialColorResult>;
     bridgeSyncProject(id: string, opts?: BridgeLoadScriptOptions & {
         allowUnsafe?: boolean;
     }): Promise<BridgeLoadScriptResult & {

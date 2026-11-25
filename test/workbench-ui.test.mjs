@@ -135,6 +135,18 @@ const SAMPLE_EXEMPLARS = [
     aspect: 'landscape',
     estimatedPolys: '~28k SubD',
   },
+  {
+    id: 'chronograph-tourbillon-watch',
+    titleZh: '精密陀飞轮机械腕表机芯',
+    titleEn: 'Mechanical Tourbillon Chronograph',
+    summaryZh: '60 槽玫瑰金表圈、蓝宝石表镜、镂空夹板齿轮与 6 点位陀飞轮',
+    summaryEn: '60-flute rose-gold bezel, sapphire crystal, skeletonized gear train, and 6 o-clock flying tourbillon',
+    category: 'horology',
+    engine: 'CYCLES',
+    samples: 64,
+    aspect: 'landscape',
+    estimatedPolys: '~13k polys',
+  },
 ]
 
 const SAMPLE_PROJECT = {
@@ -171,6 +183,16 @@ const SAMPLE_PROJECT = {
       size: 20480,
       source: 'upload',
       created: '2026-11-23T10:10:00Z',
+    },
+    {
+      id: 'abababab-cdcd-4efe-8989-121212121212',
+      name: 'uploaded_hero.glb',
+      file: 'abababab-cdcd-4efe-8989-121212121212.glb',
+      kind: 'model',
+      ext: 'glb',
+      size: SYNTHETIC_GLB_AB.byteLength,
+      source: 'upload',
+      created: '2026-11-24T10:15:00Z',
     },
   ],
   artifacts: [
@@ -214,6 +236,38 @@ const SAMPLE_PROJECT = {
       samples: 32,
       durationMs: 650,
       created: '2026-11-23T10:35:00Z',
+    },
+    {
+      id: '66666666-5555-4444-8333-222222222222',
+      kind: 'shot',
+      shotId: 'hero_3q',
+      label: '主 3/4 · 58mm',
+      revision: 2,
+      file: 'shot_hero_3q.png',
+      mime: 'image/png',
+      size: 20480,
+      engine: 'CYCLES',
+      samples: 32,
+      width: 1280,
+      height: 720,
+      durationMs: 2400,
+      created: '2026-11-25T10:40:00Z',
+    },
+    {
+      id: '66666666-5555-4444-8333-333333333333',
+      kind: 'shot',
+      shotId: 'macro_dof',
+      label: '微距景深 · 85mm',
+      revision: 2,
+      file: 'shot_macro_dof.png',
+      mime: 'image/png',
+      size: 21504,
+      engine: 'CYCLES',
+      samples: 32,
+      width: 1280,
+      height: 720,
+      durationMs: 2600,
+      created: '2026-11-25T10:41:00Z',
     },
   ],
   sceneSummary: {
@@ -376,6 +430,9 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
   dom.window.HTMLCanvasElement.prototype.getContext = function getContext(kind) {
     return kind === '2d' ? fakeCtx2d : null
   }
+  dom.window.HTMLCanvasElement.prototype.toDataURL = function toDataURL() {
+    return 'data:image/png;base64,iVBORw0KGgo='
+  }
 
   // Expose DOM globals for React 19 + ReactDOM
   const savedGlobals = new Map()
@@ -438,7 +495,10 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
   let currentEnv = { ...SAMPLE_ENV }
   const mockFetch = async (url, init) => {
     const u = String(url)
-    if (u.includes('kind=artifact') && u.includes('77777777-6666-4555-8444-333333333333')) {
+    if (
+      (u.includes('kind=artifact') && u.includes('77777777-6666-4555-8444-333333333333')) ||
+      (u.includes('kind=asset') && u.includes('abababab-cdcd-4efe-8989-121212121212'))
+    ) {
       return {
         ok: true,
         status: 200,
@@ -563,6 +623,52 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
         json: async () => ({
           ok: true,
           value: { ...SAMPLE_PROJECT, id: '55555555-4444-4333-8222-111111111111', title: 'Exemplar: ' + body.exemplarId },
+        }),
+      }
+    }
+    if (body.action === 'render_shots') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          value: {
+            id: '77777777-8888-4999-8000-111111111111',
+            kind: 'render_shots',
+            projectId: SAMPLE_PROJECT.id,
+            revision: SAMPLE_PROJECT.revision,
+            state: 'done',
+            stageCode: 'done',
+            stage: '多机位分镜完成（2 张）',
+            progress: 100,
+            lines: ['render_shots complete'],
+            shots: [
+              { shotId: 'hero_3q', labelZh: '主 3/4', labelEn: 'Hero 3/4', artifactId: '66666666-5555-4444-8333-222222222222', lensMm: 58, width: 1280, height: 720 },
+              { shotId: 'macro_dof', labelZh: '微距景深', labelEn: 'Macro DoF', artifactId: '66666666-5555-4444-8333-333333333333', lensMm: 85, width: 1280, height: 720 },
+            ],
+            startedAt: '2026-11-25T00:00:00Z',
+            finishedAt: '2026-11-25T00:00:08Z',
+          },
+        }),
+      }
+    }
+    if (body.action === 'bridge_set_camera') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          value: { camera: { name: 'DSH_Camera', location: [4, -4, 3], lensMm: body.lensMm ?? 50 }, sceneSummary: SAMPLE_PROJECT.sceneSummary },
+        }),
+      }
+    }
+    if (body.action === 'bridge_set_material') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          value: { material: { name: body.materialName, color: body.color, roughness: body.roughness ?? 0.25 }, sceneSummary: SAMPLE_PROJECT.sceneSummary },
         }),
       }
     }
@@ -798,18 +904,18 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
     })
   }
 
-  // 2d. v0.3.0 Pro Engineering Exemplars strip + 1-click create_from_exemplar
+  // 2d. v0.4.0 Pro Engineering Exemplars strip (5 exemplars incl. chronograph-tourbillon-watch) + 1-click create_from_exemplar
   const exemplarsStrip = container.querySelector('[data-exemplars-strip="true"]')
   assert.ok(exemplarsStrip, 'Pro Exemplars strip renders in Project Library')
   const exemplarBtns = [...exemplarsStrip.querySelectorAll('button[data-action="create-exemplar"]')]
-  assert.equal(exemplarBtns.length, 4, 'all 4 Pro Exemplar cards render 1-click create buttons')
+  assert.equal(exemplarBtns.length, 5, 'all 5 Pro Exemplar cards render 1-click create buttons')
   await act(async () => {
-    exemplarBtns[3].click() // kuka-6axis-robot-arm
+    exemplarBtns[4].click() // chronograph-tourbillon-watch
     await new Promise((r) => setTimeout(r, 30))
   })
   assert.ok(
-    apiCalls.some((c) => c.body.action === 'create_from_exemplar' && c.body.exemplarId === 'kuka-6axis-robot-arm'),
-    'Clicking Pro Exemplar card invokes POST { action: "create_from_exemplar" }',
+    apiCalls.some((c) => c.body.action === 'create_from_exemplar' && c.body.exemplarId === 'chronograph-tourbillon-watch'),
+    'Clicking 5th Pro Exemplar card invokes POST { action: "create_from_exemplar", exemplarId: "chronograph-tourbillon-watch" }',
   )
   const backAfterExemplar = [...container.querySelectorAll('.dsh-header button')].find((b) => /返回|Back/.test(b.textContent || ''))
   if (backAfterExemplar) {
@@ -917,7 +1023,7 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
     })
   }
 
-  // 3c. v0.3.0 Interactive 3D Mesh (.glb) viewer + Shaded/Clay/Wire switcher + A/B Compare split-wipe
+  // 3c. v0.3.0 + v0.4.0 Interactive 3D Mesh (.glb) viewer v2 (wire-overlay, source select, snapshot), Shot Filmstrip + Multi-Shot, Lookdev controls, & A/B Compare split-wipe
   const meshTabBtn = container.querySelector('button[data-stage-view="mesh"]')
   assert.ok(meshTabBtn, '3D Mesh (.glb) monitor view tab renders')
   await act(async () => {
@@ -927,9 +1033,14 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
   const glbStats = container.querySelector('[data-glb-stats="true"]')
   assert.ok(glbStats, '3D Mesh viewer loads synthetic .glb and renders [data-glb-stats="true"]')
   assert.match(glbStats.textContent || '', /4\s*tris|model\.glb/i)
+  const wireOverlayBtn = container.querySelector('button[data-glb-shading="wire-overlay"]')
   const clayBtn = container.querySelector('button[data-glb-shading="clay"]')
   const wireBtn = container.querySelector('button[data-glb-shading="wireframe"]')
-  assert.ok(clayBtn && wireBtn, 'Shaded / Clay / Wire shading buttons render in 3D Mesh view')
+  assert.ok(wireOverlayBtn && clayBtn && wireBtn, 'Shaded / Shaded+Wire / Clay / Wireframe shading buttons render in 3D Mesh v2')
+  await act(async () => {
+    wireOverlayBtn.click()
+  })
+  assert.equal(wireOverlayBtn.getAttribute('aria-pressed'), 'true')
   await act(async () => {
     clayBtn.click()
   })
@@ -939,13 +1050,33 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
   })
   assert.equal(wireBtn.getAttribute('aria-pressed'), 'true')
 
-  const compareTabBtn = container.querySelector('button[data-stage-view="compare"]')
-  assert.ok(compareTabBtn, 'A/B Compare monitor view tab renders when >=2 image artifacts exist')
+  // GLB source selector switches cleanly to uploaded .glb asset
+  const glbSourceSel = container.querySelector('select[data-glb-source-select="true"]')
+  assert.ok(glbSourceSel, 'GLB source selector renders when both exported & uploaded .glb exist')
+  assert.ok(glbSourceSel.options.length >= 2)
   await act(async () => {
-    compareTabBtn.click()
+    glbSourceSel.value = glbSourceSel.options[1].value
+    glbSourceSel.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+    await new Promise((r) => setTimeout(r, 40))
+  })
+  assert.ok(container.querySelector('[data-glb-stats="true"]'), 'Uploaded .glb asset loads and parses in 3D Mesh v2')
+
+  // Snapshot PNG button present in 3D Mesh v2
+  const snapshotBtn = [...container.querySelectorAll('button')].find((b) => /视口快照|Snapshot PNG/.test(b.textContent || ''))
+  assert.ok(snapshotBtn, 'Snapshot PNG button renders in 3D Mesh v2')
+
+  // Shot Filmstrip + Compare button + Multi-Shot quick action (v0.4.0)
+  const filmstrip = container.querySelector('[data-shot-filmstrip="true"]')
+  assert.ok(filmstrip, 'Shot Filmstrip renders when shot artifacts exist')
+  const shotThumbs = [...filmstrip.querySelectorAll('[data-shot-id]')]
+  assert.equal(shotThumbs.length, 2, 'Shot Filmstrip renders 2 shot thumbnails')
+  const compareShotsBtn = [...filmstrip.querySelectorAll('button')].find((b) => /对比两镜|Compare/.test(b.textContent || ''))
+  assert.ok(compareShotsBtn, 'Shot Filmstrip Compare button renders')
+  await act(async () => {
+    compareShotsBtn.click()
     await new Promise((r) => setTimeout(r, 30))
   })
-  assert.ok(container.querySelector('[data-compare-select="a"]'), 'A/B Compare select A renders')
+  assert.ok(container.querySelector('[data-compare-select="a"]'), 'A/B Compare select A renders after Filmstrip Compare click')
   assert.ok(container.querySelector('[data-compare-select="b"]'), 'A/B Compare select B renders')
   const compareSlider = container.querySelector('[data-compare-slider="true"][role="slider"]')
   assert.ok(compareSlider, 'A/B Compare accessible role="slider" wipe handle renders')
@@ -958,6 +1089,27 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
     compareSlider.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }))
   })
   assert.equal(Number(compareSlider.getAttribute('aria-valuenow')), beforePct, 'ArrowLeft restores A/B compare split percentage')
+
+  // Multi-Shot quick action invokes POST { action: "render_shots" }
+  const multiShotBtn = [...container.querySelectorAll('.bl-stage-actions button')].find((b) =>
+    /多机位分镜|Multi-Shot/.test(b.textContent || ''),
+  )
+  assert.ok(multiShotBtn, 'Multi-Shot quick-action button renders in Studio')
+  await act(async () => {
+    multiShotBtn.click()
+    await new Promise((r) => setTimeout(r, 30))
+  })
+  assert.ok(
+    apiCalls.some((c) => c.body.action === 'render_shots'),
+    'Multi-Shot button invokes POST { action: "render_shots" }',
+  )
+
+  // Live Lookdev Inspector controls (clayMode, lensMm, exposure)
+  const lookdevBox = container.querySelector('[data-lookdev-controls="true"]')
+  assert.ok(lookdevBox, 'Live Lookdev overrides box renders in Inspector')
+  assert.ok(lookdevBox.querySelector('[role="switch"], input[type="checkbox"]'), 'Clay mode switch renders')
+  assert.ok(lookdevBox.querySelector('[data-lookdev-lens="true"]'), 'Lens focal-length control renders')
+  assert.ok(lookdevBox.querySelector('[data-lookdev-exposure="true"]'), 'Exposure EV control renders')
 
   // Return monitor to 3D Stage
   await act(async () => {
@@ -1126,6 +1278,32 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
     'Confirming install dialog invokes POST { action: "bridge_install_addon", confirmed: true }',
   )
 
+  // Live Bridge v2 Direct Controls (bridge_set_camera & bridge_set_material)
+  const bridgeDirect = container.querySelector('[data-bridge-direct="true"]')
+  assert.ok(bridgeDirect, 'Live Bridge Direct Controls details renders')
+  const applyCamBtn = bridgeDirect.querySelector('button[data-action="bridge-set-camera"]')
+  assert.ok(applyCamBtn, 'Apply Lens direct-control button renders')
+  await act(async () => {
+    applyCamBtn.click()
+    await new Promise((r) => setTimeout(r, 30))
+  })
+  assert.ok(
+    apiCalls.some((c) => c.body.action === 'bridge_set_camera'),
+    'Apply Lens invokes POST { action: "bridge_set_camera" }',
+  )
+  const matInput = bridgeDirect.querySelector('[data-bridge-mat-select="true"]')
+  assert.ok(matInput, 'Live Material selector/input renders')
+  const applyMatBtn = bridgeDirect.querySelector('button[data-action="bridge-set-material"]')
+  assert.ok(applyMatBtn && !applyMatBtn.disabled, 'Apply Material direct-control button is enabled')
+  await act(async () => {
+    applyMatBtn.click()
+    await new Promise((r) => setTimeout(r, 30))
+  })
+  assert.ok(
+    apiCalls.some((c) => c.body.action === 'bridge_set_material'),
+    'Apply Material invokes POST { action: "bridge_set_material" }',
+  )
+
   // 9. English (en-US) locale: header, completed pipeline banner, and Bridge/Env summary have ZERO Chinese leakage (v0.2.1)
   const enLocale = { getSnapshot: () => ({ active: 'en-US' }) }
   await act(async () => {
@@ -1139,10 +1317,13 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
   assert.match(enHeaderText, /Bridge & Env/)
 
   const enPipelineBanner = container.querySelector('.dbw-job-banner')
-  assert.ok(enPipelineBanner, 'completed pipeline banner remains visible in en-US')
+  assert.ok(enPipelineBanner, 'completed job banner remains visible in en-US')
   const enPipelineText = enPipelineBanner.textContent || ''
-  assert.match(enPipelineText, /Completed \(1 artifact · QC-3D 96\/A\)/)
-  assert.doesNotMatch(enPipelineText, /[\u3400-\u9fff]/, 'en-US completed pipeline banner must contain zero Chinese characters')
+  assert.doesNotMatch(enPipelineText, /[\u3400-\u9fff]/, 'en-US completed job banner must contain zero Chinese characters')
+
+  const enBridgeDirectText = container.querySelector('[data-bridge-direct="true"]')?.textContent || ''
+  assert.match(enBridgeDirectText, /Live Direct Controls/)
+  assert.doesNotMatch(enBridgeDirectText, /[\u3400-\u9fff]/, 'en-US Live Bridge Direct Controls must contain zero Chinese characters')
 
   const enEnvSummary = container.querySelector('[data-env-summary="true"]')
   assert.ok(enEnvSummary, 'Bridge & Env [data-env-summary="true"] renders')
@@ -1204,4 +1385,10 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
     'true',
     '3D Studio header tab must be aria-selected="true" after restore',
   )
+  const enLookdevText = container.querySelector('[data-lookdev-controls="true"]')?.textContent || ''
+  assert.match(enLookdevText, /Live Lookdev Overrides/)
+  assert.doesNotMatch(enLookdevText, /[\u3400-\u9fff]/, 'en-US Live Lookdev overrides must contain zero Chinese characters')
+  const enFilmstripText = container.querySelector('[data-shot-filmstrip="true"]')?.textContent || ''
+  assert.match(enFilmstripText, /Shot Filmstrip/)
+  assert.doesNotMatch(enFilmstripText, /[\u3400-\u9fff]/, 'en-US Shot Filmstrip must contain zero Chinese characters')
 })

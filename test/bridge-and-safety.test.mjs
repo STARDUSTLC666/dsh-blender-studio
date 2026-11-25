@@ -107,6 +107,40 @@ async function startMockBridge(t, options = {}) {
               sceneSummary: SAMPLE_SCENE,
             }
             break
+          case 'set_camera':
+            result = {
+              camera: {
+                name: 'Camera',
+                location: req.params?.location ?? [4, -4, 3],
+                lensMm: req.params?.lensMm ?? 50,
+                dofFstop: req.params?.dofFstop,
+              },
+              sceneSummary: SAMPLE_SCENE,
+            }
+            break
+          case 'transform_object':
+            result = {
+              object: {
+                name: String(req.params?.name ?? 'Hero'),
+                type: 'MESH',
+                location: req.params?.location ?? [0, 0, 1],
+                rotationDeg: req.params?.rotationDeg ?? [0, 0, 0],
+                scale: req.params?.scale ?? [1, 1, 1],
+              },
+              sceneSummary: SAMPLE_SCENE,
+            }
+            break
+          case 'set_material_color':
+            result = {
+              material: {
+                name: String(req.params?.materialName ?? 'HeroMat'),
+                color: String(req.params?.color ?? '#3B82F6'),
+                metallic: req.params?.metallic ?? 0.5,
+                roughness: req.params?.roughness ?? 0.3,
+              },
+              sceneSummary: SAMPLE_SCENE,
+            }
+            break
           default:
             socket.write(
               JSON.stringify({
@@ -309,12 +343,43 @@ test('checkScriptSafety allows clean bpy scripts and catches dangerous patterns 
   }
 })
 
-test('installBridgeAddon v0.3.0 invokes headless Blender installer safely, handles failures, and addon declares 0.3.0 + opt-in auto_start + GPU ping', async () => {
+test('installBridgeAddon v0.3.0 invokes headless Blender installer safely, handles failures, and addon declares 0.4.0 + opt-in auto_start + GPU ping + direct controls', async (t) => {
   const addonPath = join(fileURLToPath(new URL('..', import.meta.url)), 'blender', 'dsh_blender_bridge.py')
   const addonSource = readFileSync(addonPath, 'utf8')
-  assert.match(addonSource, /"version"\s*:\s*\(\s*0\s*,\s*3\s*,\s*0\s*\)/, 'addon bl_info must be (0, 3, 0)')
+  assert.match(addonSource, /"version"\s*:\s*\(\s*0\s*,\s*4\s*,\s*0\s*\)/, 'addon bl_info must be (0, 4, 0)')
   assert.match(addonSource, /auto_start:\s*bpy\.props\.BoolProperty\([\s\S]{0,360}default\s*=\s*False/, 'addon auto_start must default to False')
   assert.match(addonSource, /"gpu"/, 'addon _cmd_ping must report Cycles GPU info')
+  for (const fn of ['def _cmd_set_camera(', 'def _cmd_transform_object(', 'def _cmd_set_material_color(']) {
+    assert.ok(addonSource.includes(fn), `addon missing v0.4.0 direct control handler ${fn}`)
+  }
+
+  // Loopback TCP v0.4.0 direct control commands + validation guards
+  const mockV4 = await startMockBridge(t, { token: 'v4-secret' })
+  const clientV4 = new BlenderBridgeClient({ host: '127.0.0.1', port: mockV4.port, token: 'v4-secret' })
+  const camRes = await clientV4.setCamera({ location: [5, -5, 3], target: [0, 0, 1], lensMm: 85, dofFstop: 2.8 })
+  assert.equal(camRes.camera.lensMm, 85)
+  assert.deepEqual(camRes.camera.location, [5, -5, 3])
+
+  const txRes = await clientV4.transformObject({ name: 'Hero', location: [1, 2, 3], rotationDeg: [0, 0, 45], scale: [1.2, 1.2, 1.2] })
+  assert.equal(txRes.object.name, 'Hero')
+  assert.deepEqual(txRes.object.rotationDeg, [0, 0, 45])
+
+  const matRes = await clientV4.setMaterialColor({ materialName: 'HeroMat', color: '#1d4ed8', metallic: 0.9, roughness: 0.18 })
+  assert.equal(matRes.material.name, 'HeroMat')
+  assert.equal(matRes.material.color.toLowerCase(), '#1d4ed8')
+
+  await assert.rejects(
+    clientV4.setMaterialColor({ materialName: 'HeroMat', color: 'not-a-hex' }),
+    (err) => err.code === 'COLOR_INVALID' && err.status === 400,
+  )
+  await assert.rejects(
+    clientV4.transformObject({ name: '', location: [0, 0, 0] }),
+    (err) => err.code === 'BAD_REQUEST' && err.status === 400,
+  )
+  await assert.rejects(
+    clientV4.setCamera({ location: [1, NaN, 3] }),
+    (err) => err.code === 'BAD_REQUEST' && err.status === 400,
+  )
 
   const calls = []
   const okRes = await installBridgeAddon('/mock/blender-5.3', addonPath, {

@@ -7,9 +7,24 @@ import {
   BlenderError,
   MAX_JOB_LOG_LINES,
   SCENE_JSON_MARKER,
+  SHOT_DONE_MARKER,
   scrubLogText,
   type BlenderSceneSummary,
+  type BlenderShotPresetId,
 } from './types.js'
+
+export interface ParsedShotDone {
+  shotId: BlenderShotPresetId
+  file: string
+  path?: string
+  labelZh?: string
+  labelEn?: string
+  lensMm: number
+  width: number
+  height: number
+  index?: number
+  total?: number
+}
 
 export interface BlenderRunRequest {
   executablePath: string
@@ -23,6 +38,7 @@ export interface BlenderRunRequest {
   signal?: AbortSignal
   onLine?: (line: string) => void
   onProgress?: (progress: number, stage?: string) => void
+  onShotDone?: (shot: ParsedShotDone) => void
 }
 
 export interface BlenderRunResult {
@@ -31,6 +47,7 @@ export interface BlenderRunResult {
   stdout: string
   stderr: string
   sceneSummary?: BlenderSceneSummary
+  shots?: ParsedShotDone[]
   savedFiles: string[]
   durationMs: number
 }
@@ -160,6 +177,39 @@ export function parseSceneSummaryFromOutput(text: string): BlenderSceneSummary |
   return latest
 }
 
+export function parseShotDoneFromLine(line: string): ParsedShotDone | undefined {
+  const idx = line.indexOf(SHOT_DONE_MARKER)
+  if (idx === -1) return undefined
+  const jsonPart = line.slice(idx + SHOT_DONE_MARKER.length).trim()
+  if (!jsonPart) return undefined
+  try {
+    const parsed = JSON.parse(jsonPart) as Partial<ParsedShotDone>
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      typeof parsed.shotId === 'string' &&
+      typeof parsed.file === 'string' &&
+      typeof parsed.lensMm === 'number'
+    ) {
+      return {
+        shotId: parsed.shotId as BlenderShotPresetId,
+        file: parsed.file,
+        path: typeof parsed.path === 'string' ? parsed.path : undefined,
+        labelZh: typeof parsed.labelZh === 'string' ? parsed.labelZh : undefined,
+        labelEn: typeof parsed.labelEn === 'string' ? parsed.labelEn : undefined,
+        lensMm: parsed.lensMm,
+        width: typeof parsed.width === 'number' ? parsed.width : 0,
+        height: typeof parsed.height === 'number' ? parsed.height : 0,
+        index: typeof parsed.index === 'number' ? parsed.index : undefined,
+        total: typeof parsed.total === 'number' ? parsed.total : undefined,
+      }
+    }
+  } catch {
+    // ignore malformed shot marker
+  }
+  return undefined
+}
+
 function killProcessTree(child: ChildProcess): void {
   if (!child.pid || child.exitCode !== null || child.signalCode !== null) return
   if (process.platform === 'win32') {
@@ -243,6 +293,7 @@ export class BlenderRunner {
       const stdoutLines: string[] = []
       const stderrLines: string[] = []
       const savedFiles: string[] = []
+      const completedShots: ParsedShotDone[] = []
       let sceneSummary: BlenderSceneSummary | undefined
 
       const pushRingLine = (rawLine: string) => {
@@ -265,6 +316,19 @@ export class BlenderRunner {
         if (summary) {
           sceneSummary = summary
           pushRingLine(`[dsh-blender-studio] 已采集场景摘要（${summary.objectCount} 个对象，${summary.totalPolygons} 多边形）`)
+          return
+        }
+
+        const shot = parseShotDoneFromLine(rawLine)
+        if (shot) {
+          completedShots.push(shot)
+          if (shot.path) savedFiles.push(shot.path)
+          request.onShotDone?.(shot)
+          if (shot.index && shot.total) {
+            const pct = Math.max(10, Math.min(96, Math.round((shot.index / shot.total) * 95)))
+            request.onProgress?.(pct, `已完成分镜 ${shot.index}/${shot.total} · ${shot.labelZh || shot.shotId}`)
+          }
+          pushRingLine(`[dsh-blender-studio] 已完成分镜 ${shot.shotId} (${shot.lensMm}mm · ${shot.file})`)
           return
         }
 
@@ -365,6 +429,7 @@ export class BlenderRunner {
           stdout: stdoutLines.join('\n'),
           stderr: stderrLines.join('\n'),
           sceneSummary,
+          shots: completedShots.length ? completedShots : undefined,
           savedFiles,
           durationMs,
         })

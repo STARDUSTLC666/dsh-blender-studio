@@ -1,7 +1,7 @@
 bl_info = {
     "name": "DSH Blender Bridge",
     "author": "stardustlc / DeepSeek Harness",
-    "version": (0, 3, 0),
+    "version": (0, 4, 0),
     "blender": (3, 6, 0),
     "location": "View3D > Sidebar (N) > DSH Bridge",
     "description": "Loopback-only JSON-RPC live bridge for DeepSeek Harness (dsh-blender-studio)",
@@ -674,12 +674,272 @@ def _cmd_viewport_capture(params):
             pass
 
 
+def _parse_vec3(value, label):
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        raise ValueError("Parameter '{}' must be a 3-number array [x, y, z]".format(label))
+    out = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(float(item)):
+            raise ValueError("Parameter '{}' elements must be finite numbers".format(label))
+        out.append(float(item))
+    return tuple(out)
+
+
+def _srgb_to_linear_channel(val):
+    if val <= 0.04045:
+        return val / 12.92
+    return ((val + 0.055) / 1.055) ** 2.4
+
+
+def _hex_to_linear_rgba(hex_str):
+    if not isinstance(hex_str, str):
+        raise ValueError("Parameter 'color' must be a #RRGGBB hex string")
+    cleaned = hex_str.strip()
+    if len(cleaned) != 7 or not cleaned.startswith("#"):
+        raise ValueError("Parameter 'color' must be a #RRGGBB hex string")
+    try:
+        r = int(cleaned[1:3], 16) / 255.0
+        g = int(cleaned[3:5], 16) / 255.0
+        b = int(cleaned[5:7], 16) / 255.0
+    except ValueError:
+        raise ValueError("Parameter 'color' contains invalid hex digits")
+    return (
+        _srgb_to_linear_channel(r),
+        _srgb_to_linear_channel(g),
+        _srgb_to_linear_channel(b),
+        1.0,
+    )
+
+
+def _cmd_set_camera(params):
+    scene = bpy.context.scene
+    cam = scene.camera
+    if cam is None:
+        for obj in scene.objects:
+            if obj.type == "CAMERA":
+                cam = obj
+                scene.camera = cam
+                break
+    if cam is None:
+        cam_data = bpy.data.cameras.new("DSH_Bridge_Camera")
+        cam = bpy.data.objects.new("DSH_Bridge_Camera", cam_data)
+        scene.collection.objects.link(cam)
+        cam.location = (5.0, -5.0, 3.2)
+        scene.camera = cam
+
+    location = params.get("location")
+    target = params.get("target")
+    lens_mm = params.get("lensMm")
+    dof_fstop = params.get("dofFstop")
+
+    if location is not None:
+        cam.location = _parse_vec3(location, "location")
+
+    target_vec = None
+    if target is not None:
+        t_xyz = _parse_vec3(target, "target")
+        # Remove conflicting TRACK_TO constraints so direct target aiming takes effect cleanly
+        for con in list(cam.constraints):
+            if con.type == "TRACK_TO":
+                cam.constraints.remove(con)
+        if mathutils is not None:
+            target_vec = mathutils.Vector(t_xyz)
+            direction = target_vec - mathutils.Vector(cam.location)
+            if direction.length > 1e-6:
+                cam.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
+        else:
+            dx = t_xyz[0] - cam.location[0]
+            dy = t_xyz[1] - cam.location[1]
+            dz = t_xyz[2] - cam.location[2]
+            horiz = math.hypot(dx, dy)
+            pitch = math.atan2(dz, horiz) + math.pi * 0.5
+            yaw = math.atan2(dy, dx) - math.pi * 0.5
+            cam.rotation_euler = (pitch, 0.0, yaw)
+
+    if lens_mm is not None:
+        if isinstance(lens_mm, bool) or not isinstance(lens_mm, (int, float)) or not math.isfinite(float(lens_mm)):
+            raise ValueError("Parameter 'lensMm' must be a finite number")
+        lens_val = float(lens_mm)
+        if lens_val < 10.0 or lens_val > 300.0:
+            raise ValueError("Parameter 'lensMm' must be between 10 and 300")
+        cam.data.lens = lens_val
+
+    if dof_fstop is not None:
+        if isinstance(dof_fstop, bool) or not isinstance(dof_fstop, (int, float)) or not math.isfinite(float(dof_fstop)):
+            raise ValueError("Parameter 'dofFstop' must be a finite number")
+        fstop_val = float(dof_fstop)
+        if fstop_val < 0.7 or fstop_val > 64.0:
+            raise ValueError("Parameter 'dofFstop' must be between 0.7 and 64")
+        dof = getattr(cam.data, "dof", None)
+        if dof is not None:
+            dof.use_dof = True
+            dof.aperture_fstop = fstop_val
+            if target_vec is not None:
+                dist = (target_vec - mathutils.Vector(cam.location)).length
+                if dist > 0.05:
+                    dof.focus_object = None
+                    dof.focus_distance = float(dist)
+
+    try:
+        bpy.context.view_layer.update()
+    except Exception:
+        pass
+
+    _safe_undo_push("DSH Bridge: Set Camera")
+
+    dof = getattr(cam.data, "dof", None)
+    return {
+        "camera": {
+            "name": cam.name,
+            "location": _round_vec(cam.location),
+            "rotationDeg": [round(math.degrees(float(a)), 3) for a in cam.rotation_euler],
+            "lensMm": round(float(cam.data.lens), 2),
+            "useDof": bool(getattr(dof, "use_dof", False)) if dof is not None else False,
+            "dofFstop": round(float(getattr(dof, "aperture_fstop", 2.8)), 2) if dof is not None else 2.8,
+        },
+        "sceneSummary": _collect_scene_summary(),
+    }
+
+
+def _cmd_transform_object(params):
+    name = params.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("Parameter 'name' must be a non-empty object name")
+    obj = bpy.data.objects.get(name.strip())
+    if obj is None:
+        raise ValueError("Object '{}' not found in Blender scene".format(name.strip()))
+
+    location = params.get("location")
+    rotation_deg = params.get("rotationDeg")
+    scale = params.get("scale")
+
+    if location is not None:
+        obj.location = _parse_vec3(location, "location")
+    if rotation_deg is not None:
+        rx, ry, rz = _parse_vec3(rotation_deg, "rotationDeg")
+        obj.rotation_euler = (math.radians(rx), math.radians(ry), math.radians(rz))
+    if scale is not None:
+        obj.scale = _parse_vec3(scale, "scale")
+
+    try:
+        bpy.context.view_layer.update()
+    except Exception:
+        pass
+
+    _safe_undo_push("DSH Bridge: Transform " + obj.name[:32])
+
+    return {
+        "object": {
+            "name": obj.name,
+            "type": str(obj.type),
+            "location": _round_vec(obj.location),
+            "rotationDeg": [round(math.degrees(float(a)), 3) for a in obj.rotation_euler],
+            "scale": _round_vec(obj.scale),
+        },
+        "sceneSummary": _collect_scene_summary(),
+    }
+
+
+def _cmd_set_material_color(params):
+    mat_name = params.get("materialName")
+    if not isinstance(mat_name, str) or not mat_name.strip():
+        raise ValueError("Parameter 'materialName' must be a non-empty material name")
+    mat = bpy.data.materials.get(mat_name.strip())
+    if mat is None:
+        raise ValueError("Material '{}' not found in Blender scene".format(mat_name.strip()))
+
+    color_hex = params.get("color")
+    rgba = _hex_to_linear_rgba(color_hex)
+
+    metallic = params.get("metallic")
+    if metallic is not None:
+        if isinstance(metallic, bool) or not isinstance(metallic, (int, float)) or not math.isfinite(float(metallic)):
+            raise ValueError("Parameter 'metallic' must be a number between 0 and 1")
+        metallic = max(0.0, min(1.0, float(metallic)))
+
+    roughness = params.get("roughness")
+    if roughness is not None:
+        if isinstance(roughness, bool) or not isinstance(roughness, (int, float)) or not math.isfinite(float(roughness)):
+            raise ValueError("Parameter 'roughness' must be a number between 0 and 1")
+        roughness = max(0.0, min(1.0, float(roughness)))
+
+    if bpy.app.version < (5, 0, 0):
+        mat.use_nodes = True
+
+    try:
+        mat.diffuse_color = rgba
+    except Exception:
+        pass
+
+    final_metallic = 0.0
+    final_roughness = 0.5
+    nt = getattr(mat, "node_tree", None)
+    if nt is not None:
+        bsdf = None
+        for node in nt.nodes:
+            if node.type == "BSDF_PRINCIPLED":
+                bsdf = node
+                break
+        if bsdf is None:
+            bsdf = nt.nodes.new("ShaderNodeBsdfPrincipled")
+            out_node = None
+            for node in nt.nodes:
+                if node.type == "OUTPUT_MATERIAL":
+                    out_node = node
+                    break
+            if out_node is None:
+                out_node = nt.nodes.new("ShaderNodeOutputMaterial")
+            try:
+                nt.links.new(bsdf.outputs["BSDF"], out_node.inputs["Surface"])
+            except Exception:
+                pass
+
+        base_sock = bsdf.inputs.get("Base Color")
+        if base_sock is not None:
+            base_sock.default_value = rgba
+        met_sock = bsdf.inputs.get("Metallic")
+        if met_sock is not None:
+            if metallic is not None:
+                met_sock.default_value = metallic
+            final_metallic = float(met_sock.default_value)
+        rough_sock = bsdf.inputs.get("Roughness")
+        if rough_sock is not None:
+            if roughness is not None:
+                rough_sock.default_value = roughness
+            final_roughness = float(rough_sock.default_value)
+    else:
+        if metallic is not None:
+            final_metallic = metallic
+        if roughness is not None:
+            final_roughness = roughness
+
+    try:
+        bpy.context.view_layer.update()
+    except Exception:
+        pass
+
+    _safe_undo_push("DSH Bridge: Material " + mat.name[:32])
+
+    return {
+        "material": {
+            "name": mat.name,
+            "color": color_hex.strip().upper(),
+            "metallic": round(final_metallic, 4),
+            "roughness": round(final_roughness, 4),
+        },
+        "sceneSummary": _collect_scene_summary(),
+    }
+
+
 COMMAND_HANDLERS = {
     "ping": _cmd_ping,
     "scene_info": _cmd_scene_info,
     "execute": _cmd_execute,
     "viewport_capture": _cmd_viewport_capture,
     "load_script": _cmd_load_script,
+    "set_camera": _cmd_set_camera,
+    "transform_object": _cmd_transform_object,
+    "set_material_color": _cmd_set_material_color,
 }
 
 

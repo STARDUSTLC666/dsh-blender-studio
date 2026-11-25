@@ -739,9 +739,12 @@ function BlenderStageCanvas({
   framePhase,
   glbMesh = null,
   glbShading = 'shaded',
+  canvasRefExternal = null,
+  onResetOrbit = null,
   t,
 }) {
-  const canvasRef = useRef(null);
+  const internalCanvasRef = useRef(null);
+  const canvasRef = canvasRefExternal || internalCanvasRef;
   const dragRef = useRef(null);
   const ratioCss = fields.aspect === 'portrait' ? '9 / 16' : fields.aspect === 'square' ? '1 / 1' : '16 / 9';
 
@@ -769,8 +772,8 @@ function BlenderStageCanvas({
 
     const w = cssW;
     const hVal = cssH;
-    const cx = w / 2;
-    const cy = hVal * 0.56;
+    const cx = w / 2 + (Number(orbit.panX) || 0);
+    const cy = hVal * 0.56 + (Number(orbit.panY) || 0);
     const palette = LIGHTING_PALETTES[fields.lightingPreset] || LIGHTING_PALETTES.studio_3point;
 
     // 1. Backdrop (soft studio slate gradient or alpha checkerboard)
@@ -866,7 +869,23 @@ function BlenderStageCanvas({
     const lx = kDir[0] / kLen;
     const ly = kDir[1] / kLen;
     const lz = kDir[2] / kLen;
-    const clayRgb = [212, 217, 226];
+    const flLen = Math.hypot(-0.65, -0.35, 0.45);
+    const flx = -0.65 / flLen;
+    const fly = -0.35 / flLen;
+    const flz = 0.45 / flLen;
+    const rlLen = Math.hypot(-0.25, 0.85, 0.55);
+    const rlx = -0.25 / rlLen;
+    const rly = 0.85 / rlLen;
+    const rlz = 0.55 / rlLen;
+    // Camera view direction (surface -> camera) in Blender Z-up world coordinates
+    const vx = sinY * cosP;
+    const vy = -cosY * cosP;
+    const vz = sinP;
+    const hkx = lx + vx;
+    const hky = ly + vy;
+    const hkz = lz + vz;
+    const hkLen = Math.hypot(hkx, hky, hkz) || 1;
+    const clayRgb = [214, 219, 228];
 
     const projectedFaces = [];
     for (const face of rawFaces) {
@@ -906,28 +925,49 @@ function BlenderStageCanvas({
       if (!allVisible) continue;
       avgDepth /= screenPts.length;
 
-      const ndotl = Math.abs(nx * lx + ny * ly + nz * lz);
-      const fillLight = Math.max(0, -nx * 0.45 + ny * 0.35 + nz * 0.35) * 0.28;
-      const rim = Math.max(0, 1 - Math.abs(nz));
-      const intensity = palette.ambient + ndotl * 0.78 + fillLight;
-
       let fill;
       let wire;
       if (glbMesh) {
-        const glbIntensity = Math.min(1.45, intensity + 0.16);
+        // Two-sided normal flip toward camera for crisp 3-light studio Phong shading
+        const ndotvRaw = nx * vx + ny * vy + nz * vz;
+        const fnx = ndotvRaw < 0 ? -nx : nx;
+        const fny = ndotvRaw < 0 ? -ny : ny;
+        const fnz = ndotvRaw < 0 ? -nz : nz;
+        const ndotv = Math.abs(ndotvRaw);
+        const keyDiff = Math.max(0, fnx * lx + fny * ly + fnz * lz);
+        const fillDiff = Math.max(0, fnx * flx + fny * fly + fnz * flz);
+        const rimDiff = Math.max(0, fnx * rlx + fny * rly + fnz * rlz);
+        const fresnel = Math.pow(Math.max(0, 1 - ndotv), 2.2);
+        const spec = Math.pow(Math.max(0, (fnx * hkx + fny * hky + fnz * hkz) / hkLen), 24);
+        const baseColor = glbShading === 'clay' ? clayRgb : face.rgb || clayRgb;
+
         if (glbShading === 'wireframe') {
           fill = 'rgba(24,32,48,0.22)';
-          wire = 'rgba(96,165,250,0.72)';
+          wire = 'rgba(96,165,250,0.75)';
         } else if (glbShading === 'clay') {
-          fill = shadeFaceColor(clayRgb, glbIntensity, 'clay_matte', rim * 0.55);
+          const clayFactor = Math.min(1.38, palette.ambient + 0.14 + keyDiff * 0.72 + fillDiff * 0.30 + rimDiff * 0.22);
+          const cr = Math.min(255, Math.round(clayRgb[0] * clayFactor + fresnel * 14));
+          const cg = Math.min(255, Math.round(clayRgb[1] * clayFactor + fresnel * 16));
+          const cb = Math.min(255, Math.round(clayRgb[2] * clayFactor + fresnel * 20));
+          fill = `rgba(${cr},${cg},${cb},0.98)`;
           wire = 'rgba(15,23,42,0.10)';
         } else {
-          fill = shadeFaceColor(face.rgb || clayRgb, glbIntensity, 'ceramic_gloss', rim * 0.85);
-          wire = fill;
+          // 3-Light Studio Key + Cool Fill + Warm/Crisp Rim + Blinn-Phong Specular
+          const diff = Math.min(1.42, palette.ambient + 0.12 + keyDiff * 0.76 + fillDiff * 0.32 + rimDiff * 0.26);
+          const specBoost = spec * 92 + fresnel * 34;
+          const r = Math.max(0, Math.min(255, Math.round(baseColor[0] * diff + specBoost * 1.0 + fillDiff * 8)));
+          const g = Math.max(0, Math.min(255, Math.round(baseColor[1] * diff + specBoost * 0.98 + fillDiff * 14)));
+          const b = Math.max(0, Math.min(255, Math.round(baseColor[2] * diff + specBoost * 1.05 + fillDiff * 24 + rimDiff * 14)));
+          fill = `rgba(${r},${g},${b},0.98)`;
+          wire = glbShading === 'wire-overlay' ? 'rgba(15,23,42,0.34)' : fill;
         }
       } else {
-        fill = shadeFaceColor(face.rgb, intensity, fields.materialPreset, rim);
-        wire = fields.materialPreset === 'toon_cel' ? 'rgba(15,23,42,0.72)' : face.wire;
+        const ndotl = Math.abs(nx * lx + ny * ly + nz * lz);
+        const fillLight = Math.max(0, -nx * 0.45 + ny * 0.35 + nz * 0.35) * 0.28;
+        const rim = Math.max(0, 1 - Math.abs(nz));
+        const intensity = palette.ambient + ndotl * 0.78 + fillLight;
+        fill = shadeFaceColor(fields.clayMode ? clayRgb : face.rgb, intensity, fields.clayMode ? 'clay_matte' : fields.materialPreset, rim);
+        wire = !fields.clayMode && fields.materialPreset === 'toon_cel' ? 'rgba(15,23,42,0.72)' : face.wire;
       }
       projectedFaces.push({
         screenPts,
@@ -950,7 +990,15 @@ function BlenderStageCanvas({
       ctx.fill();
       if (poly.wire) {
         ctx.strokeStyle = poly.wire;
-        ctx.lineWidth = glbMesh ? (glbShading === 'wireframe' ? 0.7 : 0.45) : fields.materialPreset === 'toon_cel' ? 1.35 : 0.75;
+        ctx.lineWidth = glbMesh
+          ? glbShading === 'wireframe'
+            ? 0.75
+            : glbShading === 'wire-overlay'
+            ? 0.65
+            : 0.45
+          : fields.materialPreset === 'toon_cel'
+          ? 1.35
+          : 0.75;
         ctx.stroke();
       }
     }
@@ -1103,29 +1151,52 @@ function BlenderStageCanvas({
     }
 
     return undefined;
-  }, [fields.template, fields.accentColor, fields.lightingPreset, fields.materialPreset, fields.transparentBg, fields.headline, fields.aspect, orbit.yaw, orbit.pitch, orbit.zoom, orbit.ortho, framePhase, glbMesh, glbShading]);
+  }, [fields.template, fields.accentColor, fields.lightingPreset, fields.materialPreset, fields.transparentBg, fields.clayMode, fields.headline, fields.aspect, orbit.yaw, orbit.pitch, orbit.zoom, orbit.ortho, orbit.panX, orbit.panY, framePhase, glbMesh, glbShading]);
 
   function onPointerDown(event) {
-    if (event.button !== undefined && event.button !== 0) return;
-    dragRef.current = { x: event.clientX, y: event.clientY, yaw: orbit.yaw, pitch: orbit.pitch };
+    const isPan = event.button === 2 || Boolean(event.shiftKey);
+    if (!isPan && event.button !== undefined && event.button !== 0) return;
+    dragRef.current = {
+      mode: isPan ? 'pan' : 'orbit',
+      x: event.clientX,
+      y: event.clientY,
+      yaw: orbit.yaw,
+      pitch: orbit.pitch,
+      panX: Number(orbit.panX) || 0,
+      panY: Number(orbit.panY) || 0,
+    };
     try { event.currentTarget.setPointerCapture?.(event.pointerId); } catch { /* ignore */ }
   }
 
   function onPointerMove(event) {
-    if (!dragRef.current) return;
-    const dx = event.clientX - dragRef.current.x;
-    const dy = event.clientY - dragRef.current.y;
-    setOrbit(prev => ({
-      ...prev,
-      yaw: dragRef.current.yaw + dx * 0.011,
-      pitch: Math.max(-0.12, Math.min(1.48, dragRef.current.pitch + dy * 0.011)),
-    }));
+    const drag = dragRef.current;
+    if (!drag) return;
+    const dx = event.clientX - drag.x;
+    const dy = event.clientY - drag.y;
+    if (drag.mode === 'pan') {
+      const nextPanX = Math.max(-320, Math.min(320, Math.round(drag.panX + dx)));
+      const nextPanY = Math.max(-240, Math.min(240, Math.round(drag.panY + dy)));
+      setOrbit(prev => ({ ...prev, panX: nextPanX, panY: nextPanY }));
+      return;
+    }
+    const nextYaw = drag.yaw + dx * 0.011;
+    const nextPitch = Math.max(-0.12, Math.min(1.48, drag.pitch + dy * 0.011));
+    setOrbit(prev => ({ ...prev, yaw: nextYaw, pitch: nextPitch }));
   }
 
   function onPointerUp(event) {
     if (!dragRef.current) return;
     dragRef.current = null;
     try { event.currentTarget.releasePointerCapture?.(event.pointerId); } catch { /* ignore */ }
+  }
+
+  function onDoubleClick() {
+    if (typeof onResetOrbit === 'function') onResetOrbit();
+    else setOrbit({ ...(CAMERA_PRESET_ANGLES[fields.cameraPreset] || CAMERA_PRESET_ANGLES.three_quarter), panX: 0, panY: 0 });
+  }
+
+  function onContextMenu(event) {
+    event.preventDefault();
   }
 
   function onWheel(event) {
@@ -1158,13 +1229,15 @@ function BlenderStageCanvas({
       tabIndex: 0,
       role: 'img',
       'aria-label': t(
-        '交互式 3D 草图舞台：按住拖拽旋转视角，滚轮缩放，方向键微调轨道',
-        'Interactive 3D Stage Canvas: drag to orbit, scroll to zoom, arrow keys to rotate',
+        '交互式 3D 视口：拖拽旋转，Shift+拖拽或右键平移，滚轮缩放，双击重置',
+        'Interactive 3D Viewport: drag to orbit, Shift+drag or right-click to pan, scroll to zoom, double-click to reset',
       ),
       onPointerDown,
       onPointerMove,
       onPointerUp,
       onPointerCancel: onPointerUp,
+      onDoubleClick,
+      onContextMenu,
       onWheel,
       onKeyDown,
     }),
@@ -1264,12 +1337,36 @@ const DSH_KIT_SNIPPETS = [
   },
 ];
 
-function BlenderCompareViewer({ project, imageArtifacts, t }) {
-  const [leftId, setLeftId] = useState(() => imageArtifacts[1]?.id || imageArtifacts[0]?.id || '');
-  const [rightId, setRightId] = useState(() => imageArtifacts[0]?.id || '');
+const SHOT_PRESET_LABELS = {
+  hero_3q: { zh: '主 3/4 · 58mm', en: 'Hero 3/4 · 58mm' },
+  low_dramatic: { zh: '低角度 · 35mm', en: 'Low Angle · 35mm' },
+  macro_dof: { zh: '微距景深 · 85mm', en: 'Macro DoF · 85mm' },
+  side_profile: { zh: '正侧面 · 50mm', en: 'Side Profile · 50mm' },
+  top_plan: { zh: '俯视工程图', en: 'Top Plan' },
+};
+
+function formatShotLabel(art, lang) {
+  if (!art) return '';
+  if (art.shotId && SHOT_PRESET_LABELS[art.shotId]) {
+    return lang === 'en' ? SHOT_PRESET_LABELS[art.shotId].en : SHOT_PRESET_LABELS[art.shotId].zh;
+  }
+  if (art.label && !(lang === 'en' && /[\u3400-\u9fff]/.test(String(art.label)))) {
+    return String(art.label);
+  }
+  return art.shotId ? String(art.shotId) : lang === 'en' ? 'Shot' : '分镜';
+}
+
+function BlenderCompareViewer({ project, imageArtifacts, initialPair = null, lang = 'zh', t }) {
+  const [leftId, setLeftId] = useState(() => initialPair?.leftId || imageArtifacts[1]?.id || imageArtifacts[0]?.id || '');
+  const [rightId, setRightId] = useState(() => initialPair?.rightId || imageArtifacts[0]?.id || '');
   const [splitPct, setSplitPct] = useState(50);
   const stageRef = useRef(null);
   const draggingRef = useRef(false);
+
+  useEffect(() => {
+    if (initialPair?.leftId) setLeftId(initialPair.leftId);
+    if (initialPair?.rightId) setRightId(initialPair.rightId);
+  }, [initialPair?.nonce, initialPair?.leftId, initialPair?.rightId]);
 
   useEffect(() => {
     const ids = new Set(imageArtifacts.map(a => a.id));
@@ -1282,7 +1379,12 @@ function BlenderCompareViewer({ project, imageArtifacts, t }) {
   if (!leftArt || !rightArt) return null;
 
   function artLabel(a) {
-    const kindName = a.kind === 'contact_sheet' ? t('四视角', '4-View') : t('静帧', 'Still');
+    const kindName =
+      a.kind === 'contact_sheet'
+        ? t('四视角', '4-View')
+        : a.kind === 'shot'
+        ? formatShotLabel(a, lang)
+        : t('静帧', 'Still');
     return 'R' + a.revision + ' · ' + a.engine + ' ' + a.samples + 'spp · ' + kindName;
   }
 
@@ -1524,6 +1626,8 @@ function BlenderStudioPanel({
   samplesValid,
   framesValid,
   colorValid,
+  lensValid = true,
+  exposureValid = true,
   scriptBytes,
   scriptValid,
   startJob,
@@ -1536,7 +1640,7 @@ function BlenderStudioPanel({
   t,
 }) {
   const [inspectorTab, setInspectorTab] = useState('params');
-  const [orbit, setOrbit] = useState(() => CAMERA_PRESET_ANGLES[fields.cameraPreset] || CAMERA_PRESET_ANGLES.three_quarter);
+  const [orbit, setOrbit] = useState(() => ({ ...(CAMERA_PRESET_ANGLES[fields.cameraPreset] || CAMERA_PRESET_ANGLES.three_quarter), panX: 0, panY: 0 }));
   const [turntablePlaying, setTurntablePlaying] = useState(false);
   const [currentFrame, setCurrentFrame] = useState(fields.frameStart || 1);
   const [generatedPreview, setGeneratedPreview] = useState('');
@@ -1545,8 +1649,12 @@ function BlenderStudioPanel({
   const [pipelineTier, setPipelineTier] = useState('studio');
   const [checkpointNote, setCheckpointNote] = useState('');
   const [glbShading, setGlbShading] = useState('shaded');
+  const [selectedGlbKey, setSelectedGlbKey] = useState('');
+  const [selectedShotId, setSelectedShotId] = useState('');
+  const [comparePair, setComparePair] = useState(null);
   const [glbState, setGlbState] = useState({ key: '', loading: false, error: '', mesh: null });
   const glbCacheRef = useRef(new Map());
+  const stageCanvasRef = useRef(null);
   const scriptAreaRef = useRef(null);
   const studioRootRef = useRef(null);
   const formSplit = W.useResizableSplit({ key: 'dsh-blender-studio:form-split', initial: 430, min: 300, max: 620 });
@@ -1556,16 +1664,29 @@ function BlenderStudioPanel({
   const frameSpan = Math.max(1, frameEnd - frameStart);
   const framePhase = Math.max(0, Math.min(1, (currentFrame - frameStart) / frameSpan));
 
+  const shotArtifacts = Array.isArray(project?.artifacts)
+    ? project.artifacts
+        .filter(a => a.kind === 'shot')
+        .slice()
+        .sort((a, b) => Date.parse(a.created || 0) - Date.parse(b.created || 0))
+    : [];
+
   const imageArtifacts = Array.isArray(project?.artifacts)
     ? project.artifacts
-        .filter(a => a.kind === 'still' || a.kind === 'contact_sheet')
+        .filter(a => a.kind === 'still' || a.kind === 'contact_sheet' || a.kind === 'shot')
         .slice()
         .sort((a, b) => Date.parse(b.created || 0) - Date.parse(a.created || 0))
     : [];
 
   useEffect(() => {
+    if (shotArtifacts.length > 0 && !shotArtifacts.some(s => s.id === selectedShotId)) {
+      setSelectedShotId(shotArtifacts[0].id);
+    }
+  }, [shotArtifacts, selectedShotId]);
+
+  useEffect(() => {
     const preset = CAMERA_PRESET_ANGLES[fields.cameraPreset];
-    if (preset) setOrbit(preset);
+    if (preset) setOrbit({ ...preset, panX: 0, panY: 0 });
   }, [fields.cameraPreset]);
 
   useEffect(() => {
@@ -1642,7 +1763,7 @@ function BlenderStudioPanel({
         setStageView('compare');
       } else if (key === 'r' || key === 'R') {
         setTurntablePlaying(false);
-        setOrbit(CAMERA_PRESET_ANGLES[fields.cameraPreset] || CAMERA_PRESET_ANGLES.three_quarter);
+        setOrbit({ ...(CAMERA_PRESET_ANGLES[fields.cameraPreset] || CAMERA_PRESET_ANGLES.three_quarter), panX: 0, panY: 0 });
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -1686,27 +1807,61 @@ function BlenderStudioPanel({
   const stillArtifact = latestArtifactOf(project, 'still');
   const qcArtifact = latestArtifactOf(project, 'contact_sheet');
   const animArtifact = latestArtifactOf(project, 'animation');
-  const glbArtifact = latestArtifactOf(project, 'glb');
-  const glbAsset = Array.isArray(project?.assets)
-    ? project.assets.find(a => String(a.ext || '').replace(/^\./, '').toLowerCase() === 'glb' || String(a.file || '').toLowerCase().endsWith('.glb'))
-    : null;
-  const glbSource = glbArtifact
-    ? {
-        key: 'art:' + project.id + ':' + glbArtifact.id,
-        label: glbArtifact.file || 'model.glb',
-        size: glbArtifact.size,
-        url: urlFor(project, 'artifact', { artifact: glbArtifact.id }),
-        downloadUrl: urlFor(project, 'artifact', { artifact: glbArtifact.id, download: '1' }),
+  const activeShotArtifact = shotArtifacts.find(s => s.id === selectedShotId) || shotArtifacts[0] || null;
+  const glbSources = [];
+  if (project) {
+    const exportedGlbs = Array.isArray(project.artifacts)
+      ? project.artifacts
+          .filter(a => a.kind === 'glb')
+          .slice()
+          .sort((a, b) => Date.parse(b.created || 0) - Date.parse(a.created || 0))
+      : [];
+    for (const art of exportedGlbs) {
+      glbSources.push({
+        key: 'art:' + project.id + ':' + art.id,
+        sourceKind: 'artifact',
+        label: (art.file || 'model.glb') + ' (R' + (art.revision || 1) + ')',
+        size: art.size,
+        url: urlFor(project, 'artifact', { artifact: art.id }),
+        downloadUrl: urlFor(project, 'artifact', { artifact: art.id, download: '1' }),
+      });
+    }
+    const uploadedGlbs = Array.isArray(project.assets)
+      ? project.assets.filter(
+          a => String(a.ext || '').replace(/^\./, '').toLowerCase() === 'glb' || String(a.file || '').toLowerCase().endsWith('.glb'),
+        )
+      : [];
+    for (const asset of uploadedGlbs) {
+      glbSources.push({
+        key: 'asset:' + project.id + ':' + asset.id,
+        sourceKind: 'asset',
+        label: t('上传资产: ', 'Asset: ') + (asset.name || asset.file || 'asset.glb'),
+        size: asset.size,
+        url: urlFor(project, 'asset', { asset: asset.id }),
+        downloadUrl: urlFor(project, 'asset', { asset: asset.id, download: '1' }),
+      });
+    }
+  }
+  const glbSource = glbSources.find(s => s.key === selectedGlbKey) || glbSources[0] || null;
+
+  function captureViewportSnapshot() {
+    const canvas = stageCanvasRef.current;
+    if (!canvas || typeof canvas.toDataURL !== 'function') return;
+    try {
+      const dataUrl = canvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = dataUrl;
+      link.download = (project?.id ? 'dsh-' + project.id.slice(0, 8) : 'dsh-viewport') + '-snapshot.png';
+      document.body?.appendChild?.(link);
+      if (typeof navigator === 'undefined' || !/jsdom/i.test(String(navigator.userAgent || ''))) {
+        link.click?.();
       }
-    : glbAsset && project
-    ? {
-        key: 'asset:' + project.id + ':' + glbAsset.id,
-        label: glbAsset.name || glbAsset.file || 'asset.glb',
-        size: glbAsset.size,
-        url: urlFor(project, 'asset', { asset: glbAsset.id }),
-        downloadUrl: urlFor(project, 'asset', { asset: glbAsset.id, download: '1' }),
-      }
-    : null;
+      link.remove?.();
+      setNotice(t('已保存 3D 视口快照 PNG。', 'Saved 3D viewport snapshot PNG.'));
+    } catch (err) {
+      setError(err);
+    }
+  }
 
   useEffect(() => {
     if (stageView !== 'mesh' || !glbSource) return undefined;
@@ -1740,7 +1895,15 @@ function BlenderStudioPanel({
   }, [stageView, glbSource?.key, glbSource?.url]);
 
   const activeArtifact =
-    stageView === 'still' ? stillArtifact : stageView === 'contact_sheet' ? qcArtifact : stageView === 'animation' ? animArtifact : null;
+    stageView === 'still'
+      ? stillArtifact
+      : stageView === 'contact_sheet'
+      ? qcArtifact
+      : stageView === 'animation'
+      ? animArtifact
+      : stageView === 'shot'
+      ? activeShotArtifact
+      : null;
   const activeStale = Boolean(activeArtifact && project && (dirty || activeArtifact.revision !== project.revision));
 
   const quickWarnings = fields.scriptMode === 'custom' ? scanScriptQuickWarnings(fields.customScript) : [];
@@ -1780,6 +1943,7 @@ function BlenderStudioPanel({
           [
             { id: 'stage', label: t('实时草图', '3D Stage') },
             { id: 'still', label: t('最新静帧', 'Still'), has: !!stillArtifact },
+            ...(shotArtifacts.length > 0 ? [{ id: 'shot', label: t('分镜', 'Shots'), has: true }] : []),
             { id: 'contact_sheet', label: t('四视角质检', '4-View QC'), has: !!qcArtifact },
             { id: 'animation', label: t('动画回放', 'Animation'), has: !!animArtifact },
             { id: 'mesh', label: t('3D 网格', '3D Mesh'), has: !!glbSource },
@@ -1788,7 +1952,7 @@ function BlenderStudioPanel({
               label: t('A/B 对比', 'A/B Compare'),
               has: imageArtifacts.length >= 2,
               disabled: imageArtifacts.length < 2,
-              title: imageArtifacts.length < 2 ? t('需要至少 2 张静帧或四视角图即可进行 A/B 对比', 'Render at least 2 still/QC images to enable A/B compare') : undefined,
+              title: imageArtifacts.length < 2 ? t('需要至少 2 张静帧、分镜或四视角图即可进行 A/B 对比', 'Render at least 2 still, shot, or QC images to enable A/B compare') : undefined,
             },
           ].map(tab =>
             h(
@@ -1817,7 +1981,18 @@ function BlenderStudioPanel({
         'div',
         { className: 'bl-stage-bezel' },
         stageView === 'stage'
-          ? h(BlenderStageCanvas, { fields, orbit, setOrbit, framePhase, t })
+          ? h(BlenderStageCanvas, {
+              fields,
+              orbit,
+              setOrbit,
+              framePhase,
+              canvasRefExternal: stageCanvasRef,
+              onResetOrbit: () => {
+                setTurntablePlaying(false);
+                setOrbit({ ...(CAMERA_PRESET_ANGLES[fields.cameraPreset] || CAMERA_PRESET_ANGLES.three_quarter), panX: 0, panY: 0 });
+              },
+              t,
+            })
           : stageView === 'mesh'
           ? glbSource
             ? h(
@@ -1828,7 +2003,20 @@ function BlenderStudioPanel({
                   : glbState.error
                   ? h('div', { className: 'bl-artifact-empty' }, h('p', null, t('GLB 解析失败：', 'GLB parse failed: ') + glbState.error))
                   : glbState.mesh
-                  ? h(BlenderStageCanvas, { fields, orbit, setOrbit, framePhase, glbMesh: glbState.mesh, glbShading, t })
+                  ? h(BlenderStageCanvas, {
+                      fields,
+                      orbit,
+                      setOrbit,
+                      framePhase,
+                      glbMesh: glbState.mesh,
+                      glbShading,
+                      canvasRefExternal: stageCanvasRef,
+                      onResetOrbit: () => {
+                        setTurntablePlaying(false);
+                        setOrbit({ ...(CAMERA_PRESET_ANGLES[fields.cameraPreset] || CAMERA_PRESET_ANGLES.three_quarter), panX: 0, panY: 0 });
+                      },
+                      t,
+                    })
                   : null,
                 h(
                   'div',
@@ -1838,6 +2026,7 @@ function BlenderStudioPanel({
                     { className: 'bl-mesh-shading', role: 'group', 'aria-label': t('3D 网格着色模式', '3D mesh shading mode') },
                     [
                       { id: 'shaded', zh: '着色 Shaded', en: 'Shaded' },
+                      { id: 'wire-overlay', zh: '线框叠加', en: 'Shaded + Wire' },
                       { id: 'clay', zh: '白模 Clay', en: 'Clay' },
                       { id: 'wireframe', zh: '线框 Wire', en: 'Wireframe' },
                     ].map(mode =>
@@ -1854,11 +2043,33 @@ function BlenderStudioPanel({
                         lang === 'en' ? mode.en : mode.zh,
                       ),
                     ),
+                    h(
+                      'button',
+                      {
+                        type: 'button',
+                        className: 'bl-cam-mini-btn',
+                        'data-action': 'glb-snapshot',
+                        onClick: captureViewportSnapshot,
+                      },
+                      t('视口快照', 'Snapshot PNG'),
+                    ),
                   ),
                   h(
                     'div',
                     { className: 'bl-mesh-meta' },
-                    h('span', null, glbSource.label + (glbSource.size ? ' · ' + formatBytes(glbSource.size) : '')),
+                    glbSources.length > 1
+                      ? h(
+                          'select',
+                          {
+                            className: 'bl-glb-src-select',
+                            'data-glb-source-select': 'true',
+                            'aria-label': t('切换 GLB 模型来源', 'Select GLB mesh source'),
+                            value: glbSource.key,
+                            onChange: e => setSelectedGlbKey(e.target.value),
+                          },
+                          glbSources.map(s => h('option', { key: s.key, value: s.key }, s.label)),
+                        )
+                      : h('span', null, glbSource.label + (glbSource.size ? ' · ' + formatBytes(glbSource.size) : '')),
                     glbState.mesh
                       ? h(
                           'span',
@@ -1899,12 +2110,12 @@ function BlenderStudioPanel({
               )
           : stageView === 'compare'
           ? imageArtifacts.length >= 2
-            ? h(BlenderCompareViewer, { project, imageArtifacts, t })
+            ? h(BlenderCompareViewer, { project, imageArtifacts, initialPair: comparePair, lang, t })
             : h(
                 'div',
                 { className: 'bl-artifact-empty' },
                 h(W.Icon, { name: 'sliders', size: 28 }),
-                h('p', null, t('至少需要 2 张已渲染的静帧或四视角图即可开启左右滑动 A/B 对比。', 'Render at least 2 stills or 4-view sheets to enable A/B split comparison.')),
+                h('p', null, t('至少需要 2 张已渲染的静帧、分镜或四视角图即可开启左右滑动 A/B 对比。', 'Render at least 2 stills, shots, or 4-view sheets to enable A/B split comparison.')),
               )
           : activeArtifact
           ? h(
@@ -1929,7 +2140,8 @@ function BlenderStudioPanel({
                 h(
                   'span',
                   null,
-                  'R' + activeArtifact.revision + ' · ' + activeArtifact.engine + ' · ' + activeArtifact.samples + ' spp · ' + formatBytes(activeArtifact.size),
+                  (activeArtifact.kind === 'shot' ? formatShotLabel(activeArtifact, lang) + ' · ' : '') +
+                    'R' + activeArtifact.revision + ' · ' + activeArtifact.engine + ' · ' + activeArtifact.samples + ' spp · ' + formatBytes(activeArtifact.size),
                 ),
                 h(
                   'a',
@@ -2036,7 +2248,7 @@ function BlenderStudioPanel({
                   className: 'bl-cam-mini-btn',
                   onClick: () => {
                     setTurntablePlaying(false);
-                    setOrbit(CAMERA_PRESET_ANGLES[fields.cameraPreset] || CAMERA_PRESET_ANGLES.three_quarter);
+                    setOrbit({ ...(CAMERA_PRESET_ANGLES[fields.cameraPreset] || CAMERA_PRESET_ANGLES.three_quarter), panX: 0, panY: 0 });
                   },
                 },
                 t('重置视角', 'Reset'),
@@ -2057,6 +2269,64 @@ function BlenderStudioPanel({
                   setTurntablePlaying(false);
                   setCurrentFrame(Number(e.target.value));
                 },
+              }),
+            ),
+          )
+        : null,
+
+      // Shot Filmstrip (shown whenever project has multi-shot lookdev renders)
+      shotArtifacts.length > 0
+        ? h(
+            'div',
+            { className: 'bl-shot-filmstrip', 'data-shot-filmstrip': 'true', 'data-window-drag-exclude': '' },
+            h(
+              'div',
+              { className: 'bl-filmstrip-head' },
+              h('span', { className: 'bl-filmstrip-title' }, t('分镜胶片条', 'Shot Filmstrip') + ' (' + shotArtifacts.length + ')'),
+              shotArtifacts.length >= 2
+                ? h(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'bl-cam-mini-btn',
+                      'data-action': 'compare-shots',
+                      onClick: () => {
+                        const first = activeShotArtifact || shotArtifacts[0];
+                        const second = shotArtifacts.find(s => s.id !== first.id) || shotArtifacts[1];
+                        setComparePair({ leftId: first.id, rightId: second.id, nonce: Date.now() });
+                        setStageView('compare');
+                      },
+                    },
+                    t('对比两镜', 'Compare'),
+                  )
+                : null,
+            ),
+            h(
+              'div',
+              { className: 'bl-filmstrip-rail', role: 'list', 'aria-label': t('多机位分镜缩略图', 'Multi-shot thumbnails') },
+              shotArtifacts.map(art => {
+                const isSel = stageView === 'shot' && activeShotArtifact?.id === art.id;
+                return h(
+                  'button',
+                  {
+                    key: art.id,
+                    type: 'button',
+                    role: 'listitem',
+                    className: 'bl-shot-thumb',
+                    'data-shot-id': art.shotId || art.id,
+                    'aria-pressed': isSel,
+                    onClick: () => {
+                      setSelectedShotId(art.id);
+                      setStageView('shot');
+                    },
+                  },
+                  h('img', {
+                    src: urlFor(project, 'artifact', { artifact: art.id }),
+                    alt: formatShotLabel(art, lang),
+                    loading: 'lazy',
+                  }),
+                  h('span', { className: 'bl-shot-label' }, formatShotLabel(art, lang)),
+                );
               }),
             ),
           )
@@ -2087,6 +2357,22 @@ function BlenderStudioPanel({
             onClick: () => startJob('contact_sheet'),
           },
           t('四视角自检', '4-View QC'),
+        ),
+        h(
+          W.Button,
+          {
+            size: 'sm',
+            icon: 'layers',
+            'data-action': 'render-shots',
+            disabled: !project || running || dirty || !environment?.ready,
+            title: t('单次启动 Blender 连续渲染 4 个机位分镜（3/4 主视角 / 低角度 / 微距景深 / 俯视图）', 'Single-launch batch render of 4 lookdev camera shots (Hero 3/4, Low Angle, Macro DoF, Top Plan)'),
+            onClick: () =>
+              startJob('render_shots', {
+                shots: ['hero_3q', 'low_dramatic', 'macro_dof', 'top_plan'],
+                qualityTier: pipelineTier,
+              }),
+          },
+          t('多机位分镜', 'Multi-Shot'),
         ),
         h(
           W.Button,
@@ -2515,6 +2801,92 @@ function BlenderStudioPanel({
             disabled: running,
             onChange: checked => patchFields({ transparentBg: checked }),
           }),
+        ),
+      ),
+
+      // Live Lookdev Overrides (Focal Length, Exposure EV, Clay Inspection Override)
+      h(
+        'div',
+        { className: 'bl-lookdev-box', 'data-lookdev-controls': 'true' },
+        h(
+          'div',
+          { className: 'bl-lookdev-head' },
+          h('span', { className: 'bl-label' }, t('实时 Lookdev 覆写（焦段 / 曝光 / 白模）', 'Live Lookdev Overrides')),
+          h(W.Switch, {
+            label: t('白模体检 (Clay)', 'Clay Mode'),
+            checked: Boolean(fields.clayMode),
+            disabled: running,
+            'data-lookdev-clay': 'true',
+            onChange: checked => patchFields({ clayMode: checked }),
+          }),
+        ),
+        h(
+          'div',
+          { className: 'bl-field' },
+          h('label', { htmlFor: controlId + '-lens' }, t('镜头焦段 (18–135 mm)', 'Camera Focal Length (18–135 mm)')),
+          h(
+            'div',
+            { className: 'bl-slider-row' },
+            h('input', {
+              type: 'range',
+              className: 'bl-tactile-slider',
+              min: 18,
+              max: 135,
+              step: 1,
+              disabled: running,
+              value: Math.min(135, Math.max(18, Number(fields.lensMm) || 50)),
+              'aria-label': t('镜头焦段滑杆', 'Focal length slider'),
+              onChange: e => patchFields({ lensMm: Number(e.target.value) }),
+            }),
+            h('input', {
+              id: controlId + '-lens',
+              type: 'number',
+              className: 'bl-num-compact',
+              'data-lookdev-lens': 'true',
+              min: 18,
+              max: 135,
+              step: 1,
+              disabled: running,
+              value: fields.lensMm ?? 50,
+              'aria-label': t('焦段毫米数', 'Focal length mm'),
+              'aria-invalid': !lensValid ? 'true' : 'false',
+              onChange: e => patchFields({ lensMm: Number(e.target.value) }),
+            }),
+          ),
+        ),
+        h(
+          'div',
+          { className: 'bl-field' },
+          h('label', { htmlFor: controlId + '-exposure' }, t('曝光补偿 (-3 至 +3 EV)', 'Exposure (-3 to +3 EV)')),
+          h(
+            'div',
+            { className: 'bl-slider-row' },
+            h('input', {
+              type: 'range',
+              className: 'bl-tactile-slider',
+              min: -3,
+              max: 3,
+              step: 0.1,
+              disabled: running,
+              value: Math.min(3, Math.max(-3, Number(fields.exposure) || 0)),
+              'aria-label': t('曝光补偿滑杆', 'Exposure slider'),
+              onChange: e => patchFields({ exposure: Number(e.target.value) }),
+            }),
+            h('input', {
+              id: controlId + '-exposure',
+              type: 'number',
+              className: 'bl-num-compact',
+              'data-lookdev-exposure': 'true',
+              min: -3,
+              max: 3,
+              step: 0.1,
+              disabled: running,
+              value: fields.exposure ?? 0,
+              'aria-label': t('曝光值 EV', 'Exposure EV'),
+              'aria-invalid': !exposureValid ? 'true' : 'false',
+              onChange: e => patchFields({ exposure: Number(e.target.value) }),
+            }),
+          ),
         ),
       ),
 
@@ -3118,6 +3490,18 @@ const BLENDER_STUDIO_CSS = `
 .bl-mesh-bar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:6px 8px;border-radius:8px;background:#272d38;border:1px solid #353e4e}
 .bl-mesh-shading{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap}
 .bl-mesh-meta{display:inline-flex;align-items:center;gap:10px;flex-wrap:wrap;font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:11px;color:#cbd5e1}
+.bl-glb-src-select{width:auto!important;max-width:200px;padding:3px 7px!important;font-size:11px!important;background:#303746!important;border-color:#414b5e!important;color:#eef2f7!important}
+.bl-shot-filmstrip{display:flex;flex-direction:column;gap:6px;padding:8px 10px;border-radius:8px;background:#262c38;border:1px solid #364053}
+.bl-filmstrip-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.bl-filmstrip-title{font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:11px;font-weight:700;color:#cbd5e1}
+.bl-filmstrip-rail{display:grid;grid-template-columns:repeat(auto-fill,minmax(126px,1fr));gap:8px}
+.bl-shot-thumb{display:flex;flex-direction:column;gap:4px;padding:4px;border-radius:7px;border:1px solid #3d475c;background:#1e232d;color:#e2e8f0;font:inherit;cursor:pointer;text-align:left;overflow:hidden}
+.bl-shot-thumb:hover{border-color:#64748b}
+.bl-shot-thumb[aria-pressed="true"]{border-color:#e85d2a;box-shadow:0 0 0 1px #e85d2a;background:#2a2526}
+.bl-shot-thumb img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:4px;background:#161a22}
+.bl-shot-label{font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:10px;font-weight:600;color:#cbd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 2px}
+.bl-lookdev-box{display:flex;flex-direction:column;gap:8px;padding:9px 10px;border-radius:var(--dsw-radius-sm,9px);background:var(--w-bg);border:var(--dsh-control-border-width,1px) solid var(--w-border)}
+.bl-lookdev-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .bl-compare-root{display:flex;flex-direction:column;gap:8px;width:100%}
 .bl-compare-pickers{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .bl-compare-picker{display:flex;align-items:center;gap:6px;margin:0;min-width:0}

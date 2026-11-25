@@ -1,24 +1,26 @@
 ---
 name: "blender-production-pipeline"
-description: "Orchestrate the 5-phase AAA 3D production workflow in dsh-blender-studio v0.3.0: Pro Engineering Exemplars, 24-helper DSH_KIT v2, surgical script patching, Cycles GPU auto-acceleration, QC-3D audits, checkpoints, and 1-click Bridge setup."
+description: "Orchestrate the 5-phase AAA 3D production workflow in dsh-blender-studio v0.4.0: 5 live-repaintable Pro Exemplars, 24-helper DSH_KIT v2, live lookdev overrides (lens/exposure/clay), single-launch multi-shot batch rendering, surgical patching, and Live Bridge v2 direct controls."
 ---
 
-# High-Quality 3D Production Pipeline (`dsh-blender-studio` v0.3.0)
+# High-Quality 3D Production Pipeline (`dsh-blender-studio` v0.4.0)
 
-Use this skill whenever building complex, portfolio-grade 3D vehicles, industrial machinery, robotics, architectural hero pieces, or detailed product assemblies inside `dsh-blender-studio`. Rather than writing one blind monolithic script and hoping the final Cycles render looks good, follow this deterministic **5-Phase AAA Production Loop**.
+Use this skill whenever building complex, portfolio-grade 3D vehicles, industrial machinery, robotics, horology, architectural hero pieces, or detailed product assemblies inside `dsh-blender-studio`. Rather than writing one blind monolithic script and hoping the final Cycles render looks good, follow this deterministic **5-Phase AAA Production Loop**.
 
 ---
 
-## Phase 1 — Design Brief, Pro Exemplars & Sub-Assembly Architecture
+## Phase 1 — Design Brief, 5 Live-Repaintable Pro Exemplars & Sub-Assemblies
 
 Before writing geometry code:
-1. **Bootstrap from Pro Engineering Exemplars (Few-Shot Reference)**:
-   - Call `blender_project(action: 'list_exemplars')` to inspect the **4 built-in `QC-3D 100/A` engineering masterpieces**:
-     - `aero-x900-turbofan` (Cutaway High-Bypass Turbofan Jet Engine)
-     - `apex-09-racecar` (Cyber GT Hypercar)
-     - `vanguard-h145x-helicopter` (Twin-Turbine Tactical Helicopter)
-     - `kuka-6axis-robot-arm` (6-Axis Industrial Robot Arm Workstation)
-   - Clone any exemplar directly via `blender_project(action: 'create_from_exemplar', exemplarId)` (creates a ready-to-render project with an initial `'Exemplar baseline'` checkpoint) or read its `customScript` via `get` as a proven few-shot reference for lofted hulls, bolt rings, PBR layering, and camera framing.
+1. **Bootstrap from 5 Built-In Pro Engineering Exemplars (Few-Shot Reference)**:
+   - Call `blender_project(action: 'list_exemplars')` to inspect all **5 built-in `QC-3D 100/A` engineering masterpieces**:
+     - `aero-x900-turbofan` (Cutaway High-Bypass Turbofan Jet Engine · default `#2563eb`)
+     - `apex-09-racecar` (Cyber GT Hypercar · default `#b91c1c`)
+     - `vanguard-h145x-helicopter` (Twin-Turbine Tactical Helicopter · default `#ea580c`)
+     - `kuka-6axis-robot-arm` (6-Axis Industrial Robot Arm Workstation · default `#ea580c`)
+     - `chronograph-tourbillon-watch` (Mechanical Tourbillon Chronograph · openworked titanium & rose-gold horology movement)
+   - Every exemplar wires `DSH_PROJECT.get("accentColor")` directly into its hero clearcoat / livery / anodized / dial shader — changing `accentColor` in the Inspector or via `blender_project(action: 'update')` repaints the masterpiece with **zero code edits**!
+   - Clone any exemplar directly via `blender_project(action: 'create_from_exemplar', exemplarId)` (auto-saves `'Exemplar baseline'` checkpoint) or inspect its `customScript` via `get` as a proven few-shot reference.
 2. **Lock real-world metric dimensions** (`1 BU = 1 m`): e.g. GT racecar (`4.8 m × 2.0 m × 1.15 m`), twin-turbine helicopter (`11 m` rotor span, `3.2 m` height), high-bypass turbofan (`2.4 m` fan diameter, `3.6 m` length), 6-axis industrial robot (`2.1 m` reach). Real-world meters keep Cycles inverse-square lighting, bevel radii, depth-of-field f-stops, and auto-framing physically accurate.
 3. **Partition into logical sub-assembly collections**:
    - `00_Studio`: cyclorama / wet asphalt / helipad / engineering bay, overhead strip softboxes, key/fill/rim rigs
@@ -118,11 +120,24 @@ Replace flat clay placeholders with physically layered **`DSH_KIT` v2** shaders,
 
 ---
 
-## Phase 5 — Multi-Angle Critique Loop, Cycles GPU Beauty Pipeline & Bridge Sync
+## Phase 5 — Live Lookdev Overrides, Single-Launch Multi-Shot Packs & Live Bridge v2
 
-1. **Configure Cycles GPU Acceleration**: Check detected GPU backends (`OPTIX` / `CUDA` / `METAL` / `HIP` / `ONEAPI`) via `blender_health`. `computeDevice` defaults to `'auto'` (automatically activates Cycles GPU when available and safely falls back to `'cpu'` without throwing); override to `'gpu'` or `'cpu'` in **Bridge & Env** settings (`configure`) when debugging drivers.
-2. **Studio Pass & A/B Comparison**: Render a `studio` pass + 4-view `contact_sheet` (optionally toggle `dsh_render_clay_override(True)` for bevel inspection), visually inspect the PNGs, and compare revisions side-by-side in the workbench **A/B Compare** split-wipe view.
-3. **Final Cinema Beauty Pipeline (`qualityTier: 'beauty'`)**:
+1. **Tune Lookdev Without Touching Code (`DSH_OVERRIDES` / `dsh_apply_lookdev_overrides`)**:
+   - Adjust `accentColor` (hero livery/finish repaint), `lensMm` (`18–135 mm`, default `50` preserves exemplar signature lens), `exposure` (`-3..+3 EV`), `clayMode` (`true` engages neutral studio clay override for silhouette/bevel review), and `transparentBg` via `blender_project(action: 'update')` or the Studio Inspector — overrides apply cleanly after scene build on templates, custom scripts, and all 5 Pro Exemplars.
+2. **Configure Cycles GPU Acceleration**: Check detected GPU backends (`OPTIX` / `CUDA` / `METAL` / `HIP` / `ONEAPI`) via `blender_health`. `computeDevice` defaults to `'auto'` (automatically activates Cycles GPU when available and safely falls back to `'cpu'`).
+3. **Single-Launch Multi-Shot Lookdev Pack (`blender_render(action: 'render_shots')`)**:
+   Build the 3D scene **once** in a single headless Blender launch and capture up to 5 calibrated editorial angles (`hero_3q`, `low_dramatic`, `macro_dof`, `side_profile`, `top_plan`) in one job:
+   ```json
+   {
+     "action": "render_shots",
+     "id": "<project-uuid>",
+     "revision": 6,
+     "shots": ["hero_3q", "low_dramatic", "macro_dof", "top_plan"],
+     "qualityTier": "studio"
+   }
+   ```
+   Every rendered `shot` registers into the project's **Shot Filmstrip** (`MAX_PROJECT_ARTIFACTS = 20`) and opens directly in **A/B Compare** split-wipe alongside `still` and `contact_sheet` renders.
+4. **Final Cinema Beauty Pipeline (`qualityTier: 'beauty'`)**:
    ```json
    {
      "action": "pipeline",
@@ -135,5 +150,10 @@ Replace flat clay placeholders with physically layered **`DSH_KIT` v2** shaders,
      "abortOnQcError": true
    }
    ```
-   `qualityTier: 'beauty'` runs **Cycles** with GPU auto-acceleration (`computeDevice`), **OpenImageDenoise (`RGB_ALBEDO_NORMAL`)**, adaptive sampling, and **`AgX - Medium High Contrast`**, verifies `QC-3D`, produces the 2×2 QC sheet + denoised hero still, and exports a clean `.glb` (which can be orbited directly in the workbench **3D Mesh** viewer!).
-4. **One-Click Live Bridge Setup & Handoff**: Need to install the Bridge add-on into local Blender? Run `blender_bridge(action: 'install_addon', confirmed: true)` after explicit user confirmation (`addon_install` + `addon_enable` + `save_userpref` in headless Blender), then open/sync via `blender_bridge` (`sync_project` / `open_gui`).
+   `qualityTier: 'beauty'` runs **Cycles** with GPU auto-acceleration (`computeDevice`), **OpenImageDenoise (`RGB_ALBEDO_NORMAL`)**, adaptive sampling, and **`AgX - Medium High Contrast`**, verifies `QC-3D`, produces the 2×2 QC sheet + denoised hero still, and exports a clean `.glb` (inspectable directly in the workbench **3D Mesh** viewer v2 with 3-light Phong shading, `Shaded + Wire`, pan, and PNG snapshot!).
+5. **Live Bridge v2 Direct Controls & 1-Click Setup**:
+   - Install the Bridge add-on into local Blender in one step: `blender_bridge(action: 'install_addon', confirmed: true)` after explicit user confirmation.
+   - Manipulate an open Blender scene directly without writing Python (each command pushes a clean Blender Undo step):
+     - `blender_bridge(action: 'set_camera', location?, target?, lensMm?, dofFstop?)`
+     - `blender_bridge(action: 'transform_object', name, location?, rotationDeg?, scale?)`
+     - `blender_bridge(action: 'set_material', materialName, color, metallic?, roughness?)`

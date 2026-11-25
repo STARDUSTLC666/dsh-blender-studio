@@ -26,8 +26,20 @@ function BlenderBridgeEnvPanel({
   const [bridgeWorking, setBridgeWorking] = useState(false);
   const [installDialogOpen, setInstallDialogOpen] = useState(false);
   const [installResult, setInstallResult] = useState(null);
+  const [directLens, setDirectLens] = useState(50);
+  const [directFstop, setDirectFstop] = useState('');
+  const [directMatName, setDirectMatName] = useState('');
+  const [directMatColor, setDirectMatColor] = useState('#3b82f6');
+  const [directMatRoughness, setDirectMatRoughness] = useState(0.28);
 
   const controlId = typeof React.useId === 'function' ? React.useId() : 'bl-be';
+
+  useEffect(() => {
+    const mats = Array.isArray(liveScene?.materials) ? liveScene.materials : [];
+    if (mats.length > 0 && (!directMatName || !mats.includes(directMatName))) {
+      setDirectMatName(mats[0]);
+    }
+  }, [liveScene?.materials, directMatName]);
 
   useEffect(() => {
     if (environment) {
@@ -379,6 +391,169 @@ function BlenderBridgeEnvPanel({
               : null,
           )
         : null,
+
+      // Live Direct Controls Panel (no bpy scripting required, automatic Undo push)
+      h(
+        'details',
+        { className: 'bl-guide-details bl-direct-details', 'data-bridge-direct': 'true' },
+        h('summary', null, t('实时直控（免写脚本 · 自动 Undo）', 'Live Direct Controls (No Script · Auto Undo)')),
+        h(
+          'div',
+          { className: 'bl-direct-grid' },
+          h(
+            'div',
+            { className: 'bl-direct-card' },
+            h('strong', { className: 'bl-direct-title' }, t('实时相机焦距', 'Live Camera Lens')),
+            h(
+              'div',
+              { className: 'bl-direct-row' },
+              h(
+                'label',
+                { htmlFor: controlId + '-dlens', className: 'bl-direct-lbl' },
+                t('焦段 (mm)', 'Lens (mm)'),
+                h('input', {
+                  id: controlId + '-dlens',
+                  type: 'number',
+                  min: 18,
+                  max: 135,
+                  step: 1,
+                  'data-bridge-lens-input': 'true',
+                  value: directLens,
+                  onChange: e => setDirectLens(Number(e.target.value)),
+                }),
+              ),
+              h(
+                'label',
+                { htmlFor: controlId + '-dfstop', className: 'bl-direct-lbl' },
+                t('景深 f-stop（可选）', 'DoF f-stop (opt.)'),
+                h('input', {
+                  id: controlId + '-dfstop',
+                  type: 'number',
+                  min: 0.7,
+                  max: 22,
+                  step: 0.1,
+                  placeholder: '2.8',
+                  'data-bridge-fstop-input': 'true',
+                  value: directFstop,
+                  onChange: e => setDirectFstop(e.target.value),
+                }),
+              ),
+              h(
+                W.Button,
+                {
+                  size: 'sm',
+                  variant: 'primary',
+                  icon: 'camera',
+                  'data-action': 'bridge-set-camera',
+                  disabled: running || bridgeWorking || !Number.isFinite(Number(directLens)) || Number(directLens) < 18 || Number(directLens) > 135,
+                  onClick: () =>
+                    runBridgeAction(async () => {
+                      const payload = { action: 'bridge_set_camera', lensMm: Number(directLens) };
+                      const fNum = Number(directFstop);
+                      if (String(directFstop).trim() !== '' && Number.isFinite(fNum) && fNum > 0) {
+                        payload.dofFstop = fNum;
+                      }
+                      const res = await api(payload);
+                      if (res?.sceneSummary) setLiveScene(res.sceneSummary);
+                      setNotice(t('已实时更新 Blender 相机焦距：', 'Updated live Blender camera lens: ') + payload.lensMm + 'mm');
+                    }),
+                },
+                t('应用焦距', 'Apply Lens'),
+              ),
+            ),
+          ),
+          h(
+            'div',
+            { className: 'bl-direct-card' },
+            h('strong', { className: 'bl-direct-title' }, t('实时材质换色', 'Live Material Repaint')),
+            h(
+              'div',
+              { className: 'bl-direct-row' },
+              h(
+                'label',
+                { htmlFor: controlId + '-dmat', className: 'bl-direct-lbl bl-direct-mat-field' },
+                t('目标材质', 'Material'),
+                Array.isArray(liveScene?.materials) && liveScene.materials.length > 0
+                  ? h(
+                      'select',
+                      {
+                        id: controlId + '-dmat',
+                        'data-bridge-mat-select': 'true',
+                        value: directMatName,
+                        onChange: e => setDirectMatName(e.target.value),
+                      },
+                      liveScene.materials.map(m => h('option', { key: m, value: m }, m)),
+                    )
+                  : h('input', {
+                      id: controlId + '-dmat',
+                      type: 'text',
+                      'data-bridge-mat-select': 'true',
+                      placeholder: t('先点击「拉取实时场景」或直接输入材质名', 'Pull live scene or enter material name'),
+                      value: directMatName,
+                      onChange: e => setDirectMatName(e.target.value),
+                    }),
+              ),
+              h(
+                'label',
+                { htmlFor: controlId + '-dcolor', className: 'bl-direct-lbl bl-direct-color-field' },
+                t('颜色', 'Color'),
+                h('input', {
+                  id: controlId + '-dcolor',
+                  type: 'color',
+                  className: 'bl-color-swatch',
+                  'data-bridge-mat-color': 'true',
+                  value: directMatColor,
+                  onChange: e => setDirectMatColor(e.target.value),
+                }),
+              ),
+              h(
+                'label',
+                { htmlFor: controlId + '-drough', className: 'bl-direct-lbl bl-direct-rough-field' },
+                t('粗糙度 ', 'Roughness ') + Number(directMatRoughness).toFixed(2),
+                h('input', {
+                  id: controlId + '-drough',
+                  type: 'range',
+                  min: 0,
+                  max: 1,
+                  step: 0.02,
+                  className: 'bl-tactile-slider',
+                  'data-bridge-mat-roughness': 'true',
+                  value: directMatRoughness,
+                  onChange: e => setDirectMatRoughness(Number(e.target.value)),
+                }),
+              ),
+              h(
+                W.Button,
+                {
+                  size: 'sm',
+                  variant: 'primary',
+                  icon: 'palette',
+                  'data-action': 'bridge-set-material',
+                  disabled: running || bridgeWorking || !String(directMatName || '').trim(),
+                  onClick: () =>
+                    runBridgeAction(async () => {
+                      const res = await api({
+                        action: 'bridge_set_material',
+                        materialName: String(directMatName).trim(),
+                        color: directMatColor,
+                        roughness: Number(directMatRoughness),
+                      });
+                      if (res?.sceneSummary) setLiveScene(res.sceneSummary);
+                      setNotice(
+                        t('已实时更新材质颜色：', 'Updated live material color: ') +
+                          String(directMatName).trim() +
+                          ' (' +
+                          directMatColor.toUpperCase() +
+                          ')',
+                      );
+                    }),
+                },
+                t('实时换色', 'Apply Material'),
+              ),
+            ),
+          ),
+        ),
+      ),
 
       // Live bpy quick execution console
       h(
@@ -768,6 +943,14 @@ const BLENDER_BRIDGE_CSS = `
 .bl-live-shot-card img{max-width:100%;max-height:360px;object-fit:contain;border-radius:6px;align-self:center}
 .bl-live-scene-box{display:flex;flex-direction:column;gap:10px;padding:12px;border-radius:var(--dsw-radius-sm,9px);border:var(--dsh-control-border-width,1px) solid var(--w-border);background:var(--w-bg)}
 .bl-live-code{min-height:90px!important;margin-top:8px}
+.bl-direct-grid{display:grid;grid-template-columns:1fr;gap:10px;margin-top:10px}
+.bl-direct-card{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border-radius:var(--dsw-radius-sm,8px);background:var(--w-canvas);border:var(--dsh-control-border-width,1px) solid var(--w-border)}
+.bl-direct-title{font-size:12px;color:var(--w-text)}
+.bl-direct-row{display:flex;align-items:end;gap:8px;flex-wrap:wrap}
+.bl-direct-lbl{display:flex;flex-direction:column;gap:4px;margin:0;font-size:11px;font-weight:600;color:var(--w-muted);min-width:96px}
+.bl-direct-mat-field{flex:1 1 170px}
+.bl-direct-color-field{min-width:54px}
+.bl-direct-rough-field{flex:0 1 130px}
 .bl-active-env-box{display:flex;flex-direction:column;gap:8px;padding:12px 14px;border-radius:var(--dsw-radius-sm,9px);background:var(--w-bg);border:var(--dsh-control-border-width,1px) solid var(--w-border)}
 .bl-env-path{font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:12px;overflow-wrap:anywhere;color:var(--w-text)}
 .bl-cap-chips{display:flex;flex-wrap:wrap;gap:6px}

@@ -64,7 +64,7 @@ You can get the add-on in any of three ways:
   {
     "id": "550e8400-e29b-41d4-a716-446655440000",
     "token": "optional-shared-secret",
-    "command": "ping | scene_info | execute | viewport_capture | load_script",
+    "command": "ping | scene_info | execute | viewport_capture | load_script | set_camera | transform_object | set_material_color",
     "params": {}
   }
   ```
@@ -172,6 +172,33 @@ Synchronizes an entire DSH project into the open Blender scene. Optionally clear
   - `projectTitle` (`string`, default `"DSH Project"`)
   - `timeoutMs` (`number`, optional, client default `90000` ms)
 - **Result**: `{ "stdout": "...", "stderr": "...", "sceneSummary": { ... } }`
+
+#### 6. `set_camera` *(Live Bridge v2 — `0.4.0`)*
+Updates the active scene camera live on Blender's main thread without writing Python, automatically pushing an Undo step.
+- **Params**:
+  - `location` (`[x, y, z]`, optional): World-space camera coordinates
+  - `target` (`[x, y, z]`, optional): World-space look-at target (orients camera via direction tracking)
+  - `lensMm` (`number`, optional): Focal length in mm (`18–135`)
+  - `dofFstop` (`number`, optional): Aperture f-stop for Depth of Field
+- **Result**: `{ "camera": { "name": "...", "location": [...], "lensMm": 58 }, "sceneSummary": { ... } }`
+
+#### 7. `transform_object` *(Live Bridge v2 — `0.4.0`)*
+Applies precise transform adjustments to any named object in `bpy.data.objects` with automatic Undo.
+- **Params**:
+  - `name` (`string`, required): Exact object name
+  - `location` (`[x, y, z]`, optional)
+  - `rotationDeg` (`[rx, ry, rz]`, optional): Euler angles in degrees
+  - `scale` (`[sx, sy, sz]`, optional)
+- **Result**: `{ "object": { "name": "...", "location": [...], "rotationDeg": [...], "scale": [...] }, "sceneSummary": { ... } }`
+
+#### 8. `set_material_color` *(Live Bridge v2 — `0.4.0`)*
+Repaints a named Principled BSDF material live in Blender (compatible across Blender `3.6–5.x`) with automatic Undo.
+- **Params**:
+  - `materialName` (`string`, required): Material name in `bpy.data.materials`
+  - `color` (`string`, required): `#RRGGBB` hex color (converted cleanly to linear sRGB)
+  - `metallic` (`number`, optional, `0.0–1.0`)
+  - `roughness` (`number`, optional, `0.0–1.0`)
+- **Result**: `{ "material": { "name": "...", "color": "#1d4ed8", "metallic": 0.85, "roughness": 0.22 }, "sceneSummary": { ... } }`
 
 ---
 

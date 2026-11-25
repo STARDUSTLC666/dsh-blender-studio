@@ -110,7 +110,7 @@ test('BlenderStore CRUD, optimistic revision conflict (409), and field validatio
   // v0.2.0 raised script/project/checkpoint/artifact limits
   assert.equal(MAX_CUSTOM_SCRIPT_BYTES, 256 * 1024)
   assert.ok(MAX_PROJECT_JSON_BYTES >= 1024 * 1024, 'MAX_PROJECT_JSON_BYTES must be >= 1 MB')
-  assert.equal(MAX_PROJECT_ARTIFACTS, 12)
+  assert.equal(MAX_PROJECT_ARTIFACTS, 20)
   assert.equal(MAX_SCRIPT_CHECKPOINTS, 10)
   // 200 KB custom script must be accepted cleanly
   const bigScript = '# ' + 'x'.repeat(200 * 1024)
@@ -410,10 +410,62 @@ test('BlenderStore v0.2.0: duplicate(), script checkpoints, upload rollback, and
       created: new Date(Date.now() + i * 1000).toISOString(),
     })
   }
-  assert.equal(afterArt.artifacts.length, MAX_PROJECT_ARTIFACTS, 'artifacts capped at 12')
+  assert.equal(MAX_PROJECT_ARTIFACTS, 20, 'v0.4.0 MAX_PROJECT_ARTIFACTS raised to 20')
+  assert.equal(afterArt.artifacts.length, MAX_PROJECT_ARTIFACTS, 'artifacts capped at MAX_PROJECT_ARTIFACTS')
   await assert.rejects(stat(join(projDir, 'runs', orphanRunId)), /ENOENT/, 'orphan run dir pruned')
   await assert.rejects(stat(join(projDir, 'runs', runIds[0])), /ENOENT/, 'evicted oldest artifact run dir pruned')
   await stat(join(projDir, 'runs', runIds.at(-1), 'render.png'))
+})
+
+test('BlenderStore v0.4.0: Live Lookdev fields (lensMm, exposure, clayMode) validate, default, and persist backward-compatibly', async (t) => {
+  const { store } = await makeStore(t)
+
+  const defaults = defaultProjectFields()
+  assert.equal(defaults.lensMm, 50)
+  assert.equal(defaults.exposure, 0)
+  assert.equal(defaults.clayMode, false)
+
+  // Strict validation rejects out-of-range lensMm & exposure with canonical error codes
+  assert.throws(
+    () => validateProjectFields({ ...baseFields, lensMm: 12 }, { strict: true }),
+    (err) => err.code === 'LENS_INVALID' && err.status === 400,
+  )
+  assert.throws(
+    () => validateProjectFields({ ...baseFields, lensMm: 200 }, { strict: true }),
+    (err) => err.code === 'LENS_INVALID' && err.status === 400,
+  )
+  assert.throws(
+    () => validateProjectFields({ ...baseFields, exposure: -4 }, { strict: true }),
+    (err) => err.code === 'EXPOSURE_INVALID' && err.status === 400,
+  )
+  assert.throws(
+    () => validateProjectFields({ ...baseFields, exposure: 4.5 }, { strict: true }),
+    (err) => err.code === 'EXPOSURE_INVALID' && err.status === 400,
+  )
+
+  // Create & update persist lensMm, exposure, clayMode cleanly
+  const p1 = await store.create({ ...baseFields, title: 'Lookdev Controls Test', lensMm: 85, exposure: 0.75, clayMode: true })
+  assert.equal(p1.lensMm, 85)
+  assert.equal(p1.exposure, 0.75)
+  assert.equal(p1.clayMode, true)
+
+  const p2 = await store.update(p1.id, p1.revision, { lensMm: 35, exposure: -1.25, clayMode: false })
+  const reloaded = await store.get(p2.id)
+  assert.equal(reloaded.lensMm, 35)
+  assert.equal(reloaded.exposure, -1.25)
+  assert.equal(reloaded.clayMode, false)
+
+  // Backward compatibility: pre-0.4.0 project.json without lensMm/exposure/clayMode loads with clean defaults
+  const projFile = join(await store.path(p2.id), 'project.json')
+  const raw = JSON.parse(await readFile(projFile, 'utf8'))
+  delete raw.lensMm
+  delete raw.exposure
+  delete raw.clayMode
+  await writeFile(projFile, JSON.stringify(raw, null, 2))
+  const compat = await store.get(p2.id)
+  assert.equal(compat.lensMm, 50)
+  assert.equal(compat.exposure, 0)
+  assert.equal(compat.clayMode, false)
 })
 
 test('BlenderStore v0.3.0: surgical patchScript() handles unique patch, replaceAll, errors, size cap, and auto-checkpoint', async (t) => {

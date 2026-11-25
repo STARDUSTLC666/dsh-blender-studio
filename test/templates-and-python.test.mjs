@@ -19,12 +19,15 @@ import {
   buildBlenderChildEnv,
   parseBlenderProgressLine,
   parseSceneSummaryFromOutput,
+  parseShotDoneFromLine,
 } from '../lib/runner.js'
 import {
   BLENDER_EXPORT_FORMATS,
+  BLENDER_SHOT_PRESETS,
   BLENDER_TEMPLATE_IDS,
   defaultProjectFields,
   SCENE_JSON_MARKER,
+  SHOT_DONE_MARKER,
 } from '../lib/types.js'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
@@ -263,6 +266,40 @@ test('generateRunnerHarness supports all modes and zero-Pillow 2x2 contact sheet
   })
   assert.match(runScript, /x = 1 \+ 1/)
   assert.match(runScript, /dsh_emit_scene_summary\(\)/)
+
+  // v0.4.0: Live Lookdev overrides (DSH_OVERRIDES + dsh_apply_lookdev_overrides) & single-launch render_shots
+  const lookdevProject = makeProject({
+    template: 'product-studio',
+    lensMm: 85,
+    exposure: 0.6,
+    clayMode: true,
+    accentColor: '#1d4ed8',
+  })
+  const lookdevStill = generateRunnerHarness('preview_still', {
+    project: lookdevProject,
+    assetsDir: '/tmp/assets',
+    outputPath: '/tmp/runs/r2/render.png',
+  })
+  assert.match(lookdevStill, /DSH_OVERRIDES\s*=/)
+  assert.match(lookdevStill, /def dsh_apply_lookdev_overrides\(/)
+  assert.match(lookdevStill, /dsh_apply_lookdev_overrides\(\)/)
+  assert.match(lookdevStill, /\\"lensMm\\":85/)
+  assert.match(lookdevStill, /\\"exposure\\":0\.6/)
+  assert.match(lookdevStill, /\\"clayMode\\":true/)
+
+  assert.equal(BLENDER_SHOT_PRESETS.length, 5)
+  const multiShot = generateRunnerHarness('render_shots', {
+    project: lookdevProject,
+    assetsDir: '/tmp/assets',
+    outputDir: '/tmp/runs/r3',
+    shots: ['hero_3q', 'low_dramatic', 'macro_dof', 'top_plan'],
+    computeDevice: 'auto',
+  })
+  assert.match(multiShot, /dsh_apply_lookdev_overrides\(\)/)
+  assert.match(multiShot, /shot_hero_3q\.png|shot_\{.*\}\.png/)
+  assert.match(multiShot, /dsh_add_dof/)
+  assert.ok(multiShot.includes(SHOT_DONE_MARKER))
+  assert.match(multiShot, /dsh_emit_scene_summary\(\)/)
 })
 
 test('Python ast.parse verifies blender/dsh_blender_bridge.py and every generated scene & harness script', (t) => {
@@ -284,7 +321,7 @@ test('Python ast.parse verifies blender/dsh_blender_bridge.py and every generate
   }
 
   const scripts = [{ name: 'blender/dsh_blender_bridge.py', code: addonCode }]
-  const modes = ['preview_still', 'contact_sheet', 'render_animation', 'inspect_scene', 'run_script', 'build_blend']
+  const modes = ['preview_still', 'contact_sheet', 'render_animation', 'render_shots', 'inspect_scene', 'run_script', 'build_blend']
 
   for (const template of BLENDER_TEMPLATE_IDS) {
     const project = makeProject({
@@ -301,6 +338,8 @@ test('Python ast.parse verifies blender/dsh_blender_bridge.py and every generate
           project,
           assetsDir: 'C:\\temp\\assets',
           outputPath: `C:\\temp\\out\\${mode}.out`,
+          outputDir: mode === 'render_shots' ? 'C:\\temp\\out\\shots' : undefined,
+          shots: mode === 'render_shots' ? ['hero_3q', 'macro_dof'] : undefined,
           overrideCode: mode === 'run_script' ? 'print("ok")' : undefined,
         }),
       })
@@ -376,23 +415,36 @@ test('BlenderRunner helpers scrub secrets, parse progress lines, and extract sce
   )
   assert.equal(parsedSummary?.objectCount, 5)
   assert.equal(parsedSummary?.blenderVersion, '4.3.2')
+
+  // v0.4.0: parseShotDoneFromLine parses __DSH_SHOT_DONE__= marker cleanly
+  const shotOk = parseShotDoneFromLine(
+    `${SHOT_DONE_MARKER}{"shotId":"macro_dof","file":"shot_macro_dof.png","lensMm":85,"width":1280,"height":720,"index":3,"total":4}`,
+  )
+  assert.equal(shotOk?.shotId, 'macro_dof')
+  assert.equal(shotOk?.file, 'shot_macro_dof.png')
+  assert.equal(shotOk?.lensMm, 85)
+  assert.equal(shotOk?.index, 3)
+  assert.equal(shotOk?.total, 4)
+  assert.equal(parseShotDoneFromLine('normal blender stdout line'), undefined)
+  assert.equal(parseShotDoneFromLine(`${SHOT_DONE_MARKER}{bad-json`), undefined)
 })
 
-test('BLENDER_EXEMPLARS v0.3.0: 4 pro engineering exemplars pass summary/lookup/404, checkScriptSafety(), and Python ast.parse', (t) => {
+test('BLENDER_EXEMPLARS v0.4.0: 5 pro engineering exemplars pass summary/lookup/404, live accentColor wiring, checkScriptSafety(), and Python ast.parse', (t) => {
   const expectedIds = [
     'aero-x900-turbofan',
     'apex-09-racecar',
     'vanguard-h145x-helicopter',
     'kuka-6axis-robot-arm',
+    'chronograph-tourbillon-watch',
   ]
-  assert.equal(BLENDER_EXEMPLARS.length, 4)
+  assert.equal(BLENDER_EXEMPLARS.length, 5)
   assert.deepEqual(
     BLENDER_EXEMPLARS.map((e) => e.id),
     expectedIds,
   )
 
   const summaries = listExemplarSummaries()
-  assert.equal(summaries.length, 4)
+  assert.equal(summaries.length, 5)
   for (const s of summaries) {
     assert.ok(s.titleZh.length > 0 && s.titleEn.length > 0)
     assert.ok(s.summaryZh.length > 0 && s.summaryEn.length > 0)
@@ -400,6 +452,7 @@ test('BLENDER_EXEMPLARS v0.3.0: 4 pro engineering exemplars pass summary/lookup/
     assert.equal('script' in s, false, 'summary must omit heavy script payload')
     assert.equal('fields' in s, false, 'summary must omit fields payload')
   }
+  assert.equal(summaries.find((s) => s.id === 'chronograph-tourbillon-watch')?.category, 'horology')
 
   assert.throws(
     () => getExemplar('non-existent-exemplar'),
@@ -411,9 +464,11 @@ test('BLENDER_EXEMPLARS v0.3.0: 4 pro engineering exemplars pass summary/lookup/
     const ex = getExemplar(id)
     assert.equal(ex.id, id)
     assert.ok(ex.script.length > 5000, `${id} script must be substantial engineering bpy code`)
+    assert.match(ex.fields.accentColor || '', /^#[0-9a-fA-F]{6}$/, `${id} must declare signature accentColor`)
+    assert.match(ex.script, /accentColor/, `${id} script must wire live DSH_PROJECT["accentColor"] repainting`)
     const safety = checkScriptSafety(ex.script)
     assert.equal(safety.safe, true, `${id} failed checkScriptSafety: ${JSON.stringify(safety.findings)}`)
-    const proj = makeProject({ ...ex.fields, scriptMode: 'custom', customScript: ex.script })
+    const proj = makeProject({ ...ex.fields, accentColor: '#1D4ED8', scriptMode: 'custom', customScript: ex.script })
     scriptsToParse.push({ name: `exemplar-raw:${id}`, code: ex.script })
     scriptsToParse.push({ name: `exemplar-scene:${id}`, code: generateSceneScript(proj, 'C:\\temp\\assets') })
   }

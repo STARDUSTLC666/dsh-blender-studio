@@ -144,6 +144,7 @@ test('workflow light/dark bilingual SVGs and v0.2.0 hero/UI WebPs exist under do
     'hero-racecar.webp',
     'hero-helicopter.webp',
     'hero-robot-arm.webp',
+    'hero-tourbillon-watch.webp',
     'screen-zh.webp',
     'screen-qc.webp',
   ]) {
@@ -155,7 +156,7 @@ test('workflow light/dark bilingual SVGs and v0.2.0 hero/UI WebPs exist under do
   }
 
   const screenshots = JSON.parse(readFileSync(join(ROOT, 'screenshots.json'), 'utf8'))
-  assert.ok(Array.isArray(screenshots) && screenshots.length === 6, 'screenshots.json must list 6 curated WebP paths')
+  assert.ok(Array.isArray(screenshots) && screenshots.length === 7, 'screenshots.json must list 7 curated WebP paths')
   for (const relPath of screenshots) {
     assert.ok(typeof relPath === 'string' && !relPath.startsWith('/') && !relPath.includes('..'), `unsafe screenshot path: ${relPath}`)
     const full = join(ROOT, relPath)

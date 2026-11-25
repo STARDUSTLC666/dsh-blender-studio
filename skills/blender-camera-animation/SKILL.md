@@ -61,6 +61,16 @@ def frame_camera_to_target(cam_obj, target_center: Vector, radius: float, azimut
 
 Always set sensible clip planes (`cam.data.clip_start = 0.05`, `cam.data.clip_end = 500.0`) so close-ups don't clip the front face and wide backdrops don't disappear.
 
+### Live Lookdev Camera Overrides & Single-Launch Multi-Shot Packs (`v0.4.0`)
+- **Live Lookdev Overrides (`DSH_OVERRIDES`)**: Set `lensMm` (`18–135 mm`, default `50` keeps a template/exemplar's native focal length) and `exposure` (`-3..+3 EV`) on project fields via `blender_project(action: 'update')` to tweak compression and brightness without editing code.
+- **Single-Launch Multi-Shot Batch (`blender_render` `action: 'render_shots'`)**: Builds the scene **once** in a single Blender launch and renders calibrated editorial presets (`BLENDER_SHOT_PRESETS`):
+  - `hero_3q` (Hero 3/4 editorial framing)
+  - `low_dramatic` (Wide-angle hero low-angle shot, `35 mm` drama)
+  - `macro_dof` (Telephoto close-up detail with automatic `dsh_add_dof` shallow focus)
+  - `side_profile` (Clean orthographic-style telephoto profile elevation)
+  - `top_plan` (Top-down architectural/engineering plan view)
+- **Live Bridge v2 Camera Direct Control**: When connected to an open Blender GUI, adjust the active camera live with Undo support using `blender_bridge(action: 'set_camera', location?, target?, lensMm?, dofFstop?)`.
+
 ## 3. Target Rig & Subtle Depth of Field
 
 Use an Empty (`CTL_Cam_Target`) + `TRACK_TO` constraint so moving or orbiting the camera always stays locked onto the subject:

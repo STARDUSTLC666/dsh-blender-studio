@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, open, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, extname, join } from 'node:path'
 import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
@@ -14,6 +14,12 @@ import {
   type BridgeExecuteResult,
   type BridgeLoadScriptOptions,
   type BridgeLoadScriptResult,
+  type BridgeSetCameraOptions,
+  type BridgeSetCameraResult,
+  type BridgeSetMaterialColorOptions,
+  type BridgeSetMaterialColorResult,
+  type BridgeTransformObjectOptions,
+  type BridgeTransformObjectResult,
   type BridgeViewportOptions,
   type BridgeViewportResult,
   type InstallBridgeAddonResult,
@@ -40,15 +46,18 @@ import { registerBlenderTools } from './tools.js'
 import {
   ARTIFACT_MIME_MAP,
   BLENDER_QUALITY_TIERS,
+  BLENDER_SHOT_PRESETS,
   BlenderConflict,
   BlenderError,
   blenderId,
+  DEFAULT_MULTI_SHOT_IDS,
   MAX_ARTIFACT_DOWNLOAD_BYTES,
   MAX_ASSET_BYTES,
   MAX_JOB_LOG_LINES,
   resolveRenderResolution,
   scrubLogText,
   validateExportFormat,
+  validateShotPresetIds,
   type BlenderArtifact,
   type BlenderArtifactKind,
   type BlenderBridgeStatus,
@@ -62,6 +71,8 @@ import {
   type BlenderQualityTier,
   type BlenderSceneSummary,
   type BlenderSettings,
+  type BlenderShotPresetId,
+  type BlenderShotResult,
   type PolyHavenAssetType,
 } from './types.js'
 
@@ -81,6 +92,8 @@ export interface StartJobOptions {
   allowUnsafe?: boolean
   timeoutMs?: number
   pipeline?: BlenderPipelineOptions
+  shots?: BlenderShotPresetId[]
+  qualityTier?: BlenderQualityTier
 }
 
 export interface BlenderWorkbenchOptions {
@@ -164,6 +177,7 @@ function outputSpecForJob(
     case 'inspect_scene':
     case 'run_script':
     case 'pipeline':
+    case 'render_shots':
       return null
   }
 }
@@ -317,6 +331,21 @@ export class BlenderWorkbench {
   async bridgeViewport(opts: BridgeViewportOptions = {}): Promise<BridgeViewportResult> {
     const client = await this.syncBridgeFromSettings()
     return client.viewportCapture(opts)
+  }
+
+  async bridgeSetCamera(opts: BridgeSetCameraOptions): Promise<BridgeSetCameraResult> {
+    const client = await this.syncBridgeFromSettings()
+    return client.setCamera(opts)
+  }
+
+  async bridgeTransformObject(opts: BridgeTransformObjectOptions): Promise<BridgeTransformObjectResult> {
+    const client = await this.syncBridgeFromSettings()
+    return client.transformObject(opts)
+  }
+
+  async bridgeSetMaterialColor(opts: BridgeSetMaterialColorOptions): Promise<BridgeSetMaterialColorResult> {
+    const client = await this.syncBridgeFromSettings()
+    return client.setMaterialColor(opts)
   }
 
   async bridgeSyncProject(
@@ -538,6 +567,14 @@ export class BlenderWorkbench {
     const validId = blenderId(id)
     const exportFormat = kind === 'export_model' ? validateExportFormat(options.format ?? 'glb') : undefined
     const pipelineOpts = kind === 'pipeline' ? validatePipelineOptions(options.pipeline) : undefined
+    const validatedShots =
+      kind === 'render_shots'
+        ? options.shots !== undefined
+          ? validateShotPresetIds(options.shots)
+          : [...DEFAULT_MULTI_SHOT_IDS]
+        : undefined
+    const validatedQualityTier =
+      kind === 'render_shots' ? validateQualityTier(options.qualityTier) : undefined
 
     this.starting = true
     try {
@@ -577,10 +614,16 @@ export class BlenderWorkbench {
           revision: project.revision,
           state: 'running',
           stageCode: 'snapshot',
-          stage: kind === 'pipeline' ? '准备一键全流程任务' : '准备工程快照与执行环境',
+          stage:
+            kind === 'pipeline'
+              ? '准备一键全流程任务'
+              : kind === 'render_shots'
+                ? `准备多机位分镜批量渲染（${validatedShots?.length ?? 4} 镜）`
+                : '准备工程快照与执行环境',
           progress: 2,
           lines: [],
           ...(kind === 'pipeline' ? { pipeline: { artifactIds: [] } } : {}),
+          ...(kind === 'render_shots' ? { shots: [] } : {}),
           startedAt: new Date().toISOString(),
         },
         controller: new AbortController(),
@@ -592,6 +635,8 @@ export class BlenderWorkbench {
         ...options,
         format: exportFormat,
         pipeline: pipelineOpts,
+        shots: validatedShots,
+        qualityTier: validatedQualityTier,
       })
       return structuredClone(running.view)
     } finally {
@@ -773,11 +818,15 @@ export class BlenderWorkbench {
           : pipelineOpts?.qualityTier === 'beauty' || project.engine === 'CYCLES'
             ? 600_000
             : 360_000
-        : job.view.kind === 'render_animation'
-          ? ANIMATION_JOB_TIMEOUT_MS
-          : project.engine === 'CYCLES'
-            ? DEFAULT_CYCLES_TIMEOUT_MS
-            : DEFAULT_EEVEE_TIMEOUT_MS)
+        : job.view.kind === 'render_shots'
+          ? options.qualityTier === 'beauty' || project.engine === 'CYCLES'
+            ? 600_000
+            : 360_000
+          : job.view.kind === 'render_animation'
+            ? ANIMATION_JOB_TIMEOUT_MS
+            : project.engine === 'CYCLES'
+              ? DEFAULT_CYCLES_TIMEOUT_MS
+              : DEFAULT_EEVEE_TIMEOUT_MS)
 
     const timer = setTimeout(() => {
       job.abortReason ??= 'timeout'
@@ -929,10 +978,177 @@ export class BlenderWorkbench {
             : `全流程完成（生成 ${summary.artifactIds.length} 项成品${summary.qc ? ` · QC-3D ${summary.qc.score}/${summary.qc.grade}` : ''}）`
           if (finalState === 'done') job.view.progress = 100
         }
+      } else if (job.view.kind === 'render_shots') {
+        const shotIds =
+          options.shots && options.shots.length > 0 ? options.shots : [...DEFAULT_MULTI_SHOT_IDS]
+        const renderProject = applyQualityTier(project, options.qualityTier)
+        const settings = await this.environment.getSettings()
+        // Keep temporary batch staging outside projects/<id>/runs so registerArtifact's
+        // pruneOldRuns never deletes remaining shots while registering shot 1..N.
+        const batchRunDir = join(this.store.root, 'tmp', `shots-${job.view.id}`)
+        const completedShots: BlenderShotResult[] = []
+
+        try {
+          job.controller.signal.throwIfAborted()
+          const assetsDir = join(batchRunDir, 'assets')
+          const shotsOutDir = join(batchRunDir, 'shots')
+          await mkdir(assetsDir, { recursive: true, mode: 0o700 })
+          await mkdir(shotsOutDir, { recursive: true, mode: 0o700 })
+          await this.store.checkPath(batchRunDir)
+          for (const [file, bytes] of snapshot.assets) {
+            await writeFile(join(assetsDir, file), bytes, { flag: 'wx', mode: 0o600 })
+          }
+
+          const scriptPath = join(batchRunDir, 'run.py')
+          const scriptContent = generateRunnerHarness('render_shots', {
+            project: renderProject,
+            assetsDir,
+            outputDir: shotsOutDir,
+            shots: shotIds,
+            frame: options.frame,
+            computeDevice: settings.computeDevice ?? 'auto',
+          })
+
+          this.setStage(
+            job,
+            'render-shots',
+            `多机位批量渲染 (0/${shotIds.length} · ${renderProject.engine} ${renderProject.samples} spp)`,
+            8,
+          )
+          const startedAt = Date.now()
+          let doneCount = 0
+
+          const result = await this.runner.run({
+            executablePath,
+            scriptPath,
+            scriptContent,
+            cwd: batchRunDir,
+            frameStart: renderProject.frameStart,
+            frameEnd: renderProject.frameEnd,
+            timeoutMs,
+            signal: job.controller.signal,
+            onLine: line => this.pushJobLine(job, line),
+            onShotDone: shot => {
+              doneCount = Math.min(shotIds.length, Math.max(doneCount + 1, shot.index ?? doneCount + 1))
+              const pct = Math.max(12, Math.min(92, Math.round((doneCount / shotIds.length) * 90)))
+              const label = shot.labelZh || shot.shotId
+              this.setStage(
+                job,
+                'render-shots',
+                `多机位分镜已完成 ${doneCount}/${shotIds.length}：${label} (${shot.lensMm}mm)`,
+                pct,
+              )
+            },
+            onProgress: (progress, stage) => {
+              if (progress > 0 && doneCount === 0) {
+                const mapped = Math.max(job.view.progress, Math.min(88, Math.round(progress * 0.85)))
+                this.setStage(job, 'render-shots', stage || job.view.stage, mapped)
+              }
+            },
+          })
+
+          job.controller.signal.throwIfAborted()
+
+          if (result.sceneSummary) {
+            job.view.sceneSummary = result.sceneSummary
+            await this.store.updateSceneSummary(project.id, result.sceneSummary)
+          }
+
+          const parsedMap = new Map((result.shots ?? []).map(s => [s.shotId, s]))
+          const { width: baseW, height: baseH } = resolveRenderResolution(
+            renderProject.aspect,
+            renderProject.resolutionScale,
+          )
+          const perShotDuration = Math.max(
+            1,
+            Math.round((result.durationMs || Date.now() - startedAt) / Math.max(1, shotIds.length)),
+          )
+
+          for (const shotId of shotIds) {
+            const fileName = `shot_${shotId}.png`
+            const srcFile = join(shotsOutDir, fileName)
+            const fileInfo = await stat(srcFile).catch(() => null)
+            if (!fileInfo || !fileInfo.isFile() || fileInfo.size <= 0) {
+              continue
+            }
+            if (fileInfo.size > MAX_ARTIFACT_DOWNLOAD_BYTES) {
+              throw new BlenderError('单张分镜成品超过 200 MB 下载上限。', 'OUTPUT_TOO_LARGE', 400)
+            }
+
+            const preset = BLENDER_SHOT_PRESETS.find(p => p.id === shotId)
+            const parsed = parsedMap.get(shotId)
+            const shotArtifactId = randomUUID()
+            const shotRunDir = await this.store.runDir(project.id, shotArtifactId)
+            let registered = false
+            try {
+              const dstFile = join(shotRunDir, fileName)
+              await copyFile(srcFile, dstFile)
+              const dims = await readPngDimensions(dstFile, parsed?.width ?? baseW, parsed?.height ?? baseH)
+              const lensMm = parsed?.lensMm ?? preset?.lensMm ?? 50
+              const labelZh = parsed?.labelZh ?? preset?.zh ?? shotId
+              const labelEn = parsed?.labelEn ?? preset?.en ?? shotId
+
+              const artifact: BlenderArtifact = {
+                id: shotArtifactId,
+                kind: 'shot',
+                revision: project.revision,
+                file: fileName,
+                mime: ARTIFACT_MIME_MAP.png,
+                size: fileInfo.size,
+                engine: renderProject.engine,
+                samples: renderProject.samples,
+                width: dims.width,
+                height: dims.height,
+                durationMs: perShotDuration,
+                created: new Date().toISOString(),
+                shotId,
+                label: `${labelZh} · ${lensMm}mm`,
+              }
+              await this.store.registerArtifact(project.id, artifact)
+              registered = true
+              completedShots.push({
+                shotId,
+                labelZh,
+                labelEn,
+                artifactId: shotArtifactId,
+                lensMm,
+                width: dims.width,
+                height: dims.height,
+              })
+            } finally {
+              if (!registered) {
+                await this.store.safeRemoveRunDir(project.id, shotArtifactId)
+              }
+            }
+          }
+
+          if (completedShots.length === 0) {
+            throw new BlenderError('多机位批量渲染未生成有效 PNG 分镜，请展开日志检查。', 'OUTPUT_INVALID', 400)
+          }
+
+          job.view.shots = completedShots
+          job.view.artifactId = completedShots[0].artifactId
+          job.view.artifactKind = 'shot'
+
+          const userCancelled =
+            job.controller.signal.aborted &&
+            (job.abortReason === 'user' || job.abortReason === 'dispose' || !job.abortReason)
+          finalState = userCancelled ? 'cancelled' : 'done'
+          finalStageCode = userCancelled ? 'cancelled' : 'done'
+          finalStage = userCancelled
+            ? '已取消'
+            : `多机位分镜完成（已产出 ${completedShots.length} 张分镜图）`
+          if (finalState === 'done') job.view.progress = 100
+        } finally {
+          await this.store.checkPath(batchRunDir).then(
+            () => rm(batchRunDir, { recursive: true, force: true, maxRetries: 4, retryDelay: 50 }),
+            () => undefined,
+          ).catch(() => {})
+        }
       } else {
         const single = await this.runHarnessStage(
           job,
-          job.view.kind as Exclude<BlenderJobKind, 'pipeline'>,
+          job.view.kind as Exclude<BlenderJobKind, 'pipeline' | 'render_shots'>,
           job.view.id,
           executablePath,
           project,
@@ -1282,6 +1498,7 @@ export class BlenderWorkbench {
               ...(corruptedCount ? { corruptedCount, corruptedProjects } : {}),
               templates: BLENDER_TEMPLATES,
               exemplars: listExemplarSummaries(),
+              shotPresets: BLENDER_SHOT_PRESETS,
               environment,
               jobs: this.listJobs(),
             }
@@ -1491,6 +1708,14 @@ export class BlenderWorkbench {
               },
             })
             break
+          case 'render_shots':
+            value = await this.startJob('render_shots', blenderId(v.id), v.revision, {
+              frame: typeof v.frame === 'number' ? v.frame : undefined,
+              allowUnsafe: v.allowUnsafe === true,
+              shots: v.shots,
+              qualityTier: v.qualityTier,
+            })
+            break
           case 'open_gui':
             value = await this.openGui(blenderId(v.id), v.revision)
             break
@@ -1559,6 +1784,30 @@ export class BlenderWorkbench {
             value = await this.installAddon()
             break
           }
+          case 'bridge_set_camera':
+            value = await this.bridgeSetCamera({
+              location: v.location,
+              target: v.target,
+              lensMm: v.lensMm,
+              dofFstop: v.dofFstop,
+            })
+            break
+          case 'bridge_transform_object':
+            value = await this.bridgeTransformObject({
+              name: v.name,
+              location: v.location,
+              rotationDeg: v.rotationDeg,
+              scale: v.scale,
+            })
+            break
+          case 'bridge_set_material':
+            value = await this.bridgeSetMaterialColor({
+              materialName: v.materialName,
+              color: v.color,
+              metallic: v.metallic,
+              roughness: v.roughness,
+            })
+            break
 
           // Optional Poly Haven CC0 assets
           case 'polyhaven_search': {

@@ -1,9 +1,10 @@
 import { type BlenderExemplarDefinition, type BlenderExemplarSummary } from './types.js';
 /**
- * Built-in Pro Engineering Exemplars for dsh-blender-studio (v0.3.0).
+ * Built-in Pro Engineering Exemplars for dsh-blender-studio (v0.4.0).
  * Every exemplar script is visually verified on Blender 5.3.0 (Cycles + AgX + OIDN),
- * scores QC-3D 100/A, passes checkScriptSafety(), and serves both as 1-click starter
- * engineering scenes and high-craft few-shot bpy references for AI agents.
+ * scores QC-3D 100/A, passes checkScriptSafety(), supports live DSH_PROJECT["accentColor"]
+ * repainting and v0.4.0 Lookdev overrides, and serves both as 1-click starter scenes and
+ * high-craft few-shot bpy references for AI agents.
  */
 export declare const BLENDER_EXEMPLARS: readonly BlenderExemplarDefinition[];
 /**

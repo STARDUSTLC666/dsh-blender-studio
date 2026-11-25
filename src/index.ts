@@ -27,8 +27,15 @@ export {
   DEFAULT_EEVEE_TIMEOUT_MS,
   parseBlenderProgressLine,
   parseSceneSummaryFromOutput,
+  parseShotDoneFromLine,
 } from './runner.js'
-export type { BlenderRunExecutor, BlenderRunRequest, BlenderRunResult, BlenderRunnerOptions } from './runner.js'
+export type {
+  BlenderRunExecutor,
+  BlenderRunRequest,
+  BlenderRunResult,
+  BlenderRunnerOptions,
+  ParsedShotDone,
+} from './runner.js'
 export { PolyHavenClient, validatePolyHavenUrl } from './polyhaven.js'
 export type { PolyHavenClientOptions, PolyHavenDownloadResult } from './polyhaven.js'
 export {
@@ -47,6 +54,13 @@ export type {
   BridgeLoadScriptOptions,
   BridgeLoadScriptResult,
   BridgePingResult,
+  BridgeSetCameraOptions,
+  BridgeSetCameraResult,
+  BridgeSetMaterialColorOptions,
+  BridgeSetMaterialColorResult,
+  BridgeTransformObjectOptions,
+  BridgeTransformObjectResult,
+  BridgeVec3,
   BridgeViewportOptions,
   BridgeViewportResult,
   InstallBridgeAddonOptions,
@@ -79,16 +93,20 @@ export {
   ARTIFACT_MIME_MAP,
   BLENDER_COMPUTE_DEVICES,
   BLENDER_QUALITY_TIERS,
+  BLENDER_SHOT_PRESETS,
   BlenderConflict,
   BlenderError,
   blenderId,
+  DEFAULT_MULTI_SHOT_IDS,
   defaultProjectFields,
   MAX_SCRIPT_CHECKPOINTS,
   resolveRenderResolution,
   sanitizeFileName,
   scrubLogText,
+  SHOT_DONE_MARKER,
   validateExportFormat,
   validateProjectFields,
+  validateShotPresetIds,
 } from './types.js'
 export type {
   BlenderArtifact,
@@ -127,6 +145,9 @@ export type {
   BlenderScriptCheckpoint,
   BlenderScriptMode,
   BlenderSettings,
+  BlenderShotPresetId,
+  BlenderShotPresetMeta,
+  BlenderShotResult,
   BlenderTemplateId,
   BlenderTemplateMeta,
   PolyHavenAssetItem,

@@ -2,6 +2,19 @@
 
 [返回简介](README.md) · [完整说明](docs/REFERENCE.zh.md) · [Live Bridge 指南](docs/BRIDGE.md) · [验证说明](docs/VALIDATION.md)
 
+## [0.4.0] - 2026-11-25
+
+- **单次启动多机位分镜批量渲染（`render_shots`）与分镜胶片条（Shot Filmstrip）**：
+  - 新增 `POST { action: 'render_shots' }` 与 `blender_render(action: 'render_shots')`：仅启动**一次**无头 Blender 即可完成场景构建并连续出图多套专业电影机位（`hero_3q` 主 3/4 · `low_dramatic` 低角度广角 · `macro_dof` 微距景深 · `side_profile` 侧视工程图 · `top_plan` 俯视平面图），通过 `__DSH_SHOT_DONE__=` 实时上报进度并注册为 `kind: 'shot'` 成品（单工程保留上限提升至 `20` 份）。
+  - 工作台视口底部新增可点击的**分镜胶片条（Shot Filmstrip）**与一键「对比两镜」，无缝接入 **A/B 对比卷帘**（现同时支持 `still` / `contact_sheet` / `shot` 三类图像成品）。
+- **零代码实时 Lookdev 覆盖参数与第 5 套高阶范本（精密陀飞轮机械腕表）**：
+  - 新增工程参数 `lensMm`（`18–135 mm` 焦段）、`exposure`（`-3..+3 EV` 曝光）与 `clayMode`（白模轮廓/倒角自检开关），通过 `DSH_OVERRIDES` + `dsh_apply_lookdev_overrides()` 对所有模板、自定义脚本与全部 5 套高阶范本即时生效；同时将 `accentColor` 接入全部 5 套范本主色材质，改色无需手改代码。
+  - 新增第 5 套高阶工程范本 **`chronograph-tourbillon-watch`（CHRONO-X1 镂空陀飞轮机械腕表，`horology`）**：拉丝钛金属表壳与 60 槽玫瑰金表圈（默认 `#D97706`，支持实时改色）、旋入式表冠与双计时按钮、倒角镂空夹板、7 枚多齿齿轮系、6 点位飞行陀飞轮与蓝钢游丝、10 颗红宝石轴承、烤蓝剑形指针与防眩蓝宝石表镜（34 对象 · Cycles 64 spp OPTIX 实渲验证 **`QC-3D 100/A`**）。
+- **离线 `.glb` 3D 网格查看器 v2 与 Live Bridge v2 结构化直控**：
+  - 零外部依赖 Canvas `.glb` 软光栅查看器升级至 **三点棚拍 Phong 光照（Key + Fill + Rim）**，新增第 4 种 **`线框叠加（Shaded + Wire）`** 模式、**Shift+拖拽 / 右键平移**、双击复位、一键 **视口快照 PNG** 下载，并支持直接预览工程已上传的 `.glb` 素材。
+  - `blender/dsh_blender_bridge.py` 升级至 `0.4.0`，新增 3 个带自动撤销栈的主线程直控命令：`set_camera`、`transform_object` 与 `set_material_color`（同步暴露于工作台「实时直控」面板、`POST bridge_set_camera` / `bridge_transform_object` / `bridge_set_material` 与 `blender_bridge` 工具）。
+- **Multi-Shot Lookdev, Live Overrides, 5th Exemplar & Live Bridge v2 (`0.4.0`)**: introduces single-launch multi-camera batch rendering (`render_shots` with 5 editorial presets + Shot Filmstrip + `MAX_PROJECT_ARTIFACTS = 20`); adds zero-code Live Lookdev overrides (`lensMm`, `exposure`, `clayMode`, plus live `accentColor` repainting across all 5 Pro Exemplars); ships the 5th `QC-3D 100/A` Pro Exemplar (`chronograph-tourbillon-watch`); upgrades the zero-dependency `.glb` viewer to 3-light studio Phong shading, `Shaded + Wire`, pan, PNG snapshot & uploaded `.glb` preview; and adds Live Bridge v2 undo-safe direct controls (`set_camera`, `transform_object`, `set_material_color` in `dsh_blender_bridge.py` v0.4.0).
+
 ## [0.3.0] - 2026-11-25
 
 - **零外部依赖交互式 GLB 3D 网格查看器与 A/B 渲染对比卷帘（OP-DSH 3D 工作室）**：

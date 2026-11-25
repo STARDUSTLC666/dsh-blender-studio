@@ -164,6 +164,19 @@ window.__ModuleLoader__.load({
         estimatedPolys: '~18k polys',
         previewImage: 'docs/assets/intro/hero-robot-arm.webp',
       },
+      {
+        id: 'chronograph-tourbillon-watch',
+        titleZh: 'CHRONO-X1 镂空陀飞轮机械腕表',
+        titleEn: 'CHRONO-X1 Skeleton Tourbillon Watch',
+        summaryZh: '42mm 拉丝钛金属与玫瑰金表壳、镂空夹板齿轮、红宝石轴承与拱形蓝宝石表镜微距展台。',
+        summaryEn: '42mm brushed titanium & rose-gold case, skeleton bridges, ruby tourbillon cage & domed sapphire crystal.',
+        category: 'horology',
+        engine: 'CYCLES',
+        samples: 64,
+        aspect: 'landscape',
+        estimatedPolys: '13.1K / 24K+ Mod',
+        previewImage: 'docs/assets/intro/hero-tourbillon-watch.webp',
+      },
     ];
 
     const CAMERA_PRESETS = [
@@ -229,6 +242,8 @@ window.__ModuleLoader__.load({
         SAMPLES_INVALID: 'Samples must be an integer between 4 and 1024.',
         FRAMES_INVALID: 'Frame range must start at ≥1 with end ≥ start and span ≤ 600 frames.',
         COLOR_INVALID: 'Accent color must be a #RRGGBB hex code.',
+        LENS_INVALID: 'Camera focal length (lensMm) must be between 18 and 135 mm.',
+        EXPOSURE_INVALID: 'Exposure must be between -3 and +3 EV.',
         SCRIPT_TOO_LARGE: 'Custom bpy script cannot exceed 256 KB.',
         SCRIPT_UNSAFE: 'Custom script contains blocked system/network calls. Review the script or enable unsafe override explicitly.',
         TEMPLATE_INVALID: 'Select a supported 3D template.',
@@ -302,6 +317,9 @@ window.__ModuleLoader__.load({
         materialPreset: 'ceramic_gloss',
         accentColor: '#3B82F6',
         transparentBg: false,
+        lensMm: 50,
+        exposure: 0,
+        clayMode: false,
         scriptMode: 'template',
         customScript: '',
       };
@@ -327,6 +345,9 @@ window.__ModuleLoader__.load({
         materialPreset: p.materialPreset ?? base.materialPreset,
         accentColor: typeof p.accentColor === 'string' ? p.accentColor.toUpperCase() : base.accentColor,
         transparentBg: Boolean(p.transparentBg),
+        lensMm: Number.isFinite(Number(p.lensMm)) ? Number(p.lensMm) : base.lensMm,
+        exposure: Number.isFinite(Number(p.exposure)) ? Number(p.exposure) : base.exposure,
+        clayMode: Boolean(p.clayMode),
         scriptMode: p.scriptMode === 'custom' ? 'custom' : 'template',
         customScript: typeof p.customScript === 'string' ? p.customScript : '',
       };
@@ -405,6 +426,7 @@ window.__ModuleLoader__.load({
         run_script: t('执行 bpy 脚本', 'Run bpy Script'),
         build_blend: t('生成 .blend 工程', 'Build .blend'),
         pipeline: t('一键全流程', 'Production Pipeline'),
+        render_shots: t('多机位分镜', 'Multi-Shot Pack'),
       };
       return map[kind] || kind || t('Blender 任务', 'Blender Job');
     }
@@ -446,6 +468,20 @@ window.__ModuleLoader__.load({
           if (job.state === 'cancelled') return 'Cancelled';
           const stepLabels = ['Running QC-3D scene audit…', 'Rendering 4-View QC sheet…', 'Rendering hero output…', 'Exporting 3D model…'];
           return stepLabels[computePipelineStepIndex(job)] || 'Running production pipeline…';
+        }
+      }
+      if (job.kind === 'render_shots') {
+        const doneCount = Array.isArray(job.shots) ? job.shots.length : 0;
+        if (job.state === 'done') {
+          return t(
+            `多机位完成（生成 ${doneCount} 张分镜）`,
+            `Completed (${doneCount} ${doneCount === 1 ? 'shot' : 'shots'})`,
+          );
+        }
+        if (lang === 'en' && /[\u3400-\u9fff]/.test(String(job.stage || ''))) {
+          if (job.state === 'failed') return 'Failed — expand job log for details';
+          if (job.state === 'cancelled') return 'Cancelled';
+          return doneCount > 0 ? `Rendering multi-shot pack (${doneCount} done)…` : 'Rendering multi-shot lookdev pack…';
         }
       }
       const raw = String(job.stage || job.state || '');
@@ -688,7 +724,16 @@ window.__ModuleLoader__.load({
                 if (next.kind === 'preview_still') setStageView('still');
                 else if (next.kind === 'contact_sheet') setStageView('contact_sheet');
                 else if (next.kind === 'render_animation') setStageView('animation');
-                else if (next.kind === 'pipeline') {
+                else if (next.kind === 'render_shots') {
+                  setStageView('shot');
+                  const shotCount = Array.isArray(next.shots) ? next.shots.length : 0;
+                  setNotice(
+                    t(
+                      `多机位分镜渲染完成（共 ${shotCount} 张），可在下方胶片条点击切换或对比。`,
+                      `Multi-shot lookdev pack finished (${shotCount} shots). Click thumbnails in the filmstrip below to inspect or compare.`,
+                    ),
+                  );
+                } else if (next.kind === 'pipeline') {
                   if (next.pipeline?.stoppedEarly) {
                     const reasonText =
                       lang === 'en' && /[\u3400-\u9fff]/.test(String(next.pipeline.stopReason || ''))
@@ -1123,9 +1168,13 @@ window.__ModuleLoader__.load({
         fields.frameEnd >= fields.frameStart &&
         fields.frameEnd <= fields.frameStart + 600;
       const colorValid = /^#[0-9a-fA-F]{6}$/.test(String(fields.accentColor || '').trim());
+      const lensNum = Number(fields.lensMm);
+      const lensValid = Number.isFinite(lensNum) && lensNum >= 18 && lensNum <= 135;
+      const exposureNum = Number(fields.exposure);
+      const exposureValid = Number.isFinite(exposureNum) && exposureNum >= -3 && exposureNum <= 3;
       const scriptBytes = utf8ByteLength(fields.customScript || '');
       const scriptValid = scriptBytes <= MAX_SCRIPT_BYTES;
-      const canSave = titleValid && descValid && headlineValid && samplesValid && framesValid && colorValid && scriptValid;
+      const canSave = titleValid && descValid && headlineValid && samplesValid && framesValid && colorValid && lensValid && exposureValid && scriptValid;
       const saveHint = !titleValid
         ? t('请填写 1–72 字符的工程标题。', 'Enter a title between 1 and 72 characters.')
         : !descValid
@@ -1138,6 +1187,10 @@ window.__ModuleLoader__.load({
         ? t('帧范围需满足起始 ≥1、结束 ≥起始且跨度 ≤600。', 'Frames must start at ≥1 with span ≤600.')
         : !colorValid
         ? t('主题色需为 #RRGGBB 格式。', 'Accent color must be #RRGGBB.')
+        : !lensValid
+        ? t('相机焦段需在 18–135 mm 之间。', 'Camera focal length must be between 18 and 135 mm.')
+        : !exposureValid
+        ? t('曝光补偿需在 -3 至 +3 EV 之间。', 'Exposure must be between -3 and +3 EV.')
         : !scriptValid
         ? t('自定义脚本超出 256 KB 上限。', 'Custom script exceeds 256 KB.')
         : project && !dirty
@@ -1678,6 +1731,8 @@ window.__ModuleLoader__.load({
                 samplesValid,
                 framesValid,
                 colorValid,
+                lensValid,
+                exposureValid,
                 scriptBytes,
                 scriptValid,
                 canSave,
