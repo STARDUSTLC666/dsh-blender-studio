@@ -15,6 +15,14 @@ export interface AddAssetOptions {
     source?: 'upload' | 'polyhaven';
     sourceId?: string;
 }
+export interface PatchScriptOptions {
+    replaceAll?: boolean;
+    note?: string;
+}
+export declare function applyScriptPatch(source: string, find: string, replace: string, replaceAll?: boolean): {
+    patched: string;
+    replacements: number;
+};
 export declare class BlenderStore {
     readonly root: string;
     private readonly customTrashPath?;
@@ -42,6 +50,10 @@ export declare class BlenderStore {
     private makeCheckpoint;
     private pushCheckpoint;
     update(id: string, revision: unknown, value: unknown): Promise<BlenderProject>;
+    patchScript(id: string, revision: unknown, find: string, replace: string, noteOrOptions?: string | PatchScriptOptions): Promise<{
+        project: BlenderProject;
+        replacements: number;
+    }>;
     saveCheckpoint(id: string, revision: unknown, note?: string): Promise<BlenderProject>;
     restoreCheckpoint(id: string, revision: unknown, checkpointId: string): Promise<BlenderProject>;
     archive(id: string, revision: unknown, restore?: boolean): Promise<BlenderProject>;

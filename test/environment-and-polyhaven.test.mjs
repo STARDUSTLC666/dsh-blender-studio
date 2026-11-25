@@ -7,6 +7,7 @@ import {
   BlenderEnvironment,
   buildExecutableInfo,
   parseBlenderVersionOutput,
+  parseCyclesGpuProbeOutput,
 } from '../lib/environment.js'
 import { PolyHavenClient, validatePolyHavenUrl } from '../lib/polyhaven.js'
 
@@ -133,6 +134,70 @@ test('BlenderEnvironment probes mock executables, persists settings, and validat
     prober: async () => ({ ok: false, stdout: '', error: 'ENOENT' }),
   })
   await assert.rejects(emptyEnv.requireActiveExecutable(), (err) => err.code === 'ENV_NOT_READY')
+})
+
+test('BlenderEnvironment v0.3.0: Cycles GPU probe parsing, gpuProber integration, and computeDevice persistence', async (t) => {
+  const root = await makeTmpRoot(t)
+
+  // 1. parseCyclesGpuProbeOutput parses structured marker and falls back gracefully on noise
+  const parsedOptix = parseCyclesGpuProbeOutput(
+    'Blender 5.3.0\n__DSH_GPU_JSON__={"available":true,"backend":"OPTIX","devices":["NVIDIA GeForce RTX 4060 Laptop GPU"]}\n',
+  )
+  assert.equal(parsedOptix.available, true)
+  assert.equal(parsedOptix.backend, 'OPTIX')
+  assert.deepEqual(parsedOptix.devices, ['NVIDIA GeForce RTX 4060 Laptop GPU'])
+
+  const parsedFallback = parseCyclesGpuProbeOutput('no marker here')
+  assert.deepEqual(parsedFallback, { available: false, backend: 'CPU', devices: [] })
+
+  // 2. Default computeDevice is 'auto' and persists 'gpu' / 'cpu' cleanly
+  let gpuProbeCalls = 0
+  const env = new BlenderEnvironment({
+    root,
+    skipSystemScan: true,
+    probeGpu: true,
+    extraCandidates: [{ path: '/fake/blender-5.3', source: 'standard' }],
+    prober: async (execPath) =>
+      execPath === '/fake/blender-5.3'
+        ? { ok: true, stdout: 'Blender 5.3.0\n' }
+        : { ok: false, stdout: '', error: 'ENOENT' },
+    gpuProber: async () => {
+      gpuProbeCalls++
+      return { available: true, backend: 'OPTIX', devices: ['RTX 4060'] }
+    },
+  })
+
+  const initialSettings = await env.getSettings()
+  assert.equal(initialSettings.computeDevice, 'auto')
+
+  const st1 = await env.status(undefined, { forceDetect: true, probeGpu: true })
+  assert.equal(st1.ready, true)
+  assert.equal(st1.computeDevice, 'auto')
+  assert.deepEqual(st1.gpu, { available: true, backend: 'OPTIX', devices: ['RTX 4060'] })
+  assert.deepEqual(st1.active?.gpu, { available: true, backend: 'OPTIX', devices: ['RTX 4060'] })
+  assert.equal(gpuProbeCalls, 1)
+
+  // Cached GPU probe does not re-spawn on repeated call unless force: true
+  await env.probeCyclesGpu('/fake/blender-5.3')
+  assert.equal(gpuProbeCalls, 1)
+  await env.probeCyclesGpu('/fake/blender-5.3', { force: true })
+  assert.equal(gpuProbeCalls, 2)
+
+  // Configure computeDevice = 'cpu' and verify persistence across reload
+  await env.configure({ computeDevice: 'cpu' })
+  const envReloaded = new BlenderEnvironment({
+    root,
+    skipSystemScan: true,
+    probeGpu: true,
+    extraCandidates: [{ path: '/fake/blender-5.3', source: 'standard' }],
+    prober: async () => ({ ok: true, stdout: 'Blender 5.3.0\n' }),
+    gpuProber: async () => {
+      throw new Error('GPU probe crashed')
+    },
+  })
+  const st2 = await envReloaded.status(undefined, { forceDetect: true, probeGpu: true })
+  assert.equal(st2.computeDevice, 'cpu')
+  assert.deepEqual(st2.gpu, { available: false, backend: 'CPU', devices: [] }, 'failing gpuProber falls back cleanly to CPU')
 })
 
 test('PolyHavenClient enforces disabled guard, SSRF host allowlist, redirect allowlist, search and cache', async (t) => {

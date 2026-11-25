@@ -5,14 +5,22 @@ import { installBlenderWorkbench } from './workbench.js'
 
 export { BlenderWorkbench, installBlenderWorkbench } from './workbench.js'
 export type { BlenderWorkbenchOptions, InstallBlenderWorkbenchOptions, StartJobOptions } from './workbench.js'
-export { BlenderStore, validateAssetUpload, zipAsync } from './store.js'
+export { applyScriptPatch, BlenderStore, validateAssetUpload, zipAsync } from './store.js'
+export type { PatchScriptOptions } from './store.js'
 export {
   BlenderEnvironment,
   buildExecutableInfo,
   defaultBlenderSettings,
+  defaultProbeCyclesGpu,
   parseBlenderVersionOutput,
+  parseCyclesGpuProbeOutput,
 } from './environment.js'
-export type { BlenderCandidate, BlenderEnvironmentOptions, BlenderVersionProber } from './environment.js'
+export type {
+  BlenderCandidate,
+  BlenderEnvironmentOptions,
+  BlenderGpuProber,
+  BlenderVersionProber,
+} from './environment.js'
 export {
   BlenderRunner,
   DEFAULT_CYCLES_TIMEOUT_MS,
@@ -26,12 +34,14 @@ export type { PolyHavenClientOptions, PolyHavenDownloadResult } from './polyhave
 export {
   BlenderBridgeClient,
   checkScriptSafety,
+  installBridgeAddon,
   isLoopbackHost,
   launchBlenderGui,
   normalizeLoopbackHost,
 } from './bridge.js'
 export type {
   BlenderBridgeClientOptions,
+  BridgeAddonInstallExecutor,
   BridgeExecuteOptions,
   BridgeExecuteResult,
   BridgeLoadScriptOptions,
@@ -39,6 +49,8 @@ export type {
   BridgePingResult,
   BridgeViewportOptions,
   BridgeViewportResult,
+  InstallBridgeAddonOptions,
+  InstallBridgeAddonResult,
   LaunchBlenderGuiResult,
 } from './bridge.js'
 export {
@@ -47,7 +59,8 @@ export {
   generateSceneScript,
   getTemplateMeta,
 } from './templates.js'
-export type { RunnerHarnessOptions } from './templates.js'
+export type { GenerateSceneOptions, RunnerHarnessOptions } from './templates.js'
+export { BLENDER_EXEMPLARS, getExemplar, listExemplarSummaries } from './exemplars.js'
 export { registerBlenderTools } from './tools.js'
 export type { RegisterBlenderToolsOptions } from './tools.js'
 export { createSkillBundle, parseSkillFile } from './skill-bundle.js'
@@ -64,6 +77,7 @@ export type {
 export {
   ASPECT_RESOLUTIONS,
   ARTIFACT_MIME_MAP,
+  BLENDER_COMPUTE_DEVICES,
   BLENDER_QUALITY_TIERS,
   BlenderConflict,
   BlenderError,
@@ -84,10 +98,16 @@ export type {
   BlenderAssetKind,
   BlenderBridgeStatus,
   BlenderCameraPreset,
+  BlenderComputeDevice,
   BlenderEnvironmentStatus,
   BlenderErrorCode,
   BlenderExecutableInfo,
+  BlenderExemplarCategory,
+  BlenderExemplarDefinition,
+  BlenderExemplarSummary,
   BlenderExportFormat,
+  BlenderGpuBackend,
+  BlenderGpuInfo,
   BlenderJob,
   BlenderJobKind,
   BlenderLightingPreset,

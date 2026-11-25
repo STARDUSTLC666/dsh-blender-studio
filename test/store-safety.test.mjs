@@ -5,7 +5,7 @@ import { join, resolve, dirname, relative, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { unzipSync } from 'fflate'
-import { BlenderStore, validateAssetUpload } from '../lib/store.js'
+import { BlenderStore, applyScriptPatch, validateAssetUpload } from '../lib/store.js'
 import {
   defaultProjectFields,
   validateProjectFields,
@@ -414,4 +414,69 @@ test('BlenderStore v0.2.0: duplicate(), script checkpoints, upload rollback, and
   await assert.rejects(stat(join(projDir, 'runs', orphanRunId)), /ENOENT/, 'orphan run dir pruned')
   await assert.rejects(stat(join(projDir, 'runs', runIds[0])), /ENOENT/, 'evicted oldest artifact run dir pruned')
   await stat(join(projDir, 'runs', runIds.at(-1), 'render.png'))
+})
+
+test('BlenderStore v0.3.0: surgical patchScript() handles unique patch, replaceAll, errors, size cap, and auto-checkpoint', async (t) => {
+  const { store } = await makeStore(t)
+
+  // Direct pure helper applyScriptPatch checks
+  const direct = applyScriptPatch('x = 1\ny = 2\n', 'x = 1', 'x = 42')
+  assert.equal(direct.replacements, 1)
+  assert.equal(direct.patched, 'x = 42\ny = 2\n')
+  assert.throws(() => applyScriptPatch('x = 1\n', '', 'y = 2'), (err) => err.code === 'BAD_REQUEST' && err.status === 400)
+  assert.throws(() => applyScriptPatch('x = 1\n', 'missing', 'y = 2'), (err) => err.code === 'SCRIPT_PATCH_NOT_FOUND' && err.status === 400)
+  assert.throws(() => applyScriptPatch('a = 1\na = 1\n', 'a = 1', 'a = 2'), (err) => err.code === 'SCRIPT_PATCH_AMBIGUOUS' && err.status === 400)
+  const directAll = applyScriptPatch('a = 1\na = 1\n', 'a = 1', 'a = 2', true)
+  assert.equal(directAll.replacements, 2)
+  assert.equal(directAll.patched, 'a = 2\na = 2\n')
+
+  // Store-level patchScript() with optimistic revision, auto-checkpoint, and error boundaries
+  const p0 = await store.create({
+    ...baseFields,
+    title: 'Surgical Patch Test',
+    scriptMode: 'template',
+    customScript: 'import bpy\nCOLOR = "#FF0000"\nTAG = "demo"\nTAG2 = "demo"\n',
+  })
+  assert.equal(p0.scriptMode, 'template')
+
+  // Single unique replacement -> flips scriptMode to 'custom', bumps revision, auto-captures checkpoint
+  const r1 = await store.patchScript(p0.id, p0.revision, 'COLOR = "#FF0000"', 'COLOR = "#0EA5E9"', 'Switch paint to cyan')
+  assert.equal(r1.replacements, 1)
+  assert.equal(r1.project.revision, p0.revision + 1)
+  assert.equal(r1.project.scriptMode, 'custom')
+  assert.match(r1.project.customScript, /COLOR = "#0EA5E9"/)
+  assert.ok((r1.project.checkpoints?.length ?? 0) >= 1, 'patchScript must auto-capture previous script checkpoint')
+  assert.match(r1.project.checkpoints[0].customScript, /COLOR = "#FF0000"/)
+  assert.equal(r1.project.checkpoints[0].note, 'Switch paint to cyan')
+
+  // Not found -> 400 SCRIPT_PATCH_NOT_FOUND (no revision bump)
+  await assert.rejects(
+    store.patchScript(r1.project.id, r1.project.revision, 'NON_EXISTENT_SYMBOL', 'X'),
+    (err) => err.code === 'SCRIPT_PATCH_NOT_FOUND' && err.status === 400,
+  )
+
+  // Ambiguous (>1 occurrence) without replaceAll -> 400 SCRIPT_PATCH_AMBIGUOUS
+  await assert.rejects(
+    store.patchScript(r1.project.id, r1.project.revision, '"demo"', '"prod"'),
+    (err) => err.code === 'SCRIPT_PATCH_AMBIGUOUS' && err.status === 400,
+  )
+
+  // replaceAll: true replaces all occurrences cleanly
+  const r2 = await store.patchScript(r1.project.id, r1.project.revision, '"demo"', '"prod"', { replaceAll: true, note: 'Promote tags' })
+  assert.equal(r2.replacements, 2)
+  assert.equal(r2.project.revision, r1.project.revision + 1)
+  assert.doesNotMatch(r2.project.customScript, /"demo"/)
+  assert.match(r2.project.customScript, /TAG = "prod"\nTAG2 = "prod"/)
+
+  // Stale revision rejected with 409 CONFLICT
+  await assert.rejects(
+    store.patchScript(r2.project.id, r1.project.revision, 'TAG = "prod"', 'TAG = "v3"'),
+    (err) => err.code === 'CONFLICT' && err.status === 409,
+  )
+
+  // Exceeding MAX_CUSTOM_SCRIPT_BYTES rejected cleanly
+  await assert.rejects(
+    store.patchScript(r2.project.id, r2.project.revision, 'TAG = "prod"', 'x = "' + 'A'.repeat(MAX_CUSTOM_SCRIPT_BYTES + 100) + '"'),
+    (err) => err.status === 400,
+  )
 })

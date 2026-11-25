@@ -226,6 +226,9 @@ async function createWorkbenchFixture(t, extra = {}) {
       execPath === '/mock/blender-4.3'
         ? { ok: true, stdout: 'Blender 4.3.2\n' }
         : { ok: false, stdout: '', error: 'ENOENT' },
+    gpuProber: extra.gpuProber,
+    probeGpu: extra.probeGpu,
+    addonInstallExecutor: extra.addonInstallExecutor,
     executor,
     fetchImpl,
     bridge: extra.bridge,
@@ -983,4 +986,197 @@ test('BlenderWorkbench trashArchived & trashCorrupted batch cleanly, require con
   assert.equal(after.value.corruptedCount, undefined)
   assert.equal(after.value.corruptedProjects, undefined)
   assert.deepEqual(after.value.projects.map((p) => p.id), [active.id])
+})
+
+test('v0.3.0 HTTP API & Agent tools: Pro Exemplars, surgical patch_script, one-click bridge_install_addon, and Cycles GPU computeDevice', async (t) => {
+  const installCalls = []
+  const { workbench, post, seenScripts } = await createWorkbenchFixture(t, {
+    probeGpu: true,
+    gpuProber: async () => ({
+      available: true,
+      backend: 'OPTIX',
+      devices: ['NVIDIA GeForce RTX 4060 Laptop GPU'],
+    }),
+    addonInstallExecutor: async (execPath, args) => {
+      installCalls.push({ execPath, args })
+      return { exitCode: 0, stdout: 'installed ok\n', stderr: '' }
+    },
+  })
+
+  // 1. POST list includes exemplars + POST list_exemplars + POST create_from_exemplar + 404 guard
+  const listRes = await (await post({ action: 'list' })).json()
+  assert.equal(listRes.ok, true)
+  assert.equal(listRes.value.exemplars?.length, 4)
+
+  const exListRes = await (await post({ action: 'list_exemplars' })).json()
+  assert.equal(exListRes.ok, true)
+  assert.deepEqual(
+    exListRes.value.exemplars.map((e) => e.id),
+    ['aero-x900-turbofan', 'apex-09-racecar', 'vanguard-h145x-helicopter', 'kuka-6axis-robot-arm'],
+  )
+
+  const badEx = await post({ action: 'create_from_exemplar', exemplarId: 'no-such-exemplar' })
+  assert.equal(badEx.status, 404)
+  assert.equal((await badEx.json()).code, 'EXEMPLAR_NOT_FOUND')
+
+  const createdEx = await (
+    await post({ action: 'create_from_exemplar', exemplarId: 'kuka-6axis-robot-arm', title: 'Custom KUKA Cell' })
+  ).json()
+  assert.equal(createdEx.ok, true)
+  const exProj = createdEx.value
+  assert.equal(exProj.title, 'Custom KUKA Cell')
+  assert.equal(exProj.scriptMode, 'custom')
+  assert.ok(exProj.customScript.length > 5000)
+  assert.ok(exProj.checkpoints?.some((c) => /Exemplar baseline/i.test(c.note || '')), 'exemplar project starts with baseline checkpoint')
+
+  // 2. Surgical POST patch_script: pre-write SCRIPT_UNSAFE rejection, NOT_FOUND, AMBIGUOUS, clean patch & replaceAll
+  const seeded = (
+    await (
+      await post({
+        action: 'create',
+        fields: defaultProjectFields({
+          title: 'Patch API Scene',
+          scriptMode: 'custom',
+          customScript: 'import bpy\nMAT_COLOR = "#3B82F6"\nITEM = "alpha"\nITEM2 = "alpha"\n',
+        }),
+      })
+    ).json()
+  ).value
+
+  const unsafePatch = await post({
+    action: 'patch_script',
+    id: seeded.id,
+    revision: seeded.revision,
+    find: 'MAT_COLOR = "#3B82F6"',
+    replace: 'import os\nos.system("whoami")',
+  })
+  assert.equal(unsafePatch.status, 400)
+  assert.equal((await unsafePatch.json()).code, 'SCRIPT_UNSAFE')
+  const stillUnchanged = await workbench.store.get(seeded.id)
+  assert.equal(stillUnchanged.revision, seeded.revision, 'unsafe patch must be rejected BEFORE mutating project')
+
+  const notFoundPatch = await post({
+    action: 'patch_script',
+    id: seeded.id,
+    revision: seeded.revision,
+    find: 'DOES_NOT_EXIST',
+    replace: 'X',
+  })
+  assert.equal(notFoundPatch.status, 400)
+  assert.equal((await notFoundPatch.json()).code, 'SCRIPT_PATCH_NOT_FOUND')
+
+  const ambigPatch = await post({
+    action: 'patch_script',
+    id: seeded.id,
+    revision: seeded.revision,
+    find: '"alpha"',
+    replace: '"beta"',
+  })
+  assert.equal(ambigPatch.status, 400)
+  assert.equal((await ambigPatch.json()).code, 'SCRIPT_PATCH_AMBIGUOUS')
+
+  const okPatch = await (
+    await post({
+      action: 'patch_script',
+      id: seeded.id,
+      revision: seeded.revision,
+      find: 'MAT_COLOR = "#3B82F6"',
+      replace: 'MAT_COLOR = "#10B981"',
+      note: 'Emerald paint',
+    })
+  ).json()
+  assert.equal(okPatch.ok, true)
+  assert.equal(okPatch.value.replacements, 1)
+  assert.equal(okPatch.value.revision, seeded.revision + 1)
+  assert.match(okPatch.value.customScript, /#10B981/)
+  assert.ok(okPatch.value.checkpoints?.length >= 1)
+
+  const okPatchAll = await (
+    await post({
+      action: 'patch_script',
+      id: seeded.id,
+      revision: okPatch.value.revision,
+      find: '"alpha"',
+      replace: '"beta"',
+      replaceAll: true,
+    })
+  ).json()
+  assert.equal(okPatchAll.ok, true)
+  assert.equal(okPatchAll.value.replacements, 2)
+
+  // 3. One-click POST bridge_install_addon requires confirmed: true
+  const unconfirmedInstall = await post({ action: 'bridge_install_addon' })
+  assert.equal(unconfirmedInstall.status, 400)
+  assert.equal((await unconfirmedInstall.json()).code, 'CONFIRM_REQUIRED')
+  assert.equal(installCalls.length, 0)
+
+  const confirmedInstall = await (await post({ action: 'bridge_install_addon', confirmed: true })).json()
+  assert.equal(confirmedInstall.ok, true)
+  assert.equal(confirmedInstall.value.installed, true)
+  assert.equal(confirmedInstall.value.enabled, true)
+  assert.equal(installCalls.length, 1)
+
+  // 4. Cycles GPU computeDevice configuration propagates to renders
+  const cfgRes = await (await post({ action: 'configure', computeDevice: 'cpu' })).json()
+  assert.equal(cfgRes.ok, true)
+  assert.equal(cfgRes.value.computeDevice, 'cpu')
+  assert.equal(cfgRes.value.gpu?.backend, 'OPTIX')
+
+  const stillJob = (await (await post({ action: 'preview_still', id: seeded.id, revision: okPatchAll.value.revision })).json()).value
+  await workbench.waitForJob(stillJob.id)
+  assert.match(seenScripts.at(-1) || '', /\\"computeDevice\\":\\"cpu\\"/)
+
+  // 5. Agent tools v0.3.0 actions: blender_health GPU, blender_project exemplars, blender_script patch, blender_bridge install_addon
+  const tools = new Map()
+  const ctx = {
+    skills: { register: () => () => {} },
+    tools: {
+      register(def) {
+        tools.set(def.name, def)
+        return () => tools.delete(def.name)
+      },
+    },
+    connection: { fetch: { register: () => () => {} } },
+    inject(_deps, fn) {
+      fn(ctx)
+    },
+    on() {},
+  }
+  installBlenderWorkbench(ctx, { workbench })
+
+  const healthVal = await tools.get('blender_health').execute({})
+  const healthRendered = tools.get('blender_health').output.render({}, healthVal)[0].text
+  assert.match(healthRendered, /OPTIX|RTX 4060/)
+
+  const projTool = tools.get('blender_project')
+  const toolExList = await projTool.execute({ action: 'list_exemplars' })
+  assert.equal(toolExList.exemplars?.length, 4)
+  assert.match(projTool.output.render({ action: 'list_exemplars' }, toolExList)[0].text, /kuka-6axis-robot-arm/)
+
+  const toolExCreated = await projTool.execute({ action: 'create_from_exemplar', exemplarId: 'aero-x900-turbofan' })
+  assert.equal(toolExCreated.scriptMode, 'custom')
+  assert.ok(toolExCreated.id)
+
+  const scriptTool = tools.get('blender_script')
+  const toolPatched = await scriptTool.execute({
+    action: 'patch',
+    id: seeded.id,
+    revision: okPatchAll.value.revision,
+    find: 'ITEM = "beta"',
+    replace: 'ITEM = "gamma"',
+    note: 'Agent surgical patch',
+  })
+  assert.equal(toolPatched.replacements, 1)
+  assert.match(scriptTool.output.render({ action: 'patch' }, toolPatched)[0].text, /patch|替换|补丁|gamma|1/i)
+
+  const bridgeTool = tools.get('blender_bridge')
+  await assert.rejects(
+    bridgeTool.execute({ action: 'install_addon' }),
+    (err) => err.code === 'CONFIRM_REQUIRED',
+  )
+  const toolInstall = await bridgeTool.execute({ action: 'install_addon', confirmed: true })
+  assert.equal(toolInstall.installed, true)
+  assert.equal(toolInstall.enabled, true)
+  assert.equal(installCalls.length, 2)
+  assert.match(bridgeTool.output.render({ action: 'install_addon' }, toolInstall)[0].text, /install|安装|启用/i)
 })

@@ -5,6 +5,7 @@ function BlenderLibraryPanel({
   scope = 'projects',
   items = [],
   templates = FALLBACK_TEMPLATES,
+  exemplars = FALLBACK_EXEMPLARS,
   running,
   busy,
   dirty,
@@ -13,6 +14,7 @@ function BlenderLibraryPanel({
   t,
   onOpen,
   onCreate,
+  onCreateFromExemplar,
   onDuplicate,
   onArchiveRequest,
   onRestore,
@@ -23,8 +25,99 @@ function BlenderLibraryPanel({
   const [query, setQuery] = useState(saved?.query || '');
   const [templateFilter, setTemplateFilter] = useState(saved?.templateFilter || 'all');
   const [order, setOrder] = useState(saved?.order || 'updated');
+  const [exemplarsExpanded, setExemplarsExpanded] = useState(true);
   const controlId = typeof React.useId === 'function' ? React.useId() : 'bl-lib';
   const useMemoHook = typeof React.useMemo === 'function' ? React.useMemo : fn => fn();
+
+  function exemplarCategoryLabel(cat) {
+    if (cat === 'aerospace') return t('航空航天', 'Aerospace');
+    if (cat === 'vehicle') return t('工业载具', 'Vehicle');
+    if (cat === 'robotics') return t('工业机械臂', 'Robotics');
+    if (cat === 'architecture') return t('建筑空间', 'Architecture');
+    return String(cat || '3D');
+  }
+
+  function renderExemplarsStrip() {
+    const list = Array.isArray(exemplars) && exemplars.length ? exemplars : FALLBACK_EXEMPLARS;
+    if (!list.length) return null;
+    return h(
+      'section',
+      {
+        className: 'bl-exemplars-strip',
+        'data-exemplars-strip': 'true',
+        'data-dsh-card': '',
+        'aria-label': t('高阶工程范本库', 'Pro Engineering Exemplars'),
+      },
+      h(
+        'div',
+        { className: 'bl-exemplars-head' },
+        h(
+          'div',
+          { className: 'bl-exemplars-title-wrap' },
+          h('strong', { 'data-dsh-serif': '' }, t('高阶工程范本', 'Pro Exemplars')),
+          h('span', { className: 'w-tag bl-exemplars-badge' }, list.length + ' · QC-3D 100/A'),
+          h(
+            'span',
+            { className: 'w-muted bl-exemplars-sub' },
+            t('一键生成完整工程级复杂 bpy 脚本与 Cycles 精渲配置，开箱即用。', 'One-click production bpy assemblies ready for Cycles lookdev & inspection.'),
+          ),
+        ),
+        h(
+          W.Button,
+          {
+            size: 'sm',
+            variant: 'ghost',
+            icon: exemplarsExpanded ? 'up' : 'down',
+            'aria-expanded': exemplarsExpanded,
+            'data-action': 'toggle-exemplars',
+            onClick: () => setExemplarsExpanded(v => !v),
+          },
+          exemplarsExpanded ? t('收起', 'Collapse') : t('展开', 'Expand'),
+        ),
+      ),
+      exemplarsExpanded
+        ? h(
+            'div',
+            { className: 'bl-exemplars-grid' },
+            list.map(ex =>
+              h(
+                'article',
+                {
+                  key: ex.id,
+                  className: 'bl-exemplar-card',
+                  'data-exemplar-card': ex.id,
+                },
+                h(
+                  'div',
+                  { className: 'bl-exemplar-tags' },
+                  h('span', { className: 'w-tag bl-exemplar-cat', 'data-cat': ex.category || 'engineering' }, exemplarCategoryLabel(ex.category)),
+                  h('span', { className: 'w-tag bl-metric-tag' }, (ex.engine || 'CYCLES') + (ex.estimatedPolys ? ' · ' + ex.estimatedPolys : '')),
+                ),
+                h('strong', { className: 'bl-exemplar-title', 'data-dsh-serif': '' }, lang === 'en' ? ex.titleEn || ex.id : ex.titleZh || ex.id),
+                h('p', { className: 'w-muted bl-exemplar-desc' }, lang === 'en' ? ex.summaryEn || '' : ex.summaryZh || ''),
+                h(
+                  'div',
+                  { className: 'bl-exemplar-foot' },
+                  h(
+                    W.Button,
+                    {
+                      variant: 'primary',
+                      size: 'sm',
+                      icon: 'sparkles',
+                      'data-action': 'create-exemplar',
+                      'data-exemplar-id': ex.id,
+                      disabled: running || busy || dirty || activeJob,
+                      onClick: () => onCreateFromExemplar?.(ex),
+                    },
+                    t('从此范本创建', 'Use Exemplar'),
+                  ),
+                ),
+              ),
+            ),
+          )
+        : null,
+    );
+  }
 
   const tplMap = useMemoHook(() => {
     const map = new Map();
@@ -85,6 +178,7 @@ function BlenderLibraryPanel({
     return h(
       'section',
       { className: 'bl-library-empty-wrap', 'data-tour': 'blender-projects' },
+      renderExemplarsStrip(),
       h(
         W.Empty,
         {
@@ -135,6 +229,7 @@ function BlenderLibraryPanel({
       'data-tour': scope === 'projects' ? 'blender-projects' : undefined,
       'aria-label': t('3D 工程库', '3D project library'),
     },
+    scope === 'projects' ? renderExemplarsStrip() : null,
     scope === 'archives'
       ? h(
           'div',
@@ -385,6 +480,19 @@ function BlenderLibraryPanel({
 
 const BLENDER_LIBRARY_CSS = `
 .bl-library{max-width:1040px;padding:6px 0 24px;min-width:0}
+.bl-exemplars-strip{display:flex;flex-direction:column;gap:10px;padding:12px 14px;margin:4px 0 12px;border:var(--dsh-control-border-width,1px) solid var(--w-border);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-settings-card-fill,var(--w-canvas))}
+.bl-exemplars-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.bl-exemplars-title-wrap{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.bl-exemplars-badge{font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:10.5px;font-weight:700;background:color-mix(in oklab,#10b981 14%,var(--w-bg));border-color:color-mix(in oklab,#10b981 36%,var(--w-border));color:#047857}
+[data-theme="dark"] .bl-exemplars-badge{color:#6ee7b7}
+.bl-exemplars-sub{font-size:12px}
+.bl-exemplars-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+.bl-exemplar-card{display:flex;flex-direction:column;gap:6px;padding:12px 13px;border-radius:var(--dsw-radius-sm,10px);border:var(--dsh-control-border-width,1px) solid var(--w-border);background:var(--w-bg);min-width:0}
+.bl-exemplar-tags{display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap}
+.bl-exemplar-cat{font-size:10.5px;font-weight:700}
+.bl-exemplar-title{font-size:13px;line-height:1.35;color:var(--w-text)}
+.bl-exemplar-desc{margin:0;font-size:11.5px;line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;flex:1}
+.bl-exemplar-foot{display:flex;justify-content:flex-end;padding-top:4px}
 .bl-archive-header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:6px 0 4px}
 .bl-archive-hint{margin:0}
 .bl-library-controls{display:flex;gap:12px;align-items:end;flex-wrap:wrap;padding:10px 0}

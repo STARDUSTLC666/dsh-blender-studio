@@ -13,6 +13,11 @@ export interface BridgePingResult {
     engine: string;
     frameCurrent: number;
     objectCount: number;
+    gpu?: {
+        available: boolean;
+        backend: string;
+        devices: string[];
+    };
 }
 export interface BridgeExecuteOptions {
     pushUndo?: boolean;
@@ -85,3 +90,25 @@ export interface LaunchBlenderGuiResult {
  * Launch desktop Blender GUI in a detached process without blocking the DSH host.
  */
 export declare function launchBlenderGui(executablePath: string, blendFile?: string): Promise<LaunchBlenderGuiResult>;
+export interface InstallBridgeAddonResult {
+    installed: boolean;
+    enabled: boolean;
+    addonPath: string;
+    executablePath: string;
+    output: string;
+}
+export type BridgeAddonInstallExecutor = (executablePath: string, args: string[], timeoutMs: number) => Promise<{
+    exitCode: number;
+    stdout: string;
+    stderr: string;
+}>;
+export interface InstallBridgeAddonOptions {
+    executor?: BridgeAddonInstallExecutor;
+    runner?: BridgeAddonInstallExecutor;
+    timeoutMs?: number;
+}
+/**
+ * Install and enable `dsh_blender_bridge.py` in local desktop Blender via headless CLI.
+ * Preserves existing user preferences by reading userpref before enabling & saving.
+ */
+export declare function installBridgeAddon(executablePath: string, addonPath: string, options?: InstallBridgeAddonOptions): Promise<InstallBridgeAddonResult>;

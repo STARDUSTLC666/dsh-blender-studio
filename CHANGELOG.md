@@ -2,6 +2,20 @@
 
 [返回简介](README.md) · [完整说明](docs/REFERENCE.zh.md) · [Live Bridge 指南](docs/BRIDGE.md) · [验证说明](docs/VALIDATION.md)
 
+## [0.3.0] - 2026-11-25
+
+- **零外部依赖交互式 GLB 3D 网格查看器与 A/B 渲染对比卷帘（OP-DSH 3D 工作室）**：
+  - **内置纯 JS `.glb` 3D 网格查看器（`3D 网格` 视图）**：零 Three.js/WebGL 依赖，直接在 Canvas 2D 中解析并软光栅渲染本机导出的 `.glb` 模型，支持鼠标轨道旋转、缩放及 **着色（Shaded）/ 白模（Clay）/ 线框（Wireframe）** 三档切换。
+  - **A/B 渲染对比卷帘（`A/B 对比` 视图）**：当工程存在 ≥2 份静帧或四视角质检图时，支持指针拖拽（`setPointerCapture`）与键盘方向键对比任意两次修订的渲染成品，清晰展示修订号、引擎与采样参数差异。
+- **4 套内置高阶工程范本（Pro Engineering Exemplars）与 `DSH_KIT` v2（24 项辅助函数）**：
+  - 新增 `src/exemplars.ts`，内置 4 套经真实 Blender 5.3.0 实渲验证达到 **`QC-3D 100/A`** 的高阶复杂机械范本：`aero-x900-turbofan`（剖视涡扇航发）、`apex-09-racecar`（赛博 GT 超跑）、`vanguard-h145x-helicopter`（双发复合直升机）与全新 **`kuka-6axis-robot-arm`（6 轴工业机械臂装配工作站）**；支持工程库一键「从此范本创建」及 `blender_project` `list_exemplars` / `create_from_exemplar` 供 AI 作为 Few-Shot 参考。
+  - **`DSH_KIT` 升级至 v2（16 → 24 项）**：新增 `dsh_loft_profile`、`dsh_bolt_ring`、`dsh_wheel_assembly`、`dsh_louver_panel`、`dsh_mat_anodized_metal`、`dsh_mat_heat_blued_titanium`、`dsh_mat_copper_gold` 与 `dsh_render_clay_override`（白模轮廓/倒角自检），同步升级工作台代码速插条。
+- **精准脚本局部补丁（`patch_script`）、Cycles GPU 自动加速与一键 Bridge 安装器**：
+  - **精准局部替换（`blender_script` `action: 'patch'` / `POST patch_script`）**：支持对 40–256 KB 大型工程脚本执行 `find`/`replace` 精准局部编辑（写前强制静态安全扫描、防缺失/歧义误改、自动留存脚本快照并递增 `revision`），大幅节省 AI 迭代 Token。
+  - **Cycles GPU 自动探测与计算设备切换**：自动探测本机 `OPTIX` / `CUDA` / `METAL` / `HIP` / `ONEAPI` 设备并在工作台「桥接与环境」页展示，支持 `computeDevice`（`auto` / `gpu` / `cpu`）配置与无异常 CPU 安全回退。
+  - **一键自动安装 Live Bridge 插件**：`dsh_blender_bridge.py` 升级至 `0.3.0`（新增默认关闭的 `auto_start` 偏好并在 `ping` 返回 GPU 状态）；新增 `POST bridge_install_addon` / `blender_bridge(action: 'install_addon', confirmed: true)` 与工作台确认弹窗，通过无头 Blender 自动完成 `addon_install` + `addon_enable` + `save_userpref`。
+- **Next-Gen 3D Studio Release (`0.3.0`)**: adds a zero-dependency pure-JS `.glb` 3D mesh viewer (`Shaded`/`Clay`/`Wireframe`) and pointer/keyboard-draggable **A/B Render Compare** split-wipe in the workbench; ships **4 Pro Engineering Exemplars** (`aero-x900-turbofan`, `apex-09-racecar`, `vanguard-h145x-helicopter`, and new `kuka-6axis-robot-arm`, all verified `QC-3D 100/A` on Blender 5.3.0); expands **`DSH_KIT` v2 to 24 helpers** (`dsh_loft_profile`, `dsh_bolt_ring`, `dsh_wheel_assembly`, `dsh_louver_panel`, `dsh_mat_anodized_metal`, `dsh_mat_heat_blued_titanium`, `dsh_mat_copper_gold`, `dsh_render_clay_override`); adds surgical `patch_script` editing (`blender_script` `action: 'patch'`) with pre-write safety checks and auto-checkpoints; adds automatic **Cycles GPU detection & `computeDevice` (`auto`/`gpu`/`cpu`)** acceleration; and introduces a **1-click headless Live Bridge Add-on installer** (`dsh_blender_bridge.py` v0.3.0 with opt-in `auto_start` and GPU status in `ping`).
+
 ## [0.2.3] - 2026-11-24
 
 - **损坏目录清理与一键清空已归档**：黄色损坏工程提示条新增 **「查看并移入回收站清理」** 入口与确认弹窗（`trashCorrupted`），后端二次校验仅清理真实损坏目录并拒绝完好工程（`PROJECT_NOT_CORRUPT`）；「已归档」页新增 **「清空已归档（全部移入回收站）」**（`trashArchived`），单次批量移入系统回收站并受 `workbench-slot` 与活跃任务互斥保护。

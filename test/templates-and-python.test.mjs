@@ -10,6 +10,12 @@ import {
   generateSceneScript,
 } from '../lib/templates.js'
 import {
+  BLENDER_EXEMPLARS,
+  getExemplar,
+  listExemplarSummaries,
+} from '../lib/exemplars.js'
+import { checkScriptSafety } from '../lib/bridge.js'
+import {
   buildBlenderChildEnv,
   parseBlenderProgressLine,
   parseSceneSummaryFromOutput,
@@ -71,8 +77,9 @@ test('BLENDER_TEMPLATES exposes all 8 templates (including architectural-pavilio
   }
 })
 
-test('generated scene scripts include Blender 3.6–5.x compatibility guards, DSH_KIT helpers, auto-wired assets, Cycles OIDN, and QC-3D audit', () => {
+test('generated scene scripts include Blender 3.6–5.x compatibility guards, DSH_KIT v2 (24 helpers), Cycles GPU auto-config, auto-wired assets, Cycles OIDN, and QC-3D audit', () => {
   const dshKitHelpers = [
+    // v0.2.0 core 16 helpers
     'def dsh_bevel(',
     'def dsh_smooth(',
     'def dsh_array_radial(',
@@ -89,7 +96,17 @@ test('generated scene scripts include Blender 3.6–5.x compatibility guards, DS
     'def dsh_setup_hero_studio(',
     'def dsh_setup_compositor(',
     'def dsh_add_dof(',
+    // v0.3.0 DSH_KIT v2 engineering helpers (+8 = 24 total)
+    'def dsh_loft_profile(',
+    'def dsh_bolt_ring(',
+    'def dsh_wheel_assembly(',
+    'def dsh_louver_panel(',
+    'def dsh_mat_anodized_metal(',
+    'def dsh_mat_heat_blued_titanium(',
+    'def dsh_mat_copper_gold(',
+    'def dsh_render_clay_override(',
   ]
+  assert.equal(dshKitHelpers.length, 24)
 
   for (const template of BLENDER_TEMPLATE_IDS) {
     const project = makeProject({
@@ -131,6 +148,8 @@ test('generated scene scripts include Blender 3.6–5.x compatibility guards, DS
     assert.match(script, /Filmic/)
     assert.match(script, /OPENIMAGEDENOISE/)
     assert.match(script, /use_adaptive_sampling/)
+    assert.match(script, /def dsh_configure_cycles_device\(/)
+    assert.match(script, /OPTIX/)
     assert.match(script, /DSH_ASSET_PATHS/)
     assert.match(script, /ShaderNodeTexEnvironment/)
     assert.match(script, /dsh_auto_place_uploaded_models/)
@@ -182,9 +201,19 @@ test('generateRunnerHarness supports all modes and zero-Pillow 2x2 contact sheet
     project,
     assetsDir: '/tmp/assets',
     outputPath: '/tmp/runs/r1/render.png',
+    computeDevice: 'gpu',
   })
   assert.match(still, /bpy\.ops\.render\.render\(write_still=True\)/)
   assert.match(still, /dsh_emit_scene_summary\(\)/)
+  assert.match(still, /\\"computeDevice\\":\\"gpu\\"/)
+
+  const stillCpu = generateRunnerHarness('preview_still', {
+    project,
+    assetsDir: '/tmp/assets',
+    outputPath: '/tmp/runs/r1/render.png',
+    computeDevice: 'cpu',
+  })
+  assert.match(stillCpu, /\\"computeDevice\\":\\"cpu\\"/)
 
   const contact = generateRunnerHarness('contact_sheet', {
     project,
@@ -347,4 +376,71 @@ test('BlenderRunner helpers scrub secrets, parse progress lines, and extract sce
   )
   assert.equal(parsedSummary?.objectCount, 5)
   assert.equal(parsedSummary?.blenderVersion, '4.3.2')
+})
+
+test('BLENDER_EXEMPLARS v0.3.0: 4 pro engineering exemplars pass summary/lookup/404, checkScriptSafety(), and Python ast.parse', (t) => {
+  const expectedIds = [
+    'aero-x900-turbofan',
+    'apex-09-racecar',
+    'vanguard-h145x-helicopter',
+    'kuka-6axis-robot-arm',
+  ]
+  assert.equal(BLENDER_EXEMPLARS.length, 4)
+  assert.deepEqual(
+    BLENDER_EXEMPLARS.map((e) => e.id),
+    expectedIds,
+  )
+
+  const summaries = listExemplarSummaries()
+  assert.equal(summaries.length, 4)
+  for (const s of summaries) {
+    assert.ok(s.titleZh.length > 0 && s.titleEn.length > 0)
+    assert.ok(s.summaryZh.length > 0 && s.summaryEn.length > 0)
+    assert.ok(s.estimatedPolys.length > 0)
+    assert.equal('script' in s, false, 'summary must omit heavy script payload')
+    assert.equal('fields' in s, false, 'summary must omit fields payload')
+  }
+
+  assert.throws(
+    () => getExemplar('non-existent-exemplar'),
+    (err) => err.code === 'EXEMPLAR_NOT_FOUND' && err.status === 404,
+  )
+
+  const scriptsToParse = []
+  for (const id of expectedIds) {
+    const ex = getExemplar(id)
+    assert.equal(ex.id, id)
+    assert.ok(ex.script.length > 5000, `${id} script must be substantial engineering bpy code`)
+    const safety = checkScriptSafety(ex.script)
+    assert.equal(safety.safe, true, `${id} failed checkScriptSafety: ${JSON.stringify(safety.findings)}`)
+    const proj = makeProject({ ...ex.fields, scriptMode: 'custom', customScript: ex.script })
+    scriptsToParse.push({ name: `exemplar-raw:${id}`, code: ex.script })
+    scriptsToParse.push({ name: `exemplar-scene:${id}`, code: generateSceneScript(proj, 'C:\\temp\\assets') })
+  }
+
+  const pythonBin = findPythonBinary()
+  if (!pythonBin) return
+  const checker = [
+    'import ast, json, sys',
+    'items = json.loads(sys.stdin.buffer.read().decode("utf-8"))',
+    'errors = []',
+    'for item in items:',
+    '    try:',
+    '        ast.parse(item["code"], filename=item["name"])',
+    '    except SyntaxError as exc:',
+    '        errors.append(f"{item[\'name\']}:{exc.lineno}: {exc.msg}")',
+    'if errors:',
+    '    sys.stderr.buffer.write(("\\n".join(errors)).encode("utf-8"))',
+    '    sys.exit(1)',
+    'sys.stdout.buffer.write(f"OK:{len(items)}\\n".encode("utf-8"))',
+  ].join('\n')
+  const res = spawnSync(pythonBin, ['-c', checker], {
+    input: Buffer.from(JSON.stringify(scriptsToParse), 'utf8'),
+    encoding: 'utf8',
+    shell: false,
+    maxBuffer: 16 * 1024 * 1024,
+    env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
+  })
+  assert.equal(res.status, 0, `Exemplar Python ast.parse failed:\n${res.stderr}\n${res.stdout}`)
+  assert.equal(res.stdout.trim(), `OK:${scriptsToParse.length}`)
 })

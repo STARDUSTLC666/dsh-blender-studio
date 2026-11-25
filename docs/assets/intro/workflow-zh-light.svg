@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" fill="none" role="img" aria-label="dsh-blender-studio 3D 创作与渲染四步流程示意（浅色）">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" fill="none" role="img" aria-label="dsh-blender-studio v0.3.0 高质量 3D 创作四步全流程示意（浅色）">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="320" gradientUnits="userSpaceOnUse">
       <stop offset="0%" stop-color="#f2f6ff"/>
@@ -29,10 +29,8 @@
     </linearGradient>
   </defs>
 
-  <!-- Outer card -->
   <rect x="1" y="1" width="1198" height="318" rx="24" fill="url(#bg)" stroke="#d4e0f2" stroke-width="1.5"/>
 
-  <!-- Left studio emblem -->
   <g transform="translate(30, 46) scale(0.74)">
     <rect x="24" y="24" width="208" height="208" rx="48" fill="url(#iconTile)"/>
     <rect x="25.5" y="25.5" width="205" height="205" rx="46.5" stroke="#64748b" stroke-opacity="0.45" stroke-width="3"/>
@@ -48,55 +46,46 @@
     <circle cx="193.8" cy="166" r="4.5" fill="#F0FDF4" stroke="#10B981" stroke-width="2.5"/>
   </g>
 
-  <!-- Header -->
   <g font-family="Segoe UI, Microsoft YaHei, PingFang SC, Arial, sans-serif">
     <text x="244" y="72" font-size="28" font-weight="700" fill="#14284d">Blender 3D Studio</text>
     <rect x="506" y="47" width="194" height="28" rx="14" fill="#ffffff" stroke="#d4e0f2"/>
-    <text x="603" y="66" text-anchor="middle" font-size="13" font-weight="600" fill="#2563eb">v0.2.0 · Blender 3.6–5.x</text>
-    <text x="244" y="108" font-size="17" fill="#4f6482">在 DeepSeek Harness 中完成 3D 装配、实时预览、自动体检与多格式导出。</text>
+    <text x="603" y="66" text-anchor="middle" font-size="13" font-weight="600" fill="#2563eb">v0.3.0 · Blender 3.6–5.x</text>
+    <text x="244" y="108" font-size="17" fill="#4f6482">在 DeepSeek Harness 中完成高精度 3D 建模、自动体检、精准补丁迭代与 Cycles GPU 渲染。</text>
 
-    <!-- Step 01 -->
     <rect x="244" y="136" width="212" height="132" rx="14" fill="#ffffff" stroke="#d4e0f2"/>
     <rect x="260" y="152" width="32" height="22" rx="6" fill="#fff3e6" stroke="#f5b97a"/>
     <text x="276" y="167" text-anchor="middle" font-size="12" font-weight="700" fill="#c2540a">01</text>
-    <text x="260" y="199" font-size="16" font-weight="700" fill="#14284d">模板与资产自装配</text>
-    <text x="260" y="224" font-size="13" fill="#526783">8 套跨版本 bpy 模板</text>
+    <text x="260" y="199" font-size="16" font-weight="700" fill="#14284d">范本与 DSH_KIT v2</text>
+    <text x="260" y="224" font-size="13" fill="#526783">8 模板 + 4 工程范本 · 24 函数</text>
     <text x="260" y="245" font-size="13" fill="#526783">HDRI 自动打光 · 模型落台</text>
 
-    <!-- Arrow 1->2 -->
     <path d="M462 202 H474 M470 197 L475 202 L470 207" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 
-    <!-- Step 02 -->
     <rect x="480" y="136" width="212" height="132" rx="14" fill="#ffffff" stroke="#d4e0f2"/>
-    <rect x="496" y="152" width="32" height="22" rx="6" fill="#eaf2ff" stroke="#a6c8ff"/>
-    <text x="512" y="167" text-anchor="middle" font-size="12" font-weight="700" fill="#1d4ed8">02</text>
-    <text x="496" y="199" font-size="16" font-weight="700" fill="#14284d">3D 视口 &amp; Live Bridge</text>
-    <text x="496" y="224" font-size="13" fill="#526783">Canvas 3D 预览 · 快捷预设</text>
-    <text x="496" y="245" font-size="13" fill="#526783">127.0.0.1 实时联动 Blender</text>
+    <rect x="496" y="152" width="32" height="22" rx="6" fill="#e8fbf2" stroke="#86e2b8"/>
+    <text x="512" y="167" text-anchor="middle" font-size="12" font-weight="700" fill="#047857">02</text>
+    <text x="496" y="199" font-size="16" font-weight="700" fill="#14284d">QC-3D 体检 &amp; A/B 对比</text>
+    <text x="496" y="224" font-size="13" fill="#526783">自动评分 A–D · 2×2 四视角</text>
+    <text x="496" y="245" font-size="13" fill="#526783">GLB 3D 网格 &amp; 卷帘对比</text>
 
-    <!-- Arrow 2->3 -->
     <path d="M698 202 H710 M706 197 L711 202 L706 207" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 
-    <!-- Step 03 -->
     <rect x="716" y="136" width="212" height="132" rx="14" fill="#ffffff" stroke="#d4e0f2"/>
-    <rect x="732" y="152" width="32" height="22" rx="6" fill="#e8fbf2" stroke="#86e2b8"/>
-    <text x="748" y="167" text-anchor="middle" font-size="12" font-weight="700" fill="#047857">03</text>
-    <text x="732" y="199" font-size="16" font-weight="700" fill="#14284d">QC-3D 体检 &amp; 四视角</text>
-    <text x="732" y="224" font-size="13" fill="#526783">自动评分 A–D 排错审计</text>
-    <text x="732" y="245" font-size="13" fill="#526783">2×2 四视角拼图视觉自检</text>
+    <rect x="732" y="152" width="32" height="22" rx="6" fill="#eaf2ff" stroke="#a6c8ff"/>
+    <text x="748" y="167" text-anchor="middle" font-size="12" font-weight="700" fill="#1d4ed8">03</text>
+    <text x="732" y="199" font-size="16" font-weight="700" fill="#14284d">补丁快照与一键桥接</text>
+    <text x="732" y="224" font-size="13" fill="#526783">精准 patch_script · 快照回滚</text>
+    <text x="732" y="245" font-size="13" fill="#526783">一键装 Bridge 联动 Blender</text>
 
-    <!-- Arrow 3->4 -->
     <path d="M934 202 H946 M942 197 L947 202 L942 207" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 
-    <!-- Step 04 -->
     <rect x="952" y="136" width="212" height="132" rx="14" fill="#ffffff" stroke="#d4e0f2"/>
     <rect x="968" y="152" width="32" height="22" rx="6" fill="#eef0ff" stroke="#b4bcff"/>
     <text x="984" y="167" text-anchor="middle" font-size="12" font-weight="700" fill="#4338ca">04</text>
-    <text x="968" y="199" font-size="16" font-weight="700" fill="#14284d">多格式无头渲染导出</text>
-    <text x="968" y="224" font-size="13" fill="#526783">PNG 静帧 · H.264 MP4</text>
-    <text x="968" y="245" font-size="13" fill="#526783">GLB · FBX · OBJ · STL · .blend</text>
+    <text x="968" y="199" font-size="16" font-weight="700" fill="#14284d">Cycles GPU 精渲导出</text>
+    <text x="968" y="224" font-size="13" fill="#526783">GPU 自动加速 · AgX + OIDN</text>
+    <text x="968" y="245" font-size="13" fill="#526783">PNG · MP4 · GLB · FBX · .blend</text>
 
-    <!-- Footer caption -->
-    <text x="48" y="295" font-size="12" fill="#526783">dsh-blender-studio · DSH 社区插件流程示意</text>
+    <text x="48" y="295" font-size="12" fill="#526783">dsh-blender-studio · 高质量 3D 生产全流程示意</text>
   </g>
 </svg>

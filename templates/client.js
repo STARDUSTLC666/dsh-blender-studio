@@ -111,6 +111,61 @@ window.__ModuleLoader__.load({
       },
     ];
 
+    const FALLBACK_EXEMPLARS = [
+      {
+        id: 'aero-x900-turbofan',
+        titleZh: 'AERO-X900 高涵道比剖视涡扇航发',
+        titleEn: 'AERO-X900 Cutaway Turbofan Engine',
+        summaryZh: '24 片宽弦钛合金扇叶、8 级压气机、热蓝 5 级涡轮与工业台架剖视总成。',
+        summaryEn: '24 twisted titanium fan blades, 8-stage compressor, heat-blued turbine & cutaway nacelle on gantry.',
+        category: 'aerospace',
+        engine: 'CYCLES',
+        samples: 64,
+        aspect: 'landscape',
+        estimatedPolys: '~26k polys',
+        previewImage: 'docs/assets/intro/hero-turbofan.webp',
+      },
+      {
+        id: 'apex-09-racecar',
+        titleZh: 'APEX-09 Cyber GT 超级赛车',
+        titleEn: 'APEX-09 Cyber GT Hypercar',
+        summaryZh: '深红金属车漆、碳纤维空力前后翼、10 辐锻造轮毂与双层 LED 棚拍展台。',
+        summaryEn: 'Metallic crimson clearcoat monocoque, carbon aero wings, 10-spoke forged rims & studio turntable.',
+        category: 'vehicle',
+        engine: 'CYCLES',
+        samples: 96,
+        aspect: 'landscape',
+        estimatedPolys: '~150k subdiv',
+        previewImage: 'docs/assets/intro/hero-racecar.webp',
+      },
+      {
+        id: 'vanguard-h145x-helicopter',
+        titleZh: 'VANGUARD H-145X 双发复合直升机',
+        titleEn: 'VANGUARD H-145X Twin-Turbine Helicopter',
+        summaryZh: '炭灰与救援橙涂装、防弹多面座舱、四叶主旋翼、涵道尾桨与亮灯停机坪。',
+        summaryEn: 'Tactical slate-and-orange fuselage, ballistic tinted canopy, 4-blade rotor & illuminated helipad.',
+        category: 'aerospace',
+        engine: 'CYCLES',
+        samples: 64,
+        aspect: 'landscape',
+        estimatedPolys: '~4.2k base',
+        previewImage: 'docs/assets/intro/hero-helicopter.webp',
+      },
+      {
+        id: 'kuka-6axis-robot-arm',
+        titleZh: '6 轴工业机械臂装配工作站',
+        titleEn: '6-Axis Industrial Robot Arm Cell',
+        summaryZh: '安全橙铸铝六轴关节、螺栓法兰盘、肩部线缆包与平行气动夹爪装配台。',
+        summaryEn: 'Safety-orange articulated 6-axis servo joints, bolted flanges, dress-pack cables & precision fixture.',
+        category: 'robotics',
+        engine: 'CYCLES',
+        samples: 64,
+        aspect: 'landscape',
+        estimatedPolys: '~18k polys',
+        previewImage: 'docs/assets/intro/hero-robot-arm.webp',
+      },
+    ];
+
     const CAMERA_PRESETS = [
       { id: 'three_quarter', zh: '3/4 视角', en: '3/4 View' },
       { id: 'front', zh: '正视图', en: 'Front' },
@@ -216,6 +271,10 @@ window.__ModuleLoader__.load({
         ORIGIN_FORBIDDEN: 'Request origin or CSRF header check failed.',
         DOWNLOAD_INVALID: 'Invalid download parameters.',
         CHECKPOINT_NOT_FOUND: 'Requested script checkpoint was not found.',
+        SCRIPT_PATCH_NOT_FOUND: 'Target snippet was not found in the current custom script.',
+        SCRIPT_PATCH_AMBIGUOUS: 'Target snippet matched multiple locations in the script; narrow the search text or pass replaceAll.',
+        EXEMPLAR_NOT_FOUND: 'Requested Pro Exemplar was not found.',
+        ADDON_INSTALL_FAILED: 'Failed to install or enable dsh_blender_bridge.py in local Blender. Check Blender permissions and logs.',
         PLUGIN_DISPOSED: 'Plugin is unloading. Wait for reload and retry.',
       };
       if (code && byCode[code]) return byCode[code];
@@ -471,6 +530,7 @@ window.__ModuleLoader__.load({
       const [clearArchivedDialog, setClearArchivedDialog] = useState(false);
       const [environment, setEnvironment] = useState(null);
       const [templates, setTemplates] = useState(FALLBACK_TEMPLATES);
+      const [exemplars, setExemplars] = useState(FALLBACK_EXEMPLARS);
 
       const initialFields = cache.fields || emptyFields();
       const [project, setProject] = useState(cache.project);
@@ -551,6 +611,9 @@ window.__ModuleLoader__.load({
         });
         if (Array.isArray(data?.templates) && data.templates.length) {
           setTemplates(data.templates);
+        }
+        if (Array.isArray(data?.exemplars) && data.exemplars.length) {
+          setExemplars(data.exemplars);
         }
         const current = latest.current;
         if (!current.dirty && current.project?.id) {
@@ -832,6 +895,27 @@ window.__ModuleLoader__.load({
             setStageView('stage');
           }
           setNotice(t('已复制 3D 工程：', 'Duplicated 3D project: ') + (cloned?.title || item.title));
+        });
+      }
+
+      async function createFromExemplar(exemplar) {
+        if (!exemplar?.id) return;
+        await perform(async () => {
+          const created = await api({ action: 'create_from_exemplar', exemplarId: exemplar.id });
+          await refresh();
+          if (created?.id) {
+            setProject(created);
+            syncFields(fieldsOf(created));
+            setCreating(false);
+            setDirty(false);
+            setConflict(false);
+            setEditorTab('studio');
+            setStageView('stage');
+          }
+          setNotice(
+            t('已从高阶工程范本创建：', 'Created project from Pro Exemplar: ') +
+              (lang === 'en' ? exemplar.titleEn || created?.title || exemplar.id : exemplar.titleZh || created?.title || exemplar.id),
+          );
         });
       }
 
@@ -1492,6 +1576,7 @@ window.__ModuleLoader__.load({
                   scope: libraryTab === 'archives' ? 'archives' : 'projects',
                   items: libraryTab === 'archives' ? archived : projects,
                   templates,
+                  exemplars,
                   running,
                   busy,
                   dirty,
@@ -1503,6 +1588,7 @@ window.__ModuleLoader__.load({
                     navigate(id);
                   },
                   onCreate: tplId => navigate(tplId ? { newTemplate: tplId } : 'new'),
+                  onCreateFromExemplar: createFromExemplar,
                   onDuplicate: duplicateProject,
                   onArchiveRequest: item => setArchiveTarget(item),
                   onTrashRequest: (item, isArchived) => {
@@ -1937,6 +2023,14 @@ window.__ModuleLoader__.load({
       );
     }
 
-    return { inject: ['slots', 'locale'], apply };
+    if (typeof window !== 'undefined' && typeof parseGlbMesh === 'function') {
+      window.__DSH_BLENDER_GLB__ = { parseGlbMesh };
+    }
+
+    return {
+      inject: ['slots', 'locale'],
+      apply,
+      ...(typeof parseGlbMesh === 'function' ? { parseGlbMesh } : {}),
+    };
   },
 });

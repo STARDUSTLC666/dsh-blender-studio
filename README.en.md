@@ -2,35 +2,35 @@
 
 # Blender 3D Studio
 
-> **Build precision 3D assemblies, preview interactively, auto-audit with QC-3D, iterate with script checkpoints, and render Cycles OIDN stills, MP4s & GLB/FBX/OBJ/STL assets inside DeepSeek Harness.**
+> **Build precision 3D assemblies, orbit exported GLBs, compare renders A/B, auto-audit with QC-3D, iterate via surgical patches, and render with Cycles GPU acceleration inside DeepSeek Harness.**
 
-Ships with the **OP-DSH 3D Studio Interactive Workbench**, **Headless Blender CLI Runner**, **16-helper `DSH_KIT` Hard-Surface & Cinema PBR Library**, **1-Click Production `pipeline`**, **Loopback-Only Live Socket Bridge**, 8 cross-version `bpy` templates, and 9 specialized Blender 3.6–5.x skills.
+Ships with the **OP-DSH 3D Studio Workbench** (featuring a **zero-dependency pure-JS `.glb` 3D mesh viewer** and **A/B Render Compare split-wipe**), **Headless Blender CLI with Cycles GPU auto-acceleration**, the **24-helper `DSH_KIT` v2 Hard-Surface & Cinema PBR Library**, **4 Pro Engineering Exemplars + 8 starter templates**, **1-Click Live Bridge Add-on installer**, and 9 Blender 3.6–5.x skills.
 
 [![npm](https://img.shields.io/npm/v/dsh-blender-studio)](https://www.npmjs.com/package/dsh-blender-studio) [![downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-blender-studio-downloads.svg)](https://www.npmjs.com/package/dsh-blender-studio) [![total downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-blender-studio-total-downloads.svg)](https://www.npmjs.com/package/dsh-blender-studio)
 
-**[Features](#features) · [Showcase](#live-render-showcase) · [Install](#install) · [Workflow](#start-using-it) · [Full Reference](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/docs/REFERENCE.en.md) · [Live Bridge Guide](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/docs/BRIDGE.md)**
+**[Features](#features) · [Built-In Pro Exemplars](#built-in-pro-exemplar-showcase) · [Install](#install) · [Workflow](#start-using-it) · [Full Reference](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/docs/REFERENCE.en.md) · [Live Bridge Guide](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/docs/BRIDGE.md)**
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/workflow-en-dark.svg">
-  <img src="https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/workflow-en-light.svg" alt="dsh-blender-studio 4-stage high-quality 3D production workflow" width="100%">
+  <img src="https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/workflow-en-light.svg" alt="dsh-blender-studio v0.3.0 4-stage high-quality 3D production workflow" width="100%">
 </picture>
 
-## Live Render Showcase
+## Built-In Pro Exemplar Showcase
 
-All three mechanical engineering scenes below were authored, checkpointed, audited (`QC-3D 100/A`, zero issues), and rendered end-to-end through **`dsh-blender-studio` v0.2.0** (`BlenderWorkbench` + `DSH_KIT` Fog Glow compositor + `action: 'pipeline'`) on local **Blender 5.3.0 Cycles + OpenImageDenoise + AgX**:
+All four mechanical engineering scenes below **ship directly inside `dsh-blender-studio` v0.3.0** (launchable in 1 click from the Workbench Library or via `blender_project(action: 'create_from_exemplar')` and readable as few-shot `bpy` references). Every exemplar is verified end-to-end on **Blender 5.3.0 Cycles + OpenImageDenoise + AgX** at **`QC-3D 100/A`** with zero issues:
 
-![AERO-X900 Cutaway High-Bypass Turbofan Jet Engine rendered through dsh-blender-studio v0.2.0](https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/hero-turbofan.webp)
-
-| APEX-09 Cyber GT Hypercar (81 objects · 96 spp Cycles) | VANGUARD H-145X Twin-Turbine Helicopter (43 objects · 64 spp Cycles) |
+| AERO-X900 Cutaway Turbofan (37 objs · 64 spp Cycles) | KUKA 6-Axis Robot Arm Workstation (42 objs · 64 spp OPTIX) |
 | :---: | :---: |
+| ![AERO-X900 Cutaway Turbofan render](https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/hero-turbofan.webp) | ![KUKA 6-Axis Robot Arm render](https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/hero-robot-arm.webp) |
+| **APEX-09 Cyber GT Hypercar (81 objs · 96 spp Cycles)** | **VANGUARD H-145X Twin-Turbine Helicopter (43 objs · 64 spp Cycles)** |
 | ![APEX-09 Cyber GT Hypercar render](https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/hero-racecar.webp) | ![VANGUARD H-145X Twin-Turbine Helicopter render](https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/hero-helicopter.webp) |
 
 <details>
-<summary>See OP-DSH 3D Studio v0.2.0 workbench screenshots (Interactive Stage, 1-Click Pipeline, QC-3D Outliner & 4-View Check)</summary>
+<summary>See OP-DSH 3D Studio workbench screenshots (Interactive Stage, 1-Click Pipeline, QC-3D Outliner & 4-View Check)</summary>
 
-![OP-DSH 3D Studio v0.2.0 interactive workbench](https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/screen-zh.webp)
+![OP-DSH 3D Studio interactive workbench](https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/screen-zh.webp)
 
-![OP-DSH 3D Studio v0.2.0 4-view visual QC and QC-3D Scene Outliner](https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/screen-qc.webp)
+![OP-DSH 3D Studio 4-view visual QC and QC-3D Scene Outliner](https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/screen-qc.webp)
 
 Captured in a local DeepSeek Harness environment with live Blender 5.3.0 Cycles & EEVEE renders.
 
@@ -40,10 +40,10 @@ Captured in a local DeepSeek Harness environment with live Blender 5.3.0 Cycles 
 
 | Pillar | Capabilities |
 | :--- | :--- |
-| **AAA 3D Production Pipeline** | Built-in **16-helper `DSH_KIT` library** (hard-surface bevels, radial arrays, swept tubes, assembly grounding/framing, 7 cinema PBR shaders, 4 studio rigs & cross-version `FOG_GLOW` compositor), **1-click `pipeline`** (`Draft` / `Studio` / `Beauty Cycles` chaining `QC-3D` → 4-view QC → render → GLB), and automatic **Script Checkpoints** with 1-click rollback |
-| **OP-DSH 3D Studio** | Zero-dependency interactive Canvas 3D stage (8 template silhouettes, orbit drag, zoom, shortcuts `Space`/`1–4`/`R`/`Ctrl+S`, Quality Presets), seamless switching to PNG stills / **2×2 4-View QC sheets** / MP4 playback, live **`QC-3D` grade badge** in Outliner & `DSH_KIT` quick-insert bar; 1-click toggle to classic **Form** |
-| **Hybrid Engine & Auto-Wired Assets** | **Track A (Default)**: Zero-window Headless CLI (`blender --background --factory-startup`) for Blender 3.6–5.x with Cycles OIDN + AgX; drag-and-drop HDRIs auto-light the World and GLB/OBJ/FBX/STL models auto-ground on stage; **Track B (Optional)**: loopback-only `dsh_blender_bridge.py` (`127.0.0.1`) with live `QC-3D`; **Track C**: 1-click open `.blend` in desktop Blender |
-| **8 Templates, 9 Skills & Safety** | Built-in `product-studio`, `logo-3d`, `isometric-room`, `motion-data`, `grease-pencil-2d`, `blank-stage`, `architectural-pavilion`, and `procedural-abstract` (native `GeometryNodeTree`) plus 9 domain skills; `256 KB` custom scripts, 13 `NodeSocket`-safe static checks, UUID optimistic locking, opt-in allowlisted Poly Haven CC0 client, and 13 bright themes × 8 dual-layer fonts |
+| **OP-DSH 3D Studio & Interactive Monitor** | Zero-dependency Canvas 3D stage (8 template silhouettes, shortcuts `Space`/`1–4`/`R`/`Ctrl+S`, Quality Presets), **pure-JS `.glb` 3D Mesh Viewer** (`Shaded` / `Clay` / `Wireframe` orbit without Three.js/WebGL), **A/B Render Compare** pointer/keyboard split-wipe, PNG stills / **2×2 4-View QC** / MP4 playback, live **`QC-3D` grade badge** in Outliner & `DSH_KIT` v2 snippet chips; 1-click toggle to classic **Form** |
+| **24-Helper `DSH_KIT` v2, Surgical Patch & Pipeline** | **24 cross-version `dsh_*` helpers** (lofted hulls, bolt rings, wheel assemblies, louver panels, radial arrays, 10 cinema PBR shaders including anodized metal / heat-blued titanium / copper-gold, 4 hero studios, clay override & `FOG_GLOW` compositor), **surgical `patch_script`** editing (pre-write safety scan + auto-checkpoints without resending 40–256 KB scripts), and **1-click 4-stage `pipeline`** (`Draft` / `Studio` / `Beauty Cycles`) |
+| **Cycles GPU Auto-Acceleration & 1-Click Bridge** | **Track A (Default)**: Auto-detects local Blender 3.6–5.x and **Cycles GPU backends (`OPTIX`/`CUDA`/`METAL`/`HIP`/`ONEAPI` with safe `CPU` fallback)** controlled by `computeDevice` (`auto`/`gpu`/`cpu`), plus drag-and-drop auto-wired HDRIs & GLB/OBJ/FBX/STL models; **Track B (Optional)**: **1-click headless installer** for loopback-only `dsh_blender_bridge.py` (with live `QC-3D` & GPU info); **Track C**: 1-click open `.blend` in desktop Blender |
+| **8 Templates + 4 Exemplars, 9 Skills & Safety** | 8 starter templates + 4 `QC-3D 100/A` Pro Engineering Exemplars, 6 Agent tools, 9 bundled skills, `256 KB` custom scripts, 13 `NodeSocket`-safe static checks, UUID optimistic locking, opt-in allowlisted Poly Haven CC0 client, and 13 bright themes × 8 dual-layer fonts |
 
 ## Install
 
@@ -57,24 +57,24 @@ For the web profile, replace `desktop` with `web` and restart DSH. Requires DSH 
 
 ## Start using it
 
-1. **Verify local Blender**: Open **Blender 3D** in the sidebar and check **Bridge & Env** to confirm auto-detected Blender `3.6–5.x` (or set `DSH_BLENDER_EXECUTABLE`).
-2. **Stage from templates or `DSH_KIT`**: Create a project to enter **OP-DSH 3D Studio** (switch to **Form** anytime in 1 click). Choose among 8 cross-version templates or switch to custom `bpy` scripting powered by built-in `dsh_*` engineering/PBR helpers; use **Duplicate** to branch lookdev experiments safely.
-3. **Drag-and-drop auto-wired assets**: Drop local HDRIs (`.hdr`/`.exr` auto-light the scene), textures, or 3D models (`.glb`/`.obj`/`.fbx`/`.stl` auto-normalize & ground onto the pedestal) in **Assets & Exports**, or optionally enable Poly Haven CC0 discovery.
-4. **Audit with `QC-3D`, checkpoint & run `pipeline`**: Trigger **Run Pipeline** (`Draft` / `Studio` / `Beauty Cycles`) or run `QC-3D` Outliner inspection + **2×2 Contact Sheet** checks. Script edits auto-snapshot so you can roll back in 1 click, then export Cycles OIDN PNG stills, MP4 videos, `GLB` / `FBX` / `OBJ` / `STL` / `.blend`, and Store-mode source ZIP archives.
-5. **Optional Live Bridge**: Download `dsh_blender_bridge.py` from **Bridge & Env** and enable it in Blender to sync scenes live, pull live `QC-3D`, capture viewports, or execute `bpy` with Undo history. See [Live Bridge Guide](docs/BRIDGE.md).
+1. **Verify local Blender & Cycles GPU**: Open **Blender 3D** in the sidebar and check **Bridge & Env** to confirm auto-detected Blender `3.6–5.x` and GPU acceleration (`OPTIX` / `CUDA` / `METAL` / `HIP` / `ONEAPI`, toggleable between `Auto` / `GPU` / `CPU`).
+2. **Start from Templates, Pro Exemplars, or `DSH_KIT` v2**: Pick any of the 8 starter templates or launch one of the **4 Pro Exemplars** in 1 click from the Library, or open the `bpy Script` tab in **OP-DSH 3D Studio** to insert any of the 24 `dsh_*` engineering/PBR helpers.
+3. **Drag-and-drop auto-wired assets**: Drop local HDRIs (`.hdr`/`.exr` auto-light the World), textures, or 3D models (`.glb`/`.obj`/`.fbx`/`.stl` auto-normalize & ground on stage) in **Assets & Exports**, or optionally enable Poly Haven CC0 search.
+4. **Audit, Patch, Orbit GLB & Compare A/B**: Run **Run Pipeline** (`Draft` / `Studio` / `Beauty Cycles`) for chained `QC-3D` + 4-View QC + Cycles GPU render + GLB export. Inspect exported `.glb` geometry directly in the **`3D Mesh`** viewer, wipe between revisions in **`A/B Compare`**, and iterate via surgical `patch_script` with automatic checkpoint rollback.
+5. **1-Click Live Bridge Setup**: Click **Install Add-on to Blender** in **Bridge & Env** (or call `blender_bridge(action: 'install_addon', confirmed: true)`) to install and enable `dsh_blender_bridge.py` automatically, then start the server in Blender (`N → DSH Bridge`) for live scene sync & viewport captures. See [Live Bridge Guide](docs/BRIDGE.md).
 
 ### Example prompts
 
-> Follow `blender-production-pipeline` to build a cutaway high-bypass turbofan jet engine using `DSH_KIT` radial blades, swept copper fuel pipes, and brushed titanium shaders. Save a checkpoint, verify `QC-3D` Grade A + 2×2 contact sheet, then run `pipeline` (`qualityTier: 'beauty'`) to render a 1280×720 Cycles OIDN still and export GLB.
+> Create a project from the built-in `kuka-6axis-robot-arm` exemplar, use `blender_script(action: 'patch')` to change the arm paint to cobalt metallic and brighten the overhead softbox, save a checkpoint, and run `pipeline` (`qualityTier: 'beauty'`) with Cycles GPU to render a still and export GLB.
 
-> Create an `architectural-pavilion` scene, attach my uploaded HDRI for automatic world lighting, check the 4-view sheet in Draft, then render a studio hero still.
+> Follow `blender-production-pipeline` using `DSH_KIT` v2 (`dsh_loft_profile`, `dsh_bolt_ring`, `dsh_mat_heat_blued_titanium`) to build a concept gas turbine. Run `dsh_render_clay_override(True)` for a 2×2 clay QC sheet first, then render the final PBR beauty pass.
 
-> Build a `procedural-abstract` Geometry Nodes twisted sculpture with a 72-frame 360° turntable animation, export MP4, and sync it into my open Blender window via Live Bridge.
+> Install the Live Bridge add-on into my local Blender using `blender_bridge(action: 'install_addon', confirmed: true)` and sync this project into my open Blender window.
 
 ## Before you start
 
 - **Local Blender required**: The plugin does not bundle the Blender binary. Install [Blender 3.6–5.x](https://www.blender.org/download/) locally; if it is outside your default `PATH`, set `DSH_BLENDER_EXECUTABLE` or configure the path in **Bridge & Env**.
-- **Safe defaults**: Custom `bpy` scripts pass 13 static safety rules before execution (blocking shell calls, destructive deletion, network sockets, and path traversal without false-positiving on Blender `NodeSocket` code). Poly Haven CC0 downloads are disabled by default and restricted to official HTTPS hosts when enabled.
+- **Safe defaults**: Custom `bpy` scripts and surgical `patch_script` updates pass 13 static safety rules before writing or running (blocking shell calls, destructive deletion, network sockets, and path traversal without false-positiving on Blender `NodeSocket` code). Poly Haven CC0 downloads are opt-in and host-allowlisted; Live Bridge binds exclusively to `127.0.0.1` with `auto_start` off by default.
 - **Portable skills**: All 9 bundled skills in `skills/` use the open Agent Skills (`SKILL.md`) format and can be copied into Claude Code, Cursor, Gemini CLI, or OpenAI Codex.
 
 ## Plugin updates
@@ -83,7 +83,7 @@ Check updates at the bottom of the workbench or native plugin details. Automatic
 
 ## Documentation & feedback
 
-- [Full Reference (Tools, HTTP API & `DSH_KIT`)](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/docs/REFERENCE.en.md) · [Live Bridge Protocol & Troubleshooting](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/docs/BRIDGE.md) · [Changelog](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/CHANGELOG.md) · [Validation Matrix](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/docs/VALIDATION.md)
+- [Full Reference (Tools, HTTP API & `DSH_KIT` v2)](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/docs/REFERENCE.en.md) · [Live Bridge Protocol & 1-Click Installer](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/docs/BRIDGE.md) · [Changelog](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/CHANGELOG.md) · [Validation Matrix](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/docs/VALIDATION.md)
 - Stars, [Issues](https://github.com/STARDUSTLC666/dsh-blender-studio/issues), and [PRs](https://github.com/STARDUSTLC666/dsh-blender-studio/pulls) are welcome (include plugin + Blender versions and strip tokens/secrets first).
 
 ## License

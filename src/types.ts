@@ -22,6 +22,34 @@ export type BlenderResolutionScale = 50 | 100 | 150 | 200
 export type PolyHavenAssetType = 'hdris' | 'textures' | 'models'
 
 export type BlenderQualityTier = 'draft' | 'studio' | 'beauty'
+export type BlenderComputeDevice = 'auto' | 'gpu' | 'cpu'
+export type BlenderGpuBackend = 'OPTIX' | 'CUDA' | 'METAL' | 'HIP' | 'ONEAPI' | 'CPU'
+export type BlenderExemplarCategory = 'vehicle' | 'aerospace' | 'robotics' | 'architecture'
+
+export interface BlenderGpuInfo {
+  available: boolean
+  backend: BlenderGpuBackend
+  devices: string[]
+}
+
+export interface BlenderExemplarSummary {
+  id: string
+  titleZh: string
+  titleEn: string
+  summaryZh: string
+  summaryEn: string
+  category: BlenderExemplarCategory
+  engine: BlenderRenderEngine
+  samples: number
+  aspect: BlenderAspect
+  estimatedPolys: string
+  previewImage?: string
+}
+
+export interface BlenderExemplarDefinition extends BlenderExemplarSummary {
+  fields: Partial<BlenderProjectFields>
+  script: string
+}
 
 export type BlenderJobKind =
   | 'preview_still'
@@ -174,6 +202,7 @@ export interface BlenderExecutableInfo {
   source: 'env' | 'config' | 'path' | 'standard'
   eeveeEngine: 'BLENDER_EEVEE_NEXT' | 'BLENDER_EEVEE'
   greasePencilApi: 'gpv3' | 'gpv2'
+  gpu?: BlenderGpuInfo
 }
 
 export interface BlenderBridgeStatus {
@@ -192,6 +221,8 @@ export interface BlenderEnvironmentStatus {
   active?: BlenderExecutableInfo
   detected: BlenderExecutableInfo[]
   configuredPath: string
+  computeDevice: BlenderComputeDevice
+  gpu?: BlenderGpuInfo
   bridge: BlenderBridgeStatus
   polyHavenEnabled: boolean
   node: string
@@ -205,6 +236,7 @@ export interface BlenderSettings {
   bridgePort: number
   bridgeToken: string
   polyHavenEnabled: boolean
+  computeDevice?: BlenderComputeDevice
 }
 
 export interface BlenderJob {
@@ -274,6 +306,10 @@ export type BlenderErrorCode =
   | 'COLOR_INVALID'
   | 'SCRIPT_TOO_LARGE'
   | 'SCRIPT_UNSAFE'
+  | 'SCRIPT_PATCH_NOT_FOUND'
+  | 'SCRIPT_PATCH_AMBIGUOUS'
+  | 'EXEMPLAR_NOT_FOUND'
+  | 'ADDON_INSTALL_FAILED'
   | 'TEMPLATE_INVALID'
   | 'EXPORT_FORMAT_INVALID'
   | 'CONFLICT'
@@ -355,6 +391,7 @@ export const BLENDER_MATERIAL_PRESETS: readonly BlenderMaterialPreset[] = [
 export const BLENDER_SCRIPT_MODES: readonly BlenderScriptMode[] = ['template', 'custom'] as const
 export const BLENDER_EXPORT_FORMATS: readonly BlenderExportFormat[] = ['glb', 'fbx', 'obj', 'stl', 'blend'] as const
 export const BLENDER_QUALITY_TIERS: readonly BlenderQualityTier[] = ['draft', 'studio', 'beauty'] as const
+export const BLENDER_COMPUTE_DEVICES: readonly BlenderComputeDevice[] = ['auto', 'gpu', 'cpu'] as const
 export const BLENDER_ARTIFACT_KINDS: readonly BlenderArtifactKind[] = [
   'still',
   'contact_sheet',

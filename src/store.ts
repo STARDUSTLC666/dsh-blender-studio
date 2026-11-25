@@ -28,6 +28,7 @@ import {
   blenderId,
   MAX_ACTIVE_PROJECTS,
   MAX_ASSET_BYTES,
+  MAX_CUSTOM_SCRIPT_BYTES,
   MAX_PROJECT_ARTIFACTS,
   MAX_PROJECT_ASSETS,
   MAX_PROJECT_ASSETS_BYTES,
@@ -182,6 +183,51 @@ export interface AddAssetOptions {
   kind?: BlenderAssetKind
   source?: 'upload' | 'polyhaven'
   sourceId?: string
+}
+
+export interface PatchScriptOptions {
+  replaceAll?: boolean
+  note?: string
+}
+
+export function applyScriptPatch(
+  source: string,
+  find: string,
+  replace: string,
+  replaceAll = false,
+): { patched: string; replacements: number } {
+  if (typeof find !== 'string' || !find.length) {
+    throw new BlenderError('查找片段 find 不能为空。', 'BAD_REQUEST', 400)
+  }
+  if (typeof replace !== 'string') {
+    throw new BlenderError('替换片段 replace 必须为字符串。', 'BAD_REQUEST', 400)
+  }
+  const text = String(source ?? '')
+  let count = 0
+  let pos = 0
+  while (true) {
+    const idx = text.indexOf(find, pos)
+    if (idx === -1) break
+    count++
+    pos = idx + find.length
+  }
+  if (count === 0) {
+    throw new BlenderError('未在当前自定义脚本中找到匹配的查找片段。', 'SCRIPT_PATCH_NOT_FOUND', 400)
+  }
+  if (count > 1 && !replaceAll) {
+    throw new BlenderError(
+      `查找片段在脚本中匹配到 ${count} 处（不唯一）；请提供更精确上下文或设置 replaceAll: true。`,
+      'SCRIPT_PATCH_AMBIGUOUS',
+      400,
+    )
+  }
+  const patched = replaceAll
+    ? text.split(find).join(replace)
+    : text.slice(0, text.indexOf(find)) + replace + text.slice(text.indexOf(find) + find.length)
+  if (Buffer.byteLength(patched, 'utf8') > MAX_CUSTOM_SCRIPT_BYTES) {
+    throw new BlenderError('补丁后的自定义 bpy 脚本超过 256 KB 上限。', 'SCRIPT_TOO_LARGE', 400)
+  }
+  return { patched, replacements: replaceAll ? count : 1 }
 }
 
 export class BlenderStore {
@@ -512,6 +558,36 @@ export class BlenderStore {
       }
       Object.assign(project, next)
     })
+  }
+
+  async patchScript(
+    id: string,
+    revision: unknown,
+    find: string,
+    replace: string,
+    noteOrOptions?: string | PatchScriptOptions,
+  ): Promise<{ project: BlenderProject; replacements: number }> {
+    const opts: PatchScriptOptions =
+      typeof noteOrOptions === 'string' ? { note: noteOrOptions } : (noteOrOptions ?? {})
+    let replacements = 0
+    const project = await this.edit(id, revision, p => {
+      const result = applyScriptPatch(p.customScript, find, replace, Boolean(opts.replaceAll))
+      replacements = result.replacements
+      if (p.customScript.trim().length > 0) {
+        const latest = p.checkpoints?.[0]
+        const isDuplicate =
+          latest && latest.customScript === p.customScript && latest.scriptMode === p.scriptMode
+        if (!isDuplicate) {
+          this.pushCheckpoint(
+            p,
+            this.makeCheckpoint(p, opts.note || `Auto snapshot before patch (R${p.revision})`),
+          )
+        }
+      }
+      p.customScript = result.patched
+      p.scriptMode = 'custom'
+    })
+    return { project, replacements }
   }
 
   async saveCheckpoint(id: string, revision: unknown, note?: string): Promise<BlenderProject> {

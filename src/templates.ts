@@ -2,6 +2,7 @@ import {
   resolveRenderResolution,
   SCENE_JSON_MARKER,
   type BlenderAsset,
+  type BlenderComputeDevice,
   type BlenderExportFormat,
   type BlenderJobKind,
   type BlenderProject,
@@ -113,6 +114,10 @@ export function getTemplateMeta(id: BlenderTemplateId): BlenderTemplateMeta {
   return BLENDER_TEMPLATES.find(item => item.id === id) ?? BLENDER_TEMPLATES[0]
 }
 
+export interface GenerateSceneOptions {
+  computeDevice?: BlenderComputeDevice
+}
+
 export interface RunnerHarnessOptions {
   project: BlenderProject
   assetsDir: string
@@ -122,6 +127,7 @@ export interface RunnerHarnessOptions {
   frame?: number
   contactSheetWidth?: number
   contactSheetHeight?: number
+  computeDevice?: BlenderComputeDevice
 }
 
 function pyJsonExpr(value: unknown): string {
@@ -136,6 +142,7 @@ function buildPreamble(
   project: BlenderProject | BlenderProjectFields,
   assetsDir: string,
   assets: BlenderAsset[],
+  computeDevice: BlenderComputeDevice = 'auto',
 ): string {
   const { width, height } = resolveRenderResolution(project.aspect, project.resolutionScale)
   const config = {
@@ -145,6 +152,7 @@ function buildPreamble(
     headline: project.headline || project.title,
     engine: project.engine,
     samples: project.samples,
+    computeDevice,
     aspect: project.aspect,
     resolutionScale: project.resolutionScale,
     width,
@@ -295,7 +303,41 @@ def dsh_set_bsdf(bsdf, socket_names, value):
     return False
 
 
-def dsh_set_render_engine(scene, engine_name, samples, transparent_bg):
+def dsh_configure_cycles_device(scene, mode="auto"):
+    if not hasattr(scene, "cycles"):
+        return "CPU"
+    req = str(mode or "auto").strip().lower()
+    if req == "cpu":
+        if hasattr(scene.cycles, "device"):
+            scene.cycles.device = "CPU"
+        return "CPU"
+    try:
+        addon = bpy.context.preferences.addons.get("cycles")
+        prefs = addon.preferences if addon else None
+        if prefs is not None:
+            for backend in ("OPTIX", "CUDA", "METAL", "HIP", "ONEAPI"):
+                try:
+                    prefs.compute_device_type = backend
+                    prefs.get_devices()
+                    gpu_devs = [d for d in prefs.devices if getattr(d, "type", "") == backend]
+                    if gpu_devs:
+                        for dev in prefs.devices:
+                            dev.use = getattr(dev, "type", "") == backend
+                        if hasattr(scene.cycles, "device"):
+                            scene.cycles.device = "GPU"
+                        names = ", ".join(getattr(d, "name", backend) for d in gpu_devs[:4])
+                        print(f"[dsh-blender-studio] Cycles GPU enabled: {backend} ({names})", flush=True)
+                        return backend
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    if hasattr(scene.cycles, "device"):
+        scene.cycles.device = "CPU"
+    return "CPU"
+
+
+def dsh_set_render_engine(scene, engine_name, samples, transparent_bg, compute_device=None):
     valid_engines = {item.identifier for item in scene.render.bl_rna.properties["engine"].enum_items}
     if engine_name == "EEVEE":
         if "BLENDER_EEVEE_NEXT" in valid_engines:
@@ -327,8 +369,7 @@ def dsh_set_render_engine(scene, engine_name, samples, transparent_bg):
                     scene.cycles.denoising_input_passes = "RGB_ALBEDO_NORMAL"
                 except Exception:
                     pass
-            if hasattr(scene.cycles, "device"):
-                scene.cycles.device = "CPU"
+            dsh_configure_cycles_device(scene, compute_device or DSH_PROJECT.get("computeDevice", "auto"))
     else:
         scene.render.engine = "BLENDER_WORKBENCH"
 
@@ -1234,6 +1275,463 @@ def dsh_add_dof(cam, target_obj, fstop=4.0):
         dof.focus_object = None
         dof.focus_distance = max(0.1, (Vector(target_obj) - cam.location).length)
     return dof
+
+
+# --- DSH_KIT v2: 8 Advanced Hard-Surface, Metallurgy & Clay-QC Helpers ---
+
+
+def dsh_loft_profile(name, sections, mat=None, closed=False, cap_ends=True, collection="DSH_Hero"):
+    rings = [list(sec) for sec in (sections or []) if len(sec) >= 3]
+    if len(rings) < 2:
+        obj = dsh_make_mesh_box(name, size=(0.5, 0.5, 0.5), bevel_width=0.02, collection=collection)
+        if mat is not None:
+            dsh_assign_material(obj, mat)
+        return obj
+    ring_len = min(len(r) for r in rings)
+    bm = bmesh.new()
+    bm_rings = []
+    for sec in rings:
+        row = []
+        for idx in range(ring_len):
+            pt = sec[idx]
+            row.append(bm.verts.new((float(pt[0]), float(pt[1]), float(pt[2]))))
+        bm_rings.append(row)
+    bm.verts.ensure_lookup_table()
+    num_rings = len(bm_rings)
+    span = num_rings if closed else num_rings - 1
+    for ri in range(span):
+        r0 = bm_rings[ri]
+        r1 = bm_rings[(ri + 1) % num_rings]
+        for vi in range(ring_len):
+            vn = (vi + 1) % ring_len
+            try:
+                bm.faces.new((r0[vi], r0[vn], r1[vn], r1[vi]))
+            except ValueError:
+                pass
+    if cap_ends and not closed:
+        try:
+            bm.faces.new(list(reversed(bm_rings[0])))
+        except ValueError:
+            pass
+        try:
+            bm.faces.new(list(bm_rings[-1]))
+        except ValueError:
+            pass
+    bmesh.ops.recalc_face_normals(bm, faces=list(bm.faces))
+    mesh = bpy.data.meshes.new(name + "_Mesh")
+    bm.to_mesh(mesh)
+    bm.free()
+    dsh_set_smooth(mesh, True)
+    obj = bpy.data.objects.new(name, mesh)
+    dsh_link_object(obj, collection)
+    if mat is not None:
+        dsh_assign_material(obj, mat)
+    return obj
+
+
+def dsh_bolt_ring(
+    name,
+    radius,
+    count=12,
+    bolt_radius=0.02,
+    bolt_height=0.025,
+    axis="Z",
+    center=(0.0, 0.0, 0.0),
+    mat=None,
+    collection="DSH_Hero",
+):
+    n = max(3, int(count))
+    r = max(0.01, float(radius))
+    br = max(0.002, float(bolt_radius))
+    bh = max(0.002, float(bolt_height))
+    ax = str(axis or "Z").upper()
+    if ax not in ("X", "Y", "Z"):
+        ax = "Z"
+    c = Vector(center)
+    if ax == "X":
+        align_rot = Matrix.Rotation(math.radians(90.0), 4, "Y")
+    elif ax == "Y":
+        align_rot = Matrix.Rotation(math.radians(-90.0), 4, "X")
+    else:
+        align_rot = Matrix.Identity(4)
+
+    bm = bmesh.new()
+    for i in range(n):
+        ang = 2.0 * math.pi * (i / float(n))
+        if ax == "X":
+            pos = Vector((c.x, c.y + r * math.cos(ang), c.z + r * math.sin(ang)))
+        elif ax == "Y":
+            pos = Vector((c.x + r * math.cos(ang), c.y, c.z + r * math.sin(ang)))
+        else:
+            pos = Vector((c.x + r * math.cos(ang), c.y + r * math.sin(ang), c.z))
+        xf_base = Matrix.Translation(pos) @ align_rot
+        # Flange washer collar
+        bmesh.ops.create_cone(
+            bm,
+            cap_ends=True,
+            cap_tris=False,
+            segments=12,
+            radius1=br * 1.28,
+            radius2=br * 1.22,
+            depth=bh * 0.28,
+            matrix=xf_base @ Matrix.Translation((0.0, 0.0, bh * 0.14)),
+        )
+        # 6-sided precision hex head with slight top taper
+        bmesh.ops.create_cone(
+            bm,
+            cap_ends=True,
+            cap_tris=False,
+            segments=6,
+            radius1=br,
+            radius2=br * 0.90,
+            depth=bh * 0.72,
+            matrix=xf_base @ Matrix.Translation((0.0, 0.0, bh * 0.64)) @ Matrix.Rotation(ang, 4, "Z"),
+        )
+    bmesh.ops.recalc_face_normals(bm, faces=list(bm.faces))
+    mesh = bpy.data.meshes.new(name + "_Mesh")
+    bm.to_mesh(mesh)
+    bm.free()
+    dsh_set_smooth(mesh, False)
+    obj = bpy.data.objects.new(name, mesh)
+    dsh_link_object(obj, collection)
+    if mat is None:
+        mat = dsh_mat_brushed_metal(f"{name}_Steel", (0.76, 0.79, 0.84), roughness=0.22)
+    dsh_assign_material(obj, mat)
+    return obj
+
+
+def dsh_wheel_assembly(
+    name,
+    radius=0.35,
+    width=0.28,
+    spokes=10,
+    tire_mat=None,
+    rim_mat=None,
+    caliper_color="#f59e0b",
+    location=(0.0, 0.0, 0.0),
+    collection="DSH_Hero",
+):
+    r = max(0.08, float(radius))
+    w = max(0.05, float(width))
+    n_spokes = max(3, int(spokes))
+    mat_tire = tire_mat or dsh_mat_rubber_tire(f"{name}_TireMat")
+    mat_rim = rim_mat or dsh_mat_brushed_metal(f"{name}_RimMat", (0.78, 0.80, 0.84), roughness=0.20)
+    mat_disc = dsh_mat_brushed_metal(f"{name}_DiscMat", (0.58, 0.60, 0.64), roughness=0.32)
+    mat_caliper = dsh_mat_car_paint(f"{name}_CaliperMat", caliper_color, metallic=0.65, clearcoat=0.9)
+
+    root = bpy.data.objects.new(name, None)
+    root.empty_display_type = "PLAIN_AXES"
+    root.location = Vector(location)
+    dsh_link_object(root, collection)
+
+    def _attach(child):
+        child.parent = root
+        return child
+
+    # 1. Revolved rounded-shoulder motorsport tire (axle along X)
+    bm_t = bmesh.new()
+    rin = r * 0.63
+    hw = w * 0.5
+    profile = [
+        (-hw * 0.90, rin),
+        (-hw, rin + (r - rin) * 0.30),
+        (-hw, rin + (r - rin) * 0.78),
+        (-hw * 0.84, r),
+        (hw * 0.84, r),
+        (hw, rin + (r - rin) * 0.78),
+        (hw, rin + (r - rin) * 0.30),
+        (hw * 0.90, rin),
+    ]
+    segs = 48
+    rings = []
+    for si in range(segs):
+        ang = 2.0 * math.pi * (si / float(segs))
+        ca, sa = math.cos(ang), math.sin(ang)
+        rings.append([bm_t.verts.new((px, pr * ca, pr * sa)) for px, pr in profile])
+    plen = len(profile)
+    for si in range(segs):
+        r0 = rings[si]
+        r1 = rings[(si + 1) % segs]
+        for pi in range(plen):
+            pn = (pi + 1) % plen
+            bm_t.faces.new((r0[pi], r0[pn], r1[pn], r1[pi]))
+    bmesh.ops.recalc_face_normals(bm_t, faces=list(bm_t.faces))
+    m_tire = bpy.data.meshes.new(name + "_Tire_Mesh")
+    bm_t.to_mesh(m_tire)
+    bm_t.free()
+    dsh_set_smooth(m_tire, True)
+    o_tire = bpy.data.objects.new(name + "_Tire", m_tire)
+    dsh_link_object(o_tire, collection)
+    dsh_assign_material(o_tire, mat_tire)
+    _attach(o_tire)
+
+    # 2. Forged multi-spoke rim + barrel + center-lock hub (single merged mesh)
+    bm_r = bmesh.new()
+    rot_x = Matrix.Rotation(math.radians(90.0), 4, "Y")
+    bmesh.ops.create_cone(
+        bm_r, cap_ends=True, cap_tris=False, segments=36,
+        radius1=rin * 1.01, radius2=rin * 1.01, depth=w * 0.76, matrix=rot_x,
+    )
+    bmesh.ops.create_cone(
+        bm_r, cap_ends=True, cap_tris=False, segments=24,
+        radius1=r * 0.17, radius2=r * 0.14, depth=w * 0.86, matrix=rot_x,
+    )
+    spoke_len = rin * 0.86
+    for si in range(n_spokes):
+        ang = 2.0 * math.pi * (si / float(n_spokes))
+        spoke_xf = (
+            Matrix.Translation((hw * 0.44, math.cos(ang) * (spoke_len * 0.5), math.sin(ang) * (spoke_len * 0.5)))
+            @ Matrix.Rotation(ang, 4, "X")
+        )
+        bmesh.ops.create_cube(bm_r, size=1.0, matrix=spoke_xf @ Matrix.Diagonal((w * 0.16, spoke_len, r * 0.062, 1.0)))
+    bmesh.ops.recalc_face_normals(bm_r, faces=list(bm_r.faces))
+    m_rim = bpy.data.meshes.new(name + "_Rim_Mesh")
+    bm_r.to_mesh(m_rim)
+    bm_r.free()
+    dsh_set_smooth(m_rim, True)
+    o_rim = bpy.data.objects.new(name + "_Rim", m_rim)
+    dsh_link_object(o_rim, collection)
+    dsh_assign_material(o_rim, mat_rim)
+    _attach(o_rim)
+
+    # 3. Ventilated brake rotor disc
+    bm_d = bmesh.new()
+    bmesh.ops.create_cone(
+        bm_d, cap_ends=True, cap_tris=False, segments=36,
+        radius1=r * 0.50, radius2=r * 0.50, depth=w * 0.12,
+        matrix=Matrix.Translation((hw * 0.14, 0.0, 0.0)) @ rot_x,
+    )
+    m_disc = bpy.data.meshes.new(name + "_BrakeDisc_Mesh")
+    bm_d.to_mesh(m_disc)
+    bm_d.free()
+    dsh_set_smooth(m_disc, True)
+    o_disc = bpy.data.objects.new(name + "_BrakeDisc", m_disc)
+    dsh_link_object(o_disc, collection)
+    dsh_assign_material(o_disc, mat_disc)
+    _attach(o_disc)
+
+    # 4. Painted performance brake caliper
+    o_cal = dsh_make_mesh_box(
+        name + "_Caliper",
+        size=(w * 0.24, r * 0.24, r * 0.36),
+        location=(hw * 0.20, -r * 0.38, r * 0.16),
+        bevel_width=r * 0.022,
+        collection=collection,
+    )
+    dsh_assign_material(o_cal, mat_caliper)
+    _attach(o_cal)
+    return root
+
+
+def dsh_louver_panel(
+    name,
+    width=0.6,
+    height=0.25,
+    slots=6,
+    depth=0.04,
+    mat=None,
+    location=(0.0, 0.0, 0.0),
+    collection="DSH_Hero",
+):
+    w = max(0.06, float(width))
+    h = max(0.04, float(height))
+    d = max(0.01, float(depth))
+    n = max(2, int(slots))
+    frame_t = min(w, h) * 0.08
+    bm = bmesh.new()
+
+    # Recessed outer perimeter frame (top, bottom, left, right rails)
+    bmesh.ops.create_cube(bm, size=1.0, matrix=Matrix.Translation((0.0, 0.0, h * 0.5 - frame_t * 0.5)) @ Matrix.Diagonal((w, d, frame_t, 1.0)))
+    bmesh.ops.create_cube(bm, size=1.0, matrix=Matrix.Translation((0.0, 0.0, -h * 0.5 + frame_t * 0.5)) @ Matrix.Diagonal((w, d, frame_t, 1.0)))
+    bmesh.ops.create_cube(bm, size=1.0, matrix=Matrix.Translation((-w * 0.5 + frame_t * 0.5, 0.0, 0.0)) @ Matrix.Diagonal((frame_t, d, h, 1.0)))
+    bmesh.ops.create_cube(bm, size=1.0, matrix=Matrix.Translation((w * 0.5 - frame_t * 0.5, 0.0, 0.0)) @ Matrix.Diagonal((frame_t, d, h, 1.0)))
+    # Dark backing plate
+    bmesh.ops.create_cube(bm, size=1.0, matrix=Matrix.Translation((0.0, d * 0.42, 0.0)) @ Matrix.Diagonal((w - frame_t, d * 0.16, h - frame_t, 1.0)))
+
+    # Angled cooling louver slats
+    inner_w = max(0.02, w - frame_t * 2.1)
+    inner_h = max(0.02, h - frame_t * 2.2)
+    slat_t = max(0.004, min(d * 0.25, inner_h / (n * 3.2)))
+    for i in range(n):
+        frac = (i + 0.5) / float(n) - 0.5
+        sz = frac * inner_h
+        slat_xf = (
+            Matrix.Translation((0.0, -d * 0.05, sz))
+            @ Matrix.Rotation(math.radians(32.0), 4, "X")
+            @ Matrix.Diagonal((inner_w, d * 0.85, slat_t, 1.0))
+        )
+        bmesh.ops.create_cube(bm, size=1.0, matrix=slat_xf)
+
+    bmesh.ops.recalc_face_normals(bm, faces=list(bm.faces))
+    mesh = bpy.data.meshes.new(name + "_Mesh")
+    bm.to_mesh(mesh)
+    bm.free()
+    dsh_set_smooth(mesh, False)
+    obj = bpy.data.objects.new(name, mesh)
+    obj.location = Vector(location)
+    dsh_link_object(obj, collection)
+    if mat is None:
+        mat = dsh_mat_carbon_fiber(f"{name}_Mat")
+    dsh_assign_material(obj, mat)
+    return obj
+
+
+def dsh_mat_anodized_metal(name, color="#1d4ed8", roughness=0.22):
+    rgba = dsh_coerce_rgba(color)
+    mat, nt, bsdf = _dsh_new_pbr_mat(name)
+    lw = nt.nodes.new("ShaderNodeLayerWeight")
+    lw.location = (-360, 140)
+    lw.inputs["Blend"].default_value = 0.22
+    ramp = nt.nodes.new("ShaderNodeValToRGB")
+    ramp.location = (-120, 140)
+    ramp.color_ramp.elements[0].position = 0.05
+    ramp.color_ramp.elements[0].color = rgba
+    ramp.color_ramp.elements[1].position = 0.90
+    ramp.color_ramp.elements[1].color = (
+        min(1.0, rgba[0] * 1.25 + 0.04),
+        min(1.0, rgba[1] * 1.25 + 0.04),
+        min(1.0, rgba[2] * 1.25 + 0.04),
+        1.0,
+    )
+    nt.links.new(lw.outputs["Facing"], ramp.inputs["Fac"])
+    nt.links.new(ramp.outputs["Color"], bsdf.inputs["Base Color"])
+
+    tc = nt.nodes.new("ShaderNodeTexCoord")
+    tc.location = (-560, -120)
+    noise = nt.nodes.new("ShaderNodeTexNoise")
+    noise.location = (-340, -120)
+    noise.inputs["Scale"].default_value = 220.0
+    noise.inputs["Detail"].default_value = 5.0
+    bump = nt.nodes.new("ShaderNodeBump")
+    bump.location = (-80, -120)
+    bump.inputs["Strength"].default_value = 0.03
+    nt.links.new(tc.outputs["Object"], noise.inputs["Vector"])
+    nt.links.new(noise.outputs["Fac"], bump.inputs["Height"])
+    if "Normal" in bsdf.inputs:
+        nt.links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+
+    dsh_set_bsdf(bsdf, ["Metallic"], 0.92)
+    dsh_set_bsdf(bsdf, ["Roughness"], float(roughness))
+    dsh_set_bsdf(bsdf, ["Anisotropic"], 0.45)
+    dsh_set_bsdf(bsdf, ["Coat Weight", "Clearcoat"], 0.25)
+    dsh_set_bsdf(bsdf, ["Coat Roughness", "Clearcoat Roughness"], 0.08)
+    return mat
+
+
+def dsh_mat_heat_blued_titanium(name="Mat_Heat_Blued_Titanium"):
+    mat, nt, bsdf = _dsh_new_pbr_mat(name)
+    tc = nt.nodes.new("ShaderNodeTexCoord")
+    tc.location = (-740, 80)
+    sep = nt.nodes.new("ShaderNodeSeparateXYZ")
+    sep.location = (-540, 140)
+    wave = nt.nodes.new("ShaderNodeTexWave")
+    wave.location = (-340, 140)
+    wave.inputs["Scale"].default_value = 1.6
+    wave.inputs["Distortion"].default_value = 2.4
+    wave.inputs["Detail"].default_value = 3.0
+    ramp = nt.nodes.new("ShaderNodeValToRGB")
+    ramp.location = (-100, 140)
+    cr = ramp.color_ramp
+    cr.elements[0].position = 0.05
+    cr.elements[0].color = (0.58, 0.56, 0.54, 1.0)  # raw brushed titanium
+    cr.elements[1].position = 0.34
+    cr.elements[1].color = (0.76, 0.54, 0.22, 1.0)  # straw gold heat tint
+    e_violet = cr.elements.new(0.62)
+    e_violet.color = (0.34, 0.16, 0.58, 1.0)        # purple oxidation band
+    e_blue = cr.elements.new(0.86)
+    e_blue.color = (0.09, 0.30, 0.82, 1.0)          # cobalt heat-blue band
+
+    noise = nt.nodes.new("ShaderNodeTexNoise")
+    noise.location = (-340, -140)
+    noise.inputs["Scale"].default_value = 85.0
+    noise.inputs["Detail"].default_value = 5.0
+    bump = nt.nodes.new("ShaderNodeBump")
+    bump.location = (-80, -140)
+    bump.inputs["Strength"].default_value = 0.04
+
+    nt.links.new(tc.outputs["Object"], sep.inputs["Vector"])
+    nt.links.new(tc.outputs["Object"], wave.inputs["Vector"])
+    nt.links.new(wave.outputs["Fac"], ramp.inputs["Fac"])
+    nt.links.new(ramp.outputs["Color"], bsdf.inputs["Base Color"])
+    nt.links.new(tc.outputs["Object"], noise.inputs["Vector"])
+    nt.links.new(noise.outputs["Fac"], bump.inputs["Height"])
+    if "Normal" in bsdf.inputs:
+        nt.links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+
+    dsh_set_bsdf(bsdf, ["Metallic"], 0.96)
+    dsh_set_bsdf(bsdf, ["Roughness"], 0.20)
+    dsh_set_bsdf(bsdf, ["Anisotropic"], 0.55)
+    dsh_set_bsdf(bsdf, ["Coat Weight", "Clearcoat"], 0.45)
+    dsh_set_bsdf(bsdf, ["Coat Roughness", "Clearcoat Roughness"], 0.06)
+    return mat
+
+
+def dsh_mat_copper_gold(name, variant="copper", roughness=0.22):
+    v = str(variant or "copper").strip().lower()
+    if v == "gold":
+        rgba = (0.94, 0.72, 0.24, 1.0)
+    elif v == "brass":
+        rgba = (0.82, 0.66, 0.30, 1.0)
+    else:
+        rgba = (0.85, 0.42, 0.22, 1.0)
+    mat, nt, bsdf = _dsh_new_pbr_mat(name)
+    tc = nt.nodes.new("ShaderNodeTexCoord")
+    tc.location = (-560, -120)
+    noise = nt.nodes.new("ShaderNodeTexNoise")
+    noise.location = (-340, -120)
+    noise.inputs["Scale"].default_value = 110.0
+    noise.inputs["Detail"].default_value = 5.0
+    bump = nt.nodes.new("ShaderNodeBump")
+    bump.location = (-80, -120)
+    bump.inputs["Strength"].default_value = 0.035
+    nt.links.new(tc.outputs["Object"], noise.inputs["Vector"])
+    nt.links.new(noise.outputs["Fac"], bump.inputs["Height"])
+    if "Normal" in bsdf.inputs:
+        nt.links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+
+    dsh_set_bsdf(bsdf, ["Base Color"], rgba)
+    dsh_set_bsdf(bsdf, ["Metallic"], 0.97)
+    dsh_set_bsdf(bsdf, ["Roughness"], float(roughness))
+    dsh_set_bsdf(bsdf, ["Anisotropic"], 0.35)
+    dsh_set_bsdf(bsdf, ["Specular IOR Level", "Specular"], 0.80)
+    return mat
+
+
+def dsh_render_clay_override(enable=True, color=(0.76, 0.77, 0.79, 1.0)):
+    vl = bpy.context.view_layer
+    if not enable:
+        if hasattr(vl, "material_override"):
+            vl.material_override = None
+        return None
+    rgba = dsh_coerce_rgba(color)
+    mat = bpy.data.materials.get("DSH_Clay_Override")
+    if mat is None:
+        mat, nt, bsdf = _dsh_new_pbr_mat("DSH_Clay_Override")
+        try:
+            ao = nt.nodes.new("ShaderNodeAmbientOcclusion")
+            ao.location = (-360, 120)
+            ao.samples = 8
+            ao.inputs["Color"].default_value = rgba
+            ao.inputs["Distance"].default_value = 0.35
+            mix = nt.nodes.new("ShaderNodeMix")
+            mix.data_type = "RGBA"
+            mix.blend_type = "MULTIPLY"
+            mix.location = (-120, 120)
+            mix.inputs["Factor"].default_value = 0.45
+            if "A" in mix.inputs and "B" in mix.inputs:
+                mix.inputs["A"].default_value = rgba
+                nt.links.new(ao.outputs["AO"], mix.inputs["B"])
+                nt.links.new(mix.outputs["Result"], bsdf.inputs["Base Color"])
+            else:
+                dsh_set_bsdf(bsdf, ["Base Color"], rgba)
+        except Exception:
+            dsh_set_bsdf(bsdf, ["Base Color"], rgba)
+        dsh_set_bsdf(bsdf, ["Metallic"], 0.0)
+        dsh_set_bsdf(bsdf, ["Roughness"], 0.78)
+        dsh_set_bsdf(bsdf, ["Specular IOR Level", "Specular"], 0.28)
+    if hasattr(vl, "material_override"):
+        vl.material_override = mat
+    return mat
 
 
 def dsh_load_texture_image(asset_or_name=None):
@@ -2370,9 +2868,10 @@ def dsh_build_template():
 export function generateSceneScript(
   project: BlenderProject | BlenderProjectFields,
   assetsDir = './assets',
+  options: GenerateSceneOptions = {},
 ): string {
   const assets = 'assets' in project && Array.isArray(project.assets) ? project.assets : []
-  const preamble = buildPreamble(project, assetsDir, assets)
+  const preamble = buildPreamble(project, assetsDir, assets, options.computeDevice ?? 'auto')
   const custom = (project.customScript || '').trim()
 
   if (project.scriptMode === 'custom' && custom) {
@@ -2383,6 +2882,7 @@ dsh_set_render_engine(
     DSH_PROJECT["engine"],
     DSH_PROJECT["samples"],
     DSH_PROJECT["transparentBg"],
+    DSH_PROJECT.get("computeDevice", "auto"),
 )
 
 # --- Custom bpy Script ---
@@ -2405,6 +2905,7 @@ dsh_set_render_engine(
     DSH_PROJECT["engine"],
     DSH_PROJECT["samples"],
     DSH_PROJECT["transparentBg"],
+    DSH_PROJECT.get("computeDevice", "auto"),
 )
 dsh_build_template()
 ${hookBlock}`
@@ -2414,10 +2915,11 @@ export function generateRunnerHarness(
   mode: BlenderJobKind,
   options: RunnerHarnessOptions,
 ): string {
-  const { project, assetsDir, outputPath = '', format = 'glb', overrideCode } = options
+  const { project, assetsDir, outputPath = '', format = 'glb', overrideCode, computeDevice } = options
+  const genOpts: GenerateSceneOptions = { computeDevice: computeDevice ?? 'auto' }
   const baseScene = overrideCode?.trim()
-    ? generateSceneScript({ ...project, scriptMode: 'custom', customScript: overrideCode }, assetsDir)
-    : generateSceneScript(project, assetsDir)
+    ? generateSceneScript({ ...project, scriptMode: 'custom', customScript: overrideCode }, assetsDir, genOpts)
+    : generateSceneScript(project, assetsDir, genOpts)
 
   switch (mode) {
     case 'pipeline':

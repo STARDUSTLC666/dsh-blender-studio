@@ -56,6 +56,7 @@ test('every entry in package.json files whitelist exists on disk and covers requ
     'skills',
     'blender/dsh_blender_bridge.py',
     'cordis.patch.yml',
+    'screenshots.json',
     'README.md',
     'README.en.md',
     'docs',
@@ -142,6 +143,7 @@ test('workflow light/dark bilingual SVGs and v0.2.0 hero/UI WebPs exist under do
     'hero-turbofan.webp',
     'hero-racecar.webp',
     'hero-helicopter.webp',
+    'hero-robot-arm.webp',
     'screen-zh.webp',
     'screen-qc.webp',
   ]) {
@@ -150,5 +152,16 @@ test('workflow light/dark bilingual SVGs and v0.2.0 hero/UI WebPs exist under do
     const buf = readFileSync(file)
     assert.equal(buf.subarray(0, 4).toString('ascii'), 'RIFF', `${webpName} must start with RIFF`)
     assert.equal(buf.subarray(8, 12).toString('ascii'), 'WEBP', `${webpName} bytes 8..12 must be WEBP`)
+  }
+
+  const screenshots = JSON.parse(readFileSync(join(ROOT, 'screenshots.json'), 'utf8'))
+  assert.ok(Array.isArray(screenshots) && screenshots.length === 6, 'screenshots.json must list 6 curated WebP paths')
+  for (const relPath of screenshots) {
+    assert.ok(typeof relPath === 'string' && !relPath.startsWith('/') && !relPath.includes('..'), `unsafe screenshot path: ${relPath}`)
+    const full = join(ROOT, relPath)
+    assert.ok(existsSync(full), `screenshots.json path missing on disk: ${relPath}`)
+    const buf = readFileSync(full)
+    assert.equal(buf.subarray(0, 4).toString('ascii'), 'RIFF')
+    assert.equal(buf.subarray(8, 12).toString('ascii'), 'WEBP')
   }
 })

@@ -10,18 +10,26 @@ Supported Blender versions: **Blender 3.6 LTS, 4.0–4.5, and 5.x** (Windows, ma
 
 ## 1. Installation & Startup
 
-### Step 1 — Obtain `dsh_blender_bridge.py`
+### Option A — 1-Click Automated Install (`v0.3.0`, Recommended)
+When a local Blender `3.6–5.x` executable is detected:
+1. **From the Workbench UI**: Open **Blender 3D → Bridge & Env**, click **Install Add-on to Blender** (`一键安装到本机 Blender`), and confirm the dialog. Under the hood, `dsh-blender-studio` executes headless Blender (`--background --factory-startup`) to run `addon_install(overwrite=True)`, `addon_enable('dsh_blender_bridge')`, and `save_userpref()`.
+2. **Via Agent Tool**: Ask the assistant to run `blender_bridge` with `{ "action": "install_addon", "confirmed": true }` (requires explicit `confirmed: true`, otherwise returns `CONFIRM_REQUIRED`).
+
+### Option B — Manual Installation
+
+#### Step 1 — Obtain `dsh_blender_bridge.py`
 You can get the add-on in any of three ways:
 1. **From the Workbench UI**: Open **Blender 3D → Bridge & Env** and click **Download Add-on (`dsh_blender_bridge.py`)** (`GET /api/dsh-blender-studio/workbench?kind=addon`).
 2. **Via Agent Tool**: Ask the assistant to run `blender_bridge` with `action: "get_addon_info"` to retrieve the exact local disk path of the bundled file.
 3. **Directly from the package**: `<package-root>/blender/dsh_blender_bridge.py`.
 
-### Step 2 — Install in Blender
+#### Step 2 — Install in Blender
 1. Open Blender (`3.6` – `5.x`).
 2. Go to **Edit → Preferences → Add-ons**:
    - **Blender 4.2+**: Click the top-right dropdown `⌄` → **Install from Disk...** → select `dsh_blender_bridge.py`.
    - **Blender 3.6–4.1**: Click **Install...** → select `dsh_blender_bridge.py`.
 3. Enable the checkbox next to **System: DSH Blender Bridge**.
+4. *(Optional, off by default for security)*: Expand **DSH Blender Bridge** preferences and check **Auto-start loopback server** (`auto_start`, default `False`) if you want Blender to launch the loopback bridge automatically on startup.
 
 ### Step 3 — Start the Loopback Server
 1. In any 3D Viewport, press **`N`** to toggle the right Sidebar and select the **`DSH Bridge`** tab (`View3D > Sidebar (N) > DSH Bridge`).
@@ -86,16 +94,21 @@ You can get the add-on in any of three ways:
 ### Supported Commands
 
 #### 1. `ping`
-Health probe returning active Blender metadata.
+Health probe returning active Blender metadata and detected Cycles GPU backend status (`v0.3.0`).
 - **Params**: `{}`
 - **Result**:
   ```json
   {
-    "blenderVersion": "4.3.2",
+    "blenderVersion": "5.3.0",
     "sceneName": "Scene",
     "engine": "BLENDER_EEVEE_NEXT",
     "frameCurrent": 1,
-    "objectCount": 6
+    "objectCount": 6,
+    "gpu": {
+      "available": true,
+      "backend": "OPTIX",
+      "devices": ["NVIDIA GeForce RTX 4060"]
+    }
   }
   ```
 

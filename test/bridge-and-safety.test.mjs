@@ -1,9 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:net'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import {
   BlenderBridgeClient,
   checkScriptSafety,
+  installBridgeAddon,
   isLoopbackHost,
   normalizeLoopbackHost,
 } from '../lib/bridge.js'
@@ -303,4 +307,39 @@ test('checkScriptSafety allows clean bpy scripts and catches dangerous patterns 
       `expected finding ${expectedRule}@L${expectedLine}, got ${JSON.stringify(res.findings)}`,
     )
   }
+})
+
+test('installBridgeAddon v0.3.0 invokes headless Blender installer safely, handles failures, and addon declares 0.3.0 + opt-in auto_start + GPU ping', async () => {
+  const addonPath = join(fileURLToPath(new URL('..', import.meta.url)), 'blender', 'dsh_blender_bridge.py')
+  const addonSource = readFileSync(addonPath, 'utf8')
+  assert.match(addonSource, /"version"\s*:\s*\(\s*0\s*,\s*3\s*,\s*0\s*\)/, 'addon bl_info must be (0, 3, 0)')
+  assert.match(addonSource, /auto_start:\s*bpy\.props\.BoolProperty\([\s\S]{0,360}default\s*=\s*False/, 'addon auto_start must default to False')
+  assert.match(addonSource, /"gpu"/, 'addon _cmd_ping must report Cycles GPU info')
+
+  const calls = []
+  const okRes = await installBridgeAddon('/mock/blender-5.3', addonPath, {
+    executor: async (execPath, args, timeoutMs) => {
+      calls.push({ execPath, args, timeoutMs })
+      return { exitCode: 0, stdout: '__DSH_ADDON_INSTALLED__=1\n', stderr: '' }
+    },
+  })
+  assert.equal(okRes.installed, true)
+  assert.equal(okRes.enabled, true)
+  assert.equal(okRes.executablePath, '/mock/blender-5.3')
+  assert.equal(okRes.addonPath, addonPath)
+  assert.equal(calls.length, 1)
+  assert.ok(calls[0].args.includes('--background'))
+  assert.ok(calls[0].args.includes('--factory-startup'))
+  assert.ok(calls[0].args.includes('--python-exit-code'))
+  const expr = calls[0].args[calls[0].args.indexOf('--python-expr') + 1] || ''
+  assert.match(expr, /addon_install/)
+  assert.match(expr, /addon_enable/)
+  assert.match(expr, /save_userpref/)
+
+  await assert.rejects(
+    installBridgeAddon('/mock/blender-5.3', addonPath, {
+      executor: async () => ({ exitCode: 1, stdout: '', stderr: 'Permission denied writing userpref.blend' }),
+    }),
+    (err) => err.code === 'ADDON_INSTALL_FAILED' && err.status === 500,
+  )
 })

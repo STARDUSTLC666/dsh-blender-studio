@@ -4,12 +4,16 @@ import { mkdir, readdir, readFile, realpath, rename, stat, unlink, writeFile } f
 import { homedir } from 'node:os'
 import { delimiter, join, resolve } from 'node:path'
 import {
+  BLENDER_COMPUTE_DEVICES,
   BlenderError,
   DEFAULT_BRIDGE_HOST,
   DEFAULT_BRIDGE_PORT,
   type BlenderBridgeStatus,
+  type BlenderComputeDevice,
   type BlenderEnvironmentStatus,
   type BlenderExecutableInfo,
+  type BlenderGpuBackend,
+  type BlenderGpuInfo,
   type BlenderSettings,
 } from './types.js'
 
@@ -17,6 +21,8 @@ export type BlenderVersionProber = (
   execPath: string,
   timeoutMs: number,
 ) => Promise<{ ok: boolean; stdout: string; stderr?: string; error?: string }>
+
+export type BlenderGpuProber = (execPath: string, timeoutMs: number) => Promise<BlenderGpuInfo>
 
 export interface BlenderCandidate {
   path: string
@@ -26,6 +32,8 @@ export interface BlenderCandidate {
 export interface BlenderEnvironmentOptions {
   root?: string
   prober?: BlenderVersionProber
+  gpuProber?: BlenderGpuProber
+  probeGpu?: boolean
   extraCandidates?: BlenderCandidate[]
   skipSystemScan?: boolean
   probeTimeoutMs?: number
@@ -34,6 +42,29 @@ export interface BlenderEnvironmentOptions {
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1'])
 const BLENDER_VERSION_RE = /Blender\s+(\d+)\.(\d+)(?:\.(\d+))?/i
 const SAFE_ENV_KEYS = /^(path|pathext|systemroot|windir|comspec|home|userprofile|tmp|temp|tmpdir|display|wayland_display|xdg_runtime_dir)$/i
+const GPU_PROBE_MARKER = '__DSH_GPU_JSON__='
+const VALID_GPU_BACKENDS = new Set<BlenderGpuBackend>(['OPTIX', 'CUDA', 'METAL', 'HIP', 'ONEAPI', 'CPU'])
+const CYCLES_GPU_PROBE_EXPR = [
+  'import bpy, json',
+  'out = {"available": False, "backend": "CPU", "devices": []}',
+  'try:',
+  '    addon = bpy.context.preferences.addons.get("cycles")',
+  '    prefs = addon.preferences if addon else None',
+  '    if prefs is not None:',
+  '        for b in ("OPTIX", "CUDA", "METAL", "HIP", "ONEAPI"):',
+  '            try:',
+  '                prefs.compute_device_type = b',
+  '                prefs.get_devices()',
+  '                devs = [d.name for d in prefs.devices if getattr(d, "type", "") == b]',
+  '                if devs:',
+  '                    out = {"available": True, "backend": b, "devices": devs}',
+  '                    break',
+  '            except Exception:',
+  '                continue',
+  'except Exception:',
+  '    pass',
+  `print(${JSON.stringify(GPU_PROBE_MARKER)} + json.dumps(out, ensure_ascii=False), flush=True)`,
+].join('\n')
 
 export function isLoopbackHost(host: string): boolean {
   const normalized = host.trim().toLowerCase()
@@ -47,7 +78,83 @@ export function defaultBlenderSettings(): BlenderSettings {
     bridgePort: DEFAULT_BRIDGE_PORT,
     bridgeToken: '',
     polyHavenEnabled: false,
+    computeDevice: 'auto',
   }
+}
+
+export function parseCyclesGpuProbeOutput(stdout: string): BlenderGpuInfo {
+  const fallback: BlenderGpuInfo = { available: false, backend: 'CPU', devices: [] }
+  for (const line of String(stdout ?? '').split(/\r?\n/)) {
+    const idx = line.indexOf(GPU_PROBE_MARKER)
+    if (idx === -1) continue
+    try {
+      const parsed = JSON.parse(line.slice(idx + GPU_PROBE_MARKER.length).trim()) as Partial<BlenderGpuInfo>
+      const backend =
+        typeof parsed.backend === 'string' && VALID_GPU_BACKENDS.has(parsed.backend as BlenderGpuBackend)
+          ? (parsed.backend as BlenderGpuBackend)
+          : 'CPU'
+      const devices = Array.isArray(parsed.devices)
+        ? parsed.devices.filter((d): d is string => typeof d === 'string' && d.trim().length > 0).slice(0, 16)
+        : []
+      const available = Boolean(parsed.available) && backend !== 'CPU' && devices.length > 0
+      return { available, backend: available ? backend : 'CPU', devices: available ? devices : [] }
+    } catch {
+      return fallback
+    }
+  }
+  return fallback
+}
+
+export async function defaultProbeCyclesGpu(execPath: string, timeoutMs = 12_000): Promise<BlenderGpuInfo> {
+  const fallback: BlenderGpuInfo = { available: false, backend: 'CPU', devices: [] }
+  if (!execPath || /[\x00-\x1f]/.test(execPath)) return fallback
+  try {
+    const info = await stat(execPath)
+    if (!info.isFile()) return fallback
+  } catch {
+    return fallback
+  }
+
+  return new Promise(resolveGpu => {
+    let settled = false
+    let stdout = ''
+    const finish = (result: BlenderGpuInfo) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolveGpu(result)
+    }
+
+    const child = spawn(
+      execPath,
+      ['--background', '--factory-startup', '--python-exit-code', '1', '--python-expr', CYCLES_GPU_PROBE_EXPR],
+      {
+        shell: false,
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: minimalProbeEnv(),
+      },
+    )
+
+    const timer = setTimeout(() => {
+      try {
+        child.kill('SIGKILL')
+      } catch {
+        // already exited
+      }
+      finish(fallback)
+    }, timeoutMs)
+    timer.unref()
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      if (stdout.length < 16384) stdout += chunk.toString('utf8')
+    })
+    child.once('error', () => finish(fallback))
+    child.once('close', code => {
+      if (code !== 0) finish(fallback)
+      else finish(parseCyclesGpuProbeOutput(stdout))
+    })
+  })
 }
 
 export function parseBlenderVersionOutput(
@@ -229,10 +336,13 @@ export class BlenderEnvironment {
   readonly root: string
   readonly settingsFile: string
   private readonly prober: BlenderVersionProber
+  private readonly gpuProber: BlenderGpuProber
+  private readonly shouldProbeGpu: boolean
   private readonly extraCandidates: BlenderCandidate[]
   private readonly skipSystemScan: boolean
   private readonly probeTimeoutMs: number
   private cachedDetect?: { detected: BlenderExecutableInfo[]; active?: BlenderExecutableInfo; checkedAt: number }
+  private gpuCache = new Map<string, { info: BlenderGpuInfo; checkedAt: number }>()
 
   constructor(options: BlenderEnvironmentOptions = {}) {
     this.root = resolve(
@@ -240,6 +350,8 @@ export class BlenderEnvironment {
     )
     this.settingsFile = join(this.root, 'settings.json')
     this.prober = options.prober ?? defaultProbeBlender
+    this.gpuProber = options.gpuProber ?? defaultProbeCyclesGpu
+    this.shouldProbeGpu = options.probeGpu ?? (options.gpuProber !== undefined || options.prober === undefined)
     this.extraCandidates = options.extraCandidates ?? []
     this.skipSystemScan = options.skipSystemScan ?? false
     this.probeTimeoutMs = options.probeTimeoutMs ?? 8000
@@ -260,12 +372,18 @@ export class BlenderEnvironment {
         raw.bridgePort <= 65535
           ? raw.bridgePort
           : defaults.bridgePort
+      const computeDevice: BlenderComputeDevice =
+        typeof raw.computeDevice === 'string' &&
+        (BLENDER_COMPUTE_DEVICES as readonly string[]).includes(raw.computeDevice)
+          ? (raw.computeDevice as BlenderComputeDevice)
+          : 'auto'
       return {
         blenderPath: typeof raw.blenderPath === 'string' ? raw.blenderPath.trim() : defaults.blenderPath,
         bridgeHost,
         bridgePort,
         bridgeToken: typeof raw.bridgeToken === 'string' ? raw.bridgeToken.slice(0, 256) : defaults.bridgeToken,
         polyHavenEnabled: typeof raw.polyHavenEnabled === 'boolean' ? raw.polyHavenEnabled : defaults.polyHavenEnabled,
+        computeDevice,
       }
     } catch {
       return defaults
@@ -355,6 +473,16 @@ export class BlenderEnvironment {
       next.polyHavenEnabled = patch.polyHavenEnabled
     }
 
+    if (patch.computeDevice !== undefined) {
+      if (
+        typeof patch.computeDevice !== 'string' ||
+        !(BLENDER_COMPUTE_DEVICES as readonly string[]).includes(patch.computeDevice)
+      ) {
+        throw new BlenderError('Cycles 计算设备必须为 auto、gpu 或 cpu。', 'BAD_REQUEST', 400)
+      }
+      next.computeDevice = patch.computeDevice as BlenderComputeDevice
+    }
+
     if (patch.blenderPath !== undefined) {
       if (typeof patch.blenderPath !== 'string') {
         throw new BlenderError('Blender 路径必须为字符串。', 'BLENDER_PATH_INVALID', 400)
@@ -366,6 +494,7 @@ export class BlenderEnvironment {
       } else {
         next.blenderPath = ''
       }
+      this.gpuCache.clear()
     }
 
     await this.saveSettings(next)
@@ -373,14 +502,39 @@ export class BlenderEnvironment {
     return next
   }
 
-  async detect(options: { force?: boolean } = {}): Promise<{
+  async probeCyclesGpu(execPath: string, options: { force?: boolean } = {}): Promise<BlenderGpuInfo> {
+    const trimmed = typeof execPath === 'string' ? execPath.trim() : ''
+    if (!trimmed) return { available: false, backend: 'CPU', devices: [] }
+    const key = process.platform === 'win32' ? trimmed.toLowerCase() : trimmed
+    const cached = this.gpuCache.get(key)
+    if (!options.force && cached && Date.now() - cached.checkedAt < 5 * 60_000) {
+      return { ...cached.info, devices: [...cached.info.devices] }
+    }
+    const info = await this.gpuProber(trimmed, Math.max(this.probeTimeoutMs, 12_000)).catch(
+      (): BlenderGpuInfo => ({ available: false, backend: 'CPU', devices: [] }),
+    )
+    this.gpuCache.set(key, { info, checkedAt: Date.now() })
+    return { ...info, devices: [...info.devices] }
+  }
+
+  async detect(options: { force?: boolean; probeGpu?: boolean } = {}): Promise<{
     active?: BlenderExecutableInfo
     detected: BlenderExecutableInfo[]
   }> {
     if (!options.force && this.cachedDetect && Date.now() - this.cachedDetect.checkedAt < 15_000) {
       return {
-        active: this.cachedDetect.active ? { ...this.cachedDetect.active } : undefined,
-        detected: this.cachedDetect.detected.map(item => ({ ...item })),
+        active: this.cachedDetect.active
+          ? {
+              ...this.cachedDetect.active,
+              gpu: this.cachedDetect.active.gpu
+                ? { ...this.cachedDetect.active.gpu, devices: [...this.cachedDetect.active.gpu.devices] }
+                : undefined,
+            }
+          : undefined,
+        detected: this.cachedDetect.detected.map(item => ({
+          ...item,
+          gpu: item.gpu ? { ...item.gpu, devices: [...item.gpu.devices] } : undefined,
+        })),
       }
     }
 
@@ -414,10 +568,23 @@ export class BlenderEnvironment {
     }
 
     const active = detected[0]
+    const doGpu = options.probeGpu ?? this.shouldProbeGpu
+    if (active && doGpu) {
+      active.gpu = await this.probeCyclesGpu(active.path, { force: options.force })
+    }
+
     this.cachedDetect = { active, detected, checkedAt: Date.now() }
     return {
-      active: active ? { ...active } : undefined,
-      detected: detected.map(item => ({ ...item })),
+      active: active
+        ? {
+            ...active,
+            gpu: active.gpu ? { ...active.gpu, devices: [...active.gpu.devices] } : undefined,
+          }
+        : undefined,
+      detected: detected.map(item => ({
+        ...item,
+        gpu: item.gpu ? { ...item.gpu, devices: [...item.gpu.devices] } : undefined,
+      })),
     }
   }
 
@@ -435,10 +602,12 @@ export class BlenderEnvironment {
 
   async status(
     bridgePatch: Partial<BlenderBridgeStatus> = {},
-    options: { forceDetect?: boolean } = {},
+    options: { forceDetect?: boolean; probeGpu?: boolean } = {},
   ): Promise<BlenderEnvironmentStatus> {
     const settings = await this.getSettings()
-    const { active, detected } = await this.detect({ force: options.forceDetect })
+    const computeDevice: BlenderComputeDevice = settings.computeDevice ?? 'auto'
+    const { active, detected } = await this.detect({ force: options.forceDetect, probeGpu: options.probeGpu })
+    const gpu: BlenderGpuInfo = active?.gpu ?? { available: false, backend: 'CPU', devices: [] }
     const bridge: BlenderBridgeStatus = {
       host: settings.bridgeHost,
       port: settings.bridgePort,
@@ -449,8 +618,9 @@ export class BlenderEnvironment {
       lastChecked: bridgePatch.lastChecked,
       error: bridgePatch.error,
     }
+    const gpuNote = gpu.available ? ` · Cycles GPU: ${gpu.backend}` : ' · Cycles: CPU'
     const hint = active
-      ? `已就绪：Blender ${active.version}（${active.eeveeEngine} / ${active.greasePencilApi.toUpperCase()}），支持无头 CLI 渲染与可选 Live Bridge 联动。`
+      ? `已就绪：Blender ${active.version}（${active.eeveeEngine} / ${active.greasePencilApi.toUpperCase()}${gpuNote}），支持无头 CLI 渲染与可选 Live Bridge 联动。`
       : '未检测到本机 Blender。请安装 Blender 3.6–5.x（https://www.blender.org/download/），或设置 DSH_BLENDER_EXECUTABLE / 在“环境与桥接”页手动指定可执行路径。'
 
     return {
@@ -458,6 +628,8 @@ export class BlenderEnvironment {
       active,
       detected,
       configuredPath: settings.blenderPath,
+      computeDevice,
+      gpu,
       bridge,
       polyHavenEnabled: settings.polyHavenEnabled,
       node: process.version,

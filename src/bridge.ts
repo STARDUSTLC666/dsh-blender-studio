@@ -1,6 +1,8 @@
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { stat } from 'node:fs/promises'
 import { createConnection, type Socket } from 'node:net'
+import { join } from 'node:path'
 import {
   BlenderError,
   DEFAULT_BRIDGE_HOST,
@@ -30,6 +32,11 @@ export interface BridgePingResult {
   engine: string
   frameCurrent: number
   objectCount: number
+  gpu?: {
+    available: boolean
+    backend: string
+    devices: string[]
+  }
 }
 
 export interface BridgeExecuteOptions {
@@ -612,4 +619,188 @@ export async function launchBlenderGui(
       })
     })
   })
+}
+
+export interface InstallBridgeAddonResult {
+  installed: boolean
+  enabled: boolean
+  addonPath: string
+  executablePath: string
+  output: string
+}
+
+export type BridgeAddonInstallExecutor = (
+  executablePath: string,
+  args: string[],
+  timeoutMs: number,
+) => Promise<{ exitCode: number; stdout: string; stderr: string }>
+
+export interface InstallBridgeAddonOptions {
+  executor?: BridgeAddonInstallExecutor
+  runner?: BridgeAddonInstallExecutor
+  timeoutMs?: number
+}
+
+const ADDON_INSTALL_ENV_KEYS =
+  /^(path|pathext|systemroot|windir|comspec|home|userprofile|appdata|localappdata|tmp|temp|tmpdir|xdg_config_home|xdg_data_home|display|wayland_display)$/i
+
+function buildAddonInstallEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {}
+  for (const [k, v] of Object.entries(process.env)) {
+    if (ADDON_INSTALL_ENV_KEYS.test(k) && v !== undefined) env[k] = v
+  }
+  env.NO_COLOR = '1'
+  env.PYTHONIOENCODING = 'utf-8'
+  return env
+}
+
+async function defaultBridgeAddonInstallExecutor(
+  executablePath: string,
+  args: string[],
+  timeoutMs: number,
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  return new Promise((resolveExec, rejectExec) => {
+    let settled = false
+    let stdout = ''
+    let stderr = ''
+
+    const child = spawn(executablePath, args, {
+      shell: false,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: buildAddonInstallEnv(),
+    })
+
+    const finish = (err: unknown, result?: { exitCode: number; stdout: string; stderr: string }) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (err) rejectExec(err)
+      else resolveExec(result!)
+    }
+
+    const timer = setTimeout(() => {
+      if (child.pid && child.exitCode === null) {
+        if (process.platform === 'win32') {
+          execFile(
+            join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe'),
+            ['/PID', String(child.pid), '/T', '/F'],
+            { windowsHide: true },
+            () => {},
+          )
+        } else {
+          try {
+            child.kill('SIGKILL')
+          } catch {
+            // already exited
+          }
+        }
+      }
+      finish(
+        new BlenderError(
+          `安装 Blender Live Bridge 插件超时（${timeoutMs} ms）。`,
+          'ADDON_INSTALL_FAILED',
+          500,
+        ),
+      )
+    }, timeoutMs)
+    timer.unref?.()
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      if (stdout.length < 32_768) stdout += chunk.toString('utf8')
+    })
+    child.stderr?.on('data', (chunk: Buffer) => {
+      if (stderr.length < 32_768) stderr += chunk.toString('utf8')
+    })
+    child.once('error', err => {
+      finish(
+        new BlenderError(
+          `无法启动 Blender 执行插件安装：${scrubLogText(err.message)}`,
+          'ADDON_INSTALL_FAILED',
+          500,
+        ),
+      )
+    })
+    child.once('close', code => {
+      finish(null, { exitCode: code ?? 1, stdout, stderr })
+    })
+  })
+}
+
+/**
+ * Install and enable `dsh_blender_bridge.py` in local desktop Blender via headless CLI.
+ * Preserves existing user preferences by reading userpref before enabling & saving.
+ */
+export async function installBridgeAddon(
+  executablePath: string,
+  addonPath: string,
+  options: InstallBridgeAddonOptions = {},
+): Promise<InstallBridgeAddonResult> {
+  if (typeof executablePath !== 'string' || !executablePath.trim()) {
+    throw new BlenderError('未配置有效的 Blender 可执行文件路径。', 'BLENDER_PATH_INVALID', 400)
+  }
+  if (typeof addonPath !== 'string' || !addonPath.trim()) {
+    throw new BlenderError('缺少有效的 dsh_blender_bridge.py 插件路径。', 'ADDON_INSTALL_FAILED', 500)
+  }
+
+  const exe = executablePath.trim()
+  const addon = addonPath.trim()
+  const customExec = options.executor ?? options.runner
+  if (!customExec) {
+    const info = await stat(addon).catch(() => null)
+    if (!info || !info.isFile()) {
+      throw new BlenderError(`未找到内置插件文件：${addon}`, 'ADDON_INSTALL_FAILED', 500)
+    }
+  }
+
+  const pyExpr = [
+    'import bpy, json',
+    `addon_path = json.loads(${JSON.stringify(JSON.stringify(addon))})`,
+    'try:\n    bpy.ops.wm.read_userpref()\nexcept Exception:\n    pass',
+    'bpy.ops.preferences.addon_install(filepath=addon_path, overwrite=True)',
+    'bpy.ops.preferences.addon_enable(module="dsh_blender_bridge")',
+    'bpy.ops.wm.save_userpref()',
+    'print("DSH_BRIDGE_ADDON_INSTALLED_OK")',
+  ].join('\n')
+
+  const args = [
+    '--background',
+    '--factory-startup',
+    '--python-exit-code',
+    '1',
+    '--python-expr',
+    pyExpr,
+  ]
+  const timeoutMs =
+    typeof options.timeoutMs === 'number' && options.timeoutMs > 0 ? options.timeoutMs : 45_000
+  const execFn = customExec ?? defaultBridgeAddonInstallExecutor
+
+  let res: { exitCode: number; stdout: string; stderr: string }
+  try {
+    res = await execFn(exe, args, timeoutMs)
+  } catch (err) {
+    if (err instanceof BlenderError) throw err
+    throw new BlenderError(
+      `安装 Blender Live Bridge 插件失败：${scrubLogText(err instanceof Error ? err.message : String(err))}`,
+      'ADDON_INSTALL_FAILED',
+      500,
+    )
+  }
+
+  const combined = scrubLogText([res.stdout, res.stderr].filter(Boolean).join('\n').trim(), 4000)
+  if (res.exitCode !== 0) {
+    throw new BlenderError(
+      `Blender 插件安装命令返回非零退出码（${res.exitCode}）${combined ? '：' + combined.slice(-600) : ''}`,
+      'ADDON_INSTALL_FAILED',
+      500,
+    )
+  }
+
+  return {
+    installed: true,
+    enabled: true,
+    addonPath: addon,
+    executablePath: exe,
+    output: combined,
+  }
 }

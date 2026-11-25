@@ -1,4 +1,4 @@
-> Full technical reference. See [README.en.md](../README.en.md) for the quickstart overview; this document covers all 6 Agent tools, the HTTP Workbench API, 8 starter templates, the built-in `DSH_KIT` engineering/PBR helper library, 1-click `pipeline`, script checkpoints, auto-wired assets, QC-3D scene auditing, 9 bundled skills, environment variables, security boundaries, and troubleshooting.
+> Full technical reference. See [README.en.md](../README.en.md) for the quickstart overview; this document covers all 6 Agent tools, the HTTP Workbench API, 8 starter templates + 4 Pro Engineering Exemplars, the built-in 24-helper `DSH_KIT` v2 library, surgical `patch_script`, Cycles GPU auto-acceleration, 1-click Bridge add-on installer, 1-click `pipeline`, script checkpoints, auto-wired assets, QC-3D scene auditing, 9 bundled skills, environment variables, security boundaries, and troubleshooting.
 
 # `dsh-blender-studio` Technical Reference
 
@@ -22,11 +22,11 @@
 
 | Tool Name | Actions / Scope | Key Parameters & Behavior |
 | :--- | :--- | :--- |
-| **`blender_health`** | Read-only health check | Verifies all 9 bundled `SKILL.md` files and host registration state, active local Blender version (`BLENDER_EEVEE_NEXT`/`BLENDER_EEVEE`, `gpv3`/`gpv2`), Live Bridge connectivity, and Poly Haven toggle. Does not mutate disk or registry state. |
-| **`blender_project`** | `list` \| `create` \| `get` \| `update` \| `update_script` \| `duplicate` \| `save_checkpoint` \| `restore_checkpoint` \| `inspect_scene` \| `archive` \| `restore` | Full project CRUD. `duplicate` clones project fields and uploaded assets safely into a new UUID; editing `customScript` automatically saves up to 10 script checkpoints, with explicit `save_checkpoint` / `restore_checkpoint` rollback; mutating actions require the current `revision` (returns `409 CONFLICT` on stale writes). `inspect_scene` returns `BlenderSceneSummary` plus the deterministic **`QC-3D` score (`0–100`, Grade `A–D`) and issue checklist**. |
-| **`blender_render`** | `preview_still` \| `contact_sheet` \| `render_animation` \| `export_model` \| `pipeline` \| `job` \| `cancel` | Drives Headless CLI jobs: `preview_still` (PNG), `contact_sheet` (2×2 4-angle QC PNG), `render_animation` (H.264 MP4 / PNG fallback), `export_model` (`format`: `glb` \| `fbx` \| `obj` \| `stl` \| `blend`), and **1-click `pipeline`** (chaining `inspect_scene` → `contact_sheet` → `preview_still`/`render_animation` → `export_model` with `qualityTier`: `draft` \| `studio` \| `beauty` and optional `abortOnQcError`). Cycles automatically enables OpenImageDenoise (`RGB_ALBEDO_NORMAL`), adaptive sampling, and AgX. |
-| **`blender_script`** | `validate` \| `run_headless` \| `run_bridge` | Runs the 13-rule static safety scanner (`validate`) or executes custom `bpy` code in headless mode (`run_headless`) or Live Bridge (`run_bridge`), returning scrubbed logs and updated `sceneSummary` (including `QC-3D` score). Rejects unsafe payloads (`SCRIPT_UNSAFE`) unless explicitly authorized with `allowUnsafe: true`. |
-| **`blender_bridge`** | `status` \| `get_addon_info` \| `scene_info` \| `viewport_capture` \| `sync_project` \| `open_gui` | Checks bridge status, locates `dsh_blender_bridge.py`, inspects live scene state (with live `QC-3D` audit), captures the Blender 3D viewport (`width` 64–3840, `height` 64–2160), syncs a project script into Blender, or launches desktop Blender GUI. |
+| **`blender_health`** | Read-only health check | Verifies all 9 bundled `SKILL.md` files and host registration state, active local Blender version (`BLENDER_EEVEE_NEXT`/`BLENDER_EEVEE`, `gpv3`/`gpv2`, and **Cycles GPU backend/device probe**), `computeDevice` setting, Live Bridge connectivity, and Poly Haven toggle. Does not mutate disk or registry state. |
+| **`blender_project`** | `list` \| `create` \| `get` \| `update` \| `update_script` \| `duplicate` \| `list_exemplars` \| `create_from_exemplar` \| `save_checkpoint` \| `restore_checkpoint` \| `inspect_scene` \| `archive` \| `restore` | Full project CRUD plus **4 Pro Engineering Exemplars** (`aero-x900-turbofan`, `apex-09-racecar`, `vanguard-h145x-helicopter`, `kuka-6axis-robot-arm` — inspectable via `get` as few-shot references). `duplicate` clones project fields and uploaded assets; editing `customScript` automatically saves up to 10 checkpoints with `save_checkpoint`/`restore_checkpoint`; `inspect_scene` returns the deterministic **`QC-3D` score (`0–100`, Grade `A–D`)**. |
+| **`blender_render`** | `preview_still` \| `contact_sheet` \| `render_animation` \| `export_model` \| `pipeline` \| `job` \| `cancel` | Drives Headless CLI jobs: `preview_still` (PNG), `contact_sheet` (2×2 4-angle QC PNG), `render_animation` (H.264 MP4 / PNG fallback), `export_model` (`format`: `glb` \| `fbx` \| `obj` \| `stl` \| `blend`), and **1-click `pipeline`** (chaining `inspect_scene` → `contact_sheet` → `preview_still`/`render_animation` → `export_model` with `qualityTier`: `draft` \| `studio` \| `beauty` and optional `abortOnQcError`). Cycles automatically accelerates via `computeDevice` (`OPTIX`/`CUDA`/`METAL`/`HIP`/`ONEAPI` with safe `CPU` fallback) + OpenImageDenoise (`RGB_ALBEDO_NORMAL`) + AgX. |
+| **`blender_script`** | `validate` \| `patch` \| `run_headless` \| `run_bridge` | Runs the 13-rule static safety scanner (`validate`), applies surgical **`patch`** replacements (`find`, `replace`, `replaceAll?`, `note?`, `allowUnsafe?`) on large 40–256 KB scripts with pre-write safety check and auto-checkpointing, or executes custom `bpy` code in headless mode (`run_headless`) / Live Bridge (`run_bridge`) returning logs and `sceneSummary` (with `QC-3D`). |
+| **`blender_bridge`** | `status` \| `get_addon_info` \| `install_addon` \| `scene_info` \| `viewport_capture` \| `sync_project` \| `open_gui` | Checks bridge status & GPU backend, locates `dsh_blender_bridge.py`, runs **1-click headless `install_addon`** (requires `confirmed: true`), inspects live scene state (with live `QC-3D` audit), captures the Blender 3D viewport (`width` 64–3840, `height` 64–2160), syncs a project script into Blender, or launches desktop Blender GUI. |
 | **`blender_assets`** | `list` \| `remove` \| `search_polyhaven` \| `import_polyhaven` | Manages uploaded project assets and—when `polyHavenEnabled` is explicitly turned on—searches and imports allowlisted CC0 `hdris`, `textures`, or `models` (`resolution`: `1k` \| `2k`) from Poly Haven. |
 
 ---
@@ -50,10 +50,10 @@
 
 `Content-Type: application/json`, returning `{ "ok": true, "value": ... }` or `{ "ok": false, "message": "...", "code": "..." }`:
 
-- **Projects**: `list`, `create`, `get`, `update`, `duplicate` (`id`, `title?`), `save_checkpoint` (`id`, `revision`, `note?`), `restore_checkpoint` (`id`, `revision`, `checkpointId`), `removeAsset`, `archive`, `restore`, `generatedScript`
+- **Projects & Exemplars**: `list` (includes `exemplars` summaries), `list_exemplars`, `create_from_exemplar` (`exemplarId`, `title?`), `create`, `get`, `update`, `patch_script` (`id`, `revision`, `find`, `replace`, `replaceAll?`, `note?`, `allowUnsafe?`), `duplicate` (`id`, `title?`), `save_checkpoint` (`id`, `revision`, `note?`), `restore_checkpoint` (`id`, `revision`, `checkpointId`), `removeAsset`, `archive`, `restore`, `generatedScript`
 - **Jobs & Rendering**: `preview_still`, `contact_sheet`, `render_animation`, `export_model` (`format`), `pipeline` (`includeContactSheet?`, `renderKind?`, `exportFormat?`, `qualityTier?`, `abortOnQcError?`), `inspect_scene`, `run_script` (`code?`, `allowUnsafe?`), `open_gui`, `job`, `cancel`
-- **Environment & Settings**: `environment`, `configure` (`blenderPath?`, `bridgeHost?`, `bridgePort?`, `bridgeToken?`, `polyHavenEnabled?`), `detect_blender`
-- **Live Bridge**: `bridge_status`, `bridge_scene`, `bridge_execute` (`code`), `bridge_viewport` (`width?`, `height?`), `bridge_sync` (`id`)
+- **Environment & Settings**: `environment` (includes `gpu` & `computeDevice`), `configure` (`blenderPath?`, `computeDevice?`, `bridgeHost?`, `bridgePort?`, `bridgeToken?`, `polyHavenEnabled?`), `detect_blender`
+- **Live Bridge**: `bridge_status`, `bridge_install_addon` (`confirmed: true`), `bridge_scene`, `bridge_execute` (`code`), `bridge_viewport` (`width?`, `height?`), `bridge_sync` (`id`)
 - **External Assets**: `polyhaven_search` (`query`, `type?`, `limit?`), `polyhaven_import` (`id`, `revision`, `assetId`, `assetType`, `resolution?`)
 
 ### 3.3 `POST /api/dsh-blender-studio/workbench/upload`
@@ -84,11 +84,18 @@ Raw binary request body with headers:
 - **Uploaded 3D Models (`.glb` / `.gltf` / `.obj` / `.fbx` / `.stl`)**: Automatically imported onto the stage, normalized to ~`1.6 m`, and grounded onto the hero pedestal for instant zero-code rendering.
 - **Uploaded Textures / References (`.png` / `.jpg` / `.webp`)**: Exposed cleanly to scripts via the injected `DSH_ASSETS` helper dict.
 
-### Built-In `DSH_KIT` Hard-Surface & Cinema PBR Library
-Every generated template and `customScript` automatically receives cross-version `dsh_*` helpers (Blender 3.6–5.x safe, zero deprecation warnings):
-- **Hard-Surface Geometry & Framing**: `dsh_bevel`, `dsh_smooth`, `dsh_array_radial`, `dsh_tube_along_points`, `dsh_ground_assembly`, `dsh_frame_camera_to_assembly`
-- **Cinema Procedural PBR Shaders**: `dsh_mat_car_paint`, `dsh_mat_carbon_fiber`, `dsh_mat_brushed_metal`, `dsh_mat_tinted_glass`, `dsh_mat_rubber_tire`, `dsh_mat_emissive_led`, `dsh_mat_matte_armor`
-- **Hero Studios & Post**: `dsh_setup_hero_studio` (`dark_cyclorama`, `wet_asphalt`, `engineering_bay`, `helipad`), `dsh_setup_compositor` (`FOG_GLOW` glare), `dsh_add_dof`
+### 4 Pro Engineering Exemplars (`v0.3.0`)
+Four Blender 5.3.0 visually verified **`QC-3D 100/A`** engineering masterpieces shipped directly inside the package — launchable in 1 click from the Workbench Library or `blender_project(action: 'create_from_exemplar')` and readable via `get` as few-shot `bpy` references:
+- `aero-x900-turbofan` — AERO-X900 Cutaway High-Bypass Turbofan Jet Engine (`aerospace` · Cycles 64 spp)
+- `apex-09-racecar` — APEX-09 Cyber GT Hypercar (`vehicle` · Cycles 96 spp)
+- `vanguard-h145x-helicopter` — VANGUARD H-145X Twin-Turbine Helicopter (`aerospace` · Cycles 64 spp)
+- `kuka-6axis-robot-arm` — 6-Axis Industrial Robot Arm Workstation (`robotics` · Cycles 64 spp)
+
+### Built-In `DSH_KIT` v2 Hard-Surface & Cinema PBR Library (24 Helpers)
+Every generated template, exemplar, and `customScript` automatically receives 24 cross-version `dsh_*` helpers (Blender 3.6–5.x safe, zero deprecation warnings):
+- **Hard-Surface Geometry & Framing (10)**: `dsh_bevel`, `dsh_smooth`, `dsh_loft_profile`, `dsh_bolt_ring`, `dsh_wheel_assembly`, `dsh_louver_panel`, `dsh_array_radial`, `dsh_tube_along_points`, `dsh_ground_assembly`, `dsh_frame_camera_to_assembly`
+- **Cinema Procedural PBR Shaders (10)**: `dsh_mat_car_paint`, `dsh_mat_carbon_fiber`, `dsh_mat_brushed_metal`, `dsh_mat_anodized_metal`, `dsh_mat_heat_blued_titanium`, `dsh_mat_copper_gold`, `dsh_mat_tinted_glass`, `dsh_mat_rubber_tire`, `dsh_mat_emissive_led`, `dsh_mat_matte_armor`
+- **Hero Studios, Clay Audit & Post (4)**: `dsh_setup_hero_studio` (`dark_cyclorama`, `wet_asphalt`, `engineering_bay`, `helipad`), `dsh_render_clay_override`, `dsh_setup_compositor` (`FOG_GLOW` glare), `dsh_add_dof`; plus `dsh_configure_cycles_device` for automatic Cycles GPU/CPU acceleration.
 
 ### Deterministic `QC-3D` Scene Quality Audit
 Headless `inspect_scene`, `blender_script`, and Live Bridge `scene_info` return `sceneSummary.qc` (`score`: `0–100`, `grade`: `A|B|C|D`, `issues[]`) checking 8 rules: `EMPTY_SCENE`, `NO_CAMERA`, `NO_LIGHTS`, `UNASSIGNED_MATERIAL`, `FLAT_UNBEVELED_PRIMITIVE`, `FLOATING_HERO` (assembly-aware), `OFF_FRAME_HERO` (camera NDC frustum projection), and `HIGH_POLYCOUNT`.

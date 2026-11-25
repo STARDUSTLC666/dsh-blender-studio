@@ -294,11 +294,451 @@ function buildTemplateGeometry(template, accentRgb, phase) {
   return faces;
 }
 
+function mat4Identity() {
+  return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+}
+
+function mat4Multiply(a, b) {
+  const out = new Array(16);
+  for (let col = 0; col < 4; col++) {
+    const b0 = b[col * 4];
+    const b1 = b[col * 4 + 1];
+    const b2 = b[col * 4 + 2];
+    const b3 = b[col * 4 + 3];
+    out[col * 4] = a[0] * b0 + a[4] * b1 + a[8] * b2 + a[12] * b3;
+    out[col * 4 + 1] = a[1] * b0 + a[5] * b1 + a[9] * b2 + a[13] * b3;
+    out[col * 4 + 2] = a[2] * b0 + a[6] * b1 + a[10] * b2 + a[14] * b3;
+    out[col * 4 + 3] = a[3] * b0 + a[7] * b1 + a[11] * b2 + a[15] * b3;
+  }
+  return out;
+}
+
+function mat4FromNode(node) {
+  if (Array.isArray(node?.matrix) && node.matrix.length === 16) {
+    return node.matrix.slice();
+  }
+  const t = Array.isArray(node?.translation) ? node.translation : [0, 0, 0];
+  const q = Array.isArray(node?.rotation) ? node.rotation : [0, 0, 0, 1];
+  const s = Array.isArray(node?.scale) ? node.scale : [1, 1, 1];
+  const x = q[0] || 0;
+  const y = q[1] || 0;
+  const z = q[2] || 0;
+  const w = q[3] === undefined ? 1 : q[3];
+  const x2 = x + x;
+  const y2 = y + y;
+  const z2 = z + z;
+  const xx = x * x2;
+  const xy = x * y2;
+  const xz = x * z2;
+  const yy = y * y2;
+  const yz = y * z2;
+  const zz = z * z2;
+  const wx = w * x2;
+  const wy = w * y2;
+  const wz = w * z2;
+  const sx = s[0] === undefined ? 1 : s[0];
+  const sy = s[1] === undefined ? 1 : s[1];
+  const sz = s[2] === undefined ? 1 : s[2];
+  return [
+    (1 - (yy + zz)) * sx,
+    (xy + wz) * sx,
+    (xz - wy) * sx,
+    0,
+    (xy - wz) * sy,
+    (1 - (xx + zz)) * sy,
+    (yz + wx) * sy,
+    0,
+    (xz + wy) * sz,
+    (yz - wx) * sz,
+    (1 - (xx + yy)) * sz,
+    0,
+    t[0] || 0,
+    t[1] || 0,
+    t[2] || 0,
+    1,
+  ];
+}
+
+function transformPointGltfToBlenderZUp(m, x, y, z) {
+  const gx = m[0] * x + m[4] * y + m[8] * z + m[12];
+  const gy = m[1] * x + m[5] * y + m[9] * z + m[13];
+  const gz = m[2] * x + m[6] * y + m[10] * z + m[14];
+  // Blender's glTF 2.0 exporter maps Blender (X, Y, Z) -> glTF (X, Z, -Y).
+  // Inverse right-handed mapping restores upright Z-up Blender stage coordinates:
+  return [gx, -gz, gy];
+}
+
+function transformNormalGltfToBlenderZUp(m, nx, ny, nz) {
+  const gx = m[0] * nx + m[4] * ny + m[8] * nz;
+  const gy = m[1] * nx + m[5] * ny + m[9] * nz;
+  const gz = m[2] * nx + m[6] * ny + m[10] * nz;
+  const bx = gx;
+  const by = -gz;
+  const bz = gy;
+  const len = Math.hypot(bx, by, bz) || 1;
+  return [bx / len, by / len, bz / len];
+}
+
+function decodeUtf8Bytes(bytes) {
+  if (typeof TextDecoder === 'function') {
+    return new TextDecoder('utf-8').decode(bytes);
+  }
+  let out = '';
+  for (let i = 0; i < bytes.length; i++) out += String.fromCharCode(bytes[i]);
+  return out;
+}
+
+function parseGlbMesh(input, options = {}) {
+  const maxTriangles = Math.max(100, Math.min(14000, Number(options.maxTriangles) || 6500));
+  const isArrayBuffer =
+    input instanceof ArrayBuffer || Object.prototype.toString.call(input) === '[object ArrayBuffer]';
+  const bytes = isArrayBuffer
+    ? new Uint8Array(input)
+    : ArrayBuffer.isView(input)
+    ? new Uint8Array(input.buffer, input.byteOffset, input.byteLength)
+    : null;
+  if (!bytes || bytes.byteLength < 20) {
+    throw new Error('GLB buffer too small');
+  }
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const magic = dv.getUint32(0, true);
+  const version = dv.getUint32(4, true);
+  const declaredLen = dv.getUint32(8, true);
+  if (magic !== 0x46546c67) throw new Error('Invalid GLB magic header');
+  if (version !== 2) throw new Error('Unsupported glTF version: ' + version);
+
+  const totalLen = Math.min(bytes.byteLength, declaredLen || bytes.byteLength);
+  let json = null;
+  let binBytes = null;
+  let offset = 12;
+  while (offset + 8 <= totalLen) {
+    const chunkLen = dv.getUint32(offset, true);
+    const chunkType = dv.getUint32(offset + 4, true);
+    const dataStart = offset + 8;
+    const dataEnd = Math.min(totalLen, dataStart + chunkLen);
+    if (chunkType === 0x4e4f534a) {
+      json = JSON.parse(decodeUtf8Bytes(bytes.subarray(dataStart, dataEnd)));
+    } else if (chunkType === 0x004e4942) {
+      binBytes = bytes.subarray(dataStart, dataEnd);
+    }
+    offset = dataStart + chunkLen;
+  }
+  if (!json || typeof json !== 'object') throw new Error('Missing GLB JSON chunk');
+
+  const binDv = binBytes ? new DataView(binBytes.buffer, binBytes.byteOffset, binBytes.byteLength) : null;
+  const accessors = Array.isArray(json.accessors) ? json.accessors : [];
+  const bufferViews = Array.isArray(json.bufferViews) ? json.bufferViews : [];
+  const meshes = Array.isArray(json.meshes) ? json.meshes : [];
+  const nodes = Array.isArray(json.nodes) ? json.nodes : [];
+  const materials = Array.isArray(json.materials) ? json.materials : [];
+
+  function readVec3(accIdx) {
+    const acc = accessors[accIdx];
+    if (!acc || acc.bufferView === undefined || !binDv) return null;
+    const bv = bufferViews[acc.bufferView];
+    if (!bv || acc.componentType !== 5126) return null;
+    const count = Number(acc.count) || 0;
+    const stride = Number(bv.byteStride) || 12;
+    const base = (Number(bv.byteOffset) || 0) + (Number(acc.byteOffset) || 0);
+    const out = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      const off = base + i * stride;
+      if (off + 12 > binBytes.byteLength) break;
+      out[i * 3] = binDv.getFloat32(off, true);
+      out[i * 3 + 1] = binDv.getFloat32(off + 4, true);
+      out[i * 3 + 2] = binDv.getFloat32(off + 8, true);
+    }
+    return out;
+  }
+
+  function readIndices(accIdx) {
+    const acc = accessors[accIdx];
+    if (!acc || acc.bufferView === undefined || !binDv) return null;
+    const bv = bufferViews[acc.bufferView];
+    if (!bv) return null;
+    const count = Number(acc.count) || 0;
+    const compSize = acc.componentType === 5121 ? 1 : acc.componentType === 5123 ? 2 : acc.componentType === 5125 ? 4 : 0;
+    if (!compSize) return null;
+    const stride = Number(bv.byteStride) || compSize;
+    const base = (Number(bv.byteOffset) || 0) + (Number(acc.byteOffset) || 0);
+    const out = new Uint32Array(count);
+    for (let i = 0; i < count; i++) {
+      const off = base + i * stride;
+      if (off + compSize > binBytes.byteLength) break;
+      out[i] =
+        compSize === 1 ? binDv.getUint8(off) : compSize === 2 ? binDv.getUint16(off, true) : binDv.getUint32(off, true);
+    }
+    return out;
+  }
+
+  function materialRgb(matIdx) {
+    const mat = matIdx !== undefined ? materials[matIdx] : null;
+    const factor = mat?.pbrMetallicRoughness?.baseColorFactor;
+    if (Array.isArray(factor) && factor.length >= 3) {
+      const toSrgb = c => Math.max(24, Math.min(248, Math.round(Math.pow(Math.max(0, Math.min(1, Number(c) || 0)), 1 / 2.2) * 255)));
+      return [toSrgb(factor[0]), toSrgb(factor[1]), toSrgb(factor[2])];
+    }
+    return [192, 204, 220];
+  }
+
+  // Collect (meshIndex, worldMatrix) from active scene node graph
+  const meshInstances = [];
+  const visited = new Set();
+  function walkNode(nodeIdx, parentMat) {
+    if (visited.has(nodeIdx)) return;
+    const node = nodes[nodeIdx];
+    if (!node) return;
+    visited.add(nodeIdx);
+    const worldMat = mat4Multiply(parentMat, mat4FromNode(node));
+    if (typeof node.mesh === 'number' && meshes[node.mesh]) {
+      meshInstances.push({
+        meshIndex: node.mesh,
+        matrix: worldMat,
+        name: String(node.name || meshes[node.mesh]?.name || ''),
+      });
+    }
+    if (Array.isArray(node.children)) {
+      for (const childIdx of node.children) walkNode(childIdx, worldMat);
+    }
+  }
+
+  const activeScene = Array.isArray(json.scenes) ? json.scenes[json.scene || 0] || json.scenes[0] : null;
+  if (activeScene && Array.isArray(activeScene.nodes) && activeScene.nodes.length > 0) {
+    for (const rootIdx of activeScene.nodes) walkNode(rootIdx, mat4Identity());
+  } else if (nodes.length > 0) {
+    const childSet = new Set();
+    for (const n of nodes) {
+      if (Array.isArray(n.children)) for (const c of n.children) childSet.add(c);
+    }
+    for (let i = 0; i < nodes.length; i++) {
+      if (!childSet.has(i)) walkNode(i, mat4Identity());
+    }
+  }
+  if (meshInstances.length === 0 && meshes.length > 0) {
+    for (let i = 0; i < meshes.length; i++) {
+      meshInstances.push({ meshIndex: i, matrix: mat4Identity(), name: String(meshes[i]?.name || '') });
+    }
+  }
+
+  const backdropRe = /^(?:Studio_|Backdrop_|Stage_Floor|Softbox_|Cyclorama|Ground_Plane|Abstract_Floor|Logo_Floor|GP_Paper_Card)/i;
+  const heroInstances = meshInstances.filter(inst => !backdropRe.test(inst.name || ''));
+  const activeInstances = heroInstances.length > 0 ? heroInstances : meshInstances;
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+  let vertexCount = 0;
+  let totalTriangles = 0;
+
+  // Pass 1: gather world-transformed triangles and exact bounding box
+  const rawTris = [];
+  for (const inst of activeInstances) {
+    const mesh = meshes[inst.meshIndex];
+    if (!mesh || !Array.isArray(mesh.primitives)) continue;
+    for (const prim of mesh.primitives) {
+      if (prim.mode !== undefined && prim.mode !== 4) continue;
+      const posIdx = prim.attributes?.POSITION;
+      if (posIdx === undefined) continue;
+      const posArr = readVec3(posIdx);
+      if (!posArr || posArr.length < 9) continue;
+      const vCount = Math.floor(posArr.length / 3);
+      vertexCount += vCount;
+      const normArr = prim.attributes?.NORMAL !== undefined ? readVec3(prim.attributes.NORMAL) : null;
+      const idxArr = prim.indices !== undefined ? readIndices(prim.indices) : null;
+      const rgb = materialRgb(prim.material);
+
+      const transformedPts = new Array(vCount);
+      for (let i = 0; i < vCount; i++) {
+        const pt = transformPointGltfToBlenderZUp(inst.matrix, posArr[i * 3], posArr[i * 3 + 1], posArr[i * 3 + 2]);
+        transformedPts[i] = pt;
+        if (pt[0] < minX) minX = pt[0];
+        if (pt[0] > maxX) maxX = pt[0];
+        if (pt[1] < minY) minY = pt[1];
+        if (pt[1] > maxY) maxY = pt[1];
+        if (pt[2] < minZ) minZ = pt[2];
+        if (pt[2] > maxZ) maxZ = pt[2];
+      }
+
+      const triCount = idxArr ? Math.floor(idxArr.length / 3) : Math.floor(vCount / 3);
+      totalTriangles += triCount;
+
+      for (let t = 0; t < triCount; t++) {
+        const i0 = idxArr ? idxArr[t * 3] : t * 3;
+        const i1 = idxArr ? idxArr[t * 3 + 1] : t * 3 + 1;
+        const i2 = idxArr ? idxArr[t * 3 + 2] : t * 3 + 2;
+        const p0 = transformedPts[i0];
+        const p1 = transformedPts[i1];
+        const p2 = transformedPts[i2];
+        if (!p0 || !p1 || !p2) continue;
+
+        let normal;
+        if (normArr && i0 * 3 + 2 < normArr.length && i1 * 3 + 2 < normArr.length && i2 * 3 + 2 < normArr.length) {
+          const anx = (normArr[i0 * 3] + normArr[i1 * 3] + normArr[i2 * 3]) / 3;
+          const any = (normArr[i0 * 3 + 1] + normArr[i1 * 3 + 1] + normArr[i2 * 3 + 1]) / 3;
+          const anz = (normArr[i0 * 3 + 2] + normArr[i1 * 3 + 2] + normArr[i2 * 3 + 2]) / 3;
+          normal = transformNormalGltfToBlenderZUp(inst.matrix, anx, any, anz);
+        } else {
+          const ux = p1[0] - p0[0];
+          const uy = p1[1] - p0[1];
+          const uz = p1[2] - p0[2];
+          const vx = p2[0] - p0[0];
+          const vy = p2[1] - p0[1];
+          const vz = p2[2] - p0[2];
+          const nx = uy * vz - uz * vy;
+          const ny = uz * vx - ux * vz;
+          const nz = ux * vy - uy * vx;
+          const nLen = Math.hypot(nx, ny, nz) || 1;
+          normal = [nx / nLen, ny / nLen, nz / nLen];
+        }
+        rawTris.push({ p0, p1, p2, normal, rgb });
+      }
+    }
+  }
+
+  if (rawTris.length === 0 || !Number.isFinite(minX)) {
+    return {
+      triangles: [],
+      vertexCount: 0,
+      triangleCount: 0,
+      renderedTriangles: 0,
+      meshCount: activeInstances.length,
+      dimensions: [0, 0, 0],
+      bounds: { min: [0, 0, 0], max: [0, 0, 0] },
+      targetZ: 0.8,
+      unitScale: 1,
+    };
+  }
+
+  const dx = Math.max(0, maxX - minX);
+  const dy = Math.max(0, maxY - minY);
+  const dz = Math.max(0, maxZ - minZ);
+  const maxSpan = Math.max(dx, dy, dz, 0.0001);
+  const unitScale = 3.45 / maxSpan;
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const baseZ = minZ;
+  const normPt = p => [(p[0] - cx) * unitScale, (p[1] - cy) * unitScale, (p[2] - baseZ) * unitScale];
+
+  let triangles;
+  if (rawTris.length <= maxTriangles) {
+    triangles = rawTris.map(tri => ({
+      pts: [normPt(tri.p0), normPt(tri.p1), normPt(tri.p2)],
+      normal: tri.normal,
+      rgb: tri.rgb,
+      layer: 2,
+    }));
+  } else {
+    // Rossignac-Borrel spatial vertex-clustering decimation: keeps surfaces solid & watertight with zero speckle holes!
+    const clusterAt = gridRes => {
+      const cellSize = 3.45 / gridRes;
+      const accum = new Map();
+      const keyOf = np => {
+        const ix = Math.round(np[0] / cellSize);
+        const iy = Math.round(np[1] / cellSize);
+        const iz = Math.round(np[2] / cellSize);
+        return ix + ',' + iy + ',' + iz;
+      };
+      const mapped = new Array(rawTris.length);
+      for (let i = 0; i < rawTris.length; i++) {
+        const tri = rawTris[i];
+        const a = normPt(tri.p0);
+        const b = normPt(tri.p1);
+        const c = normPt(tri.p2);
+        const ka = keyOf(a);
+        const kb = keyOf(b);
+        const kc = keyOf(c);
+        const addPt = (k, pt) => {
+          let cell = accum.get(k);
+          if (!cell) {
+            cell = [0, 0, 0, 0];
+            accum.set(k, cell);
+          }
+          cell[0] += pt[0];
+          cell[1] += pt[1];
+          cell[2] += pt[2];
+          cell[3] += 1;
+        };
+        addPt(ka, a);
+        addPt(kb, b);
+        addPt(kc, c);
+        if (ka !== kb && kb !== kc && kc !== ka) {
+          mapped[i] = { ka, kb, kc, rgb: tri.rgb, normal: tri.normal };
+        }
+      }
+      const centroid = new Map();
+      for (const [k, cell] of accum.entries()) {
+        centroid.set(k, [cell[0] / cell[3], cell[1] / cell[3], cell[2] / cell[3]]);
+      }
+      const seen = new Set();
+      const out = [];
+      for (let i = 0; i < mapped.length; i++) {
+        const m = mapped[i];
+        if (!m) continue;
+        const sorted = [m.ka, m.kb, m.kc].sort();
+        const dedupeKey = sorted[0] + '|' + sorted[1] + '|' + sorted[2];
+        if (seen.has(dedupeKey)) continue;
+        seen.add(dedupeKey);
+        const p0 = centroid.get(m.ka);
+        const p1 = centroid.get(m.kb);
+        const p2 = centroid.get(m.kc);
+        const ux = p1[0] - p0[0];
+        const uy = p1[1] - p0[1];
+        const uz = p1[2] - p0[2];
+        const vx = p2[0] - p0[0];
+        const vy = p2[1] - p0[1];
+        const vz = p2[2] - p0[2];
+        const nx = uy * vz - uz * vy;
+        const ny = uz * vx - ux * vz;
+        const nz = ux * vy - uy * vx;
+        const area2 = Math.hypot(nx, ny, nz);
+        if (area2 < 1e-6) continue;
+        out.push({
+          pts: [p0, p1, p2],
+          normal: [nx / area2, ny / area2, nz / area2],
+          rgb: m.rgb,
+          area: area2,
+          layer: 2,
+        });
+      }
+      return out;
+    };
+
+    let clustered = clusterAt(44);
+    if (clustered.length > maxTriangles * 1.4) clustered = clusterAt(32);
+    if (clustered.length > maxTriangles * 1.4) clustered = clusterAt(24);
+    if (clustered.length > maxTriangles) {
+      clustered.sort((a, b) => b.area - a.area);
+      clustered = clustered.slice(0, maxTriangles);
+    }
+    triangles = clustered.map(t => ({ pts: t.pts, normal: t.normal, rgb: t.rgb, layer: 2 }));
+  }
+
+  return {
+    triangles,
+    vertexCount,
+    triangleCount: totalTriangles,
+    renderedTriangles: triangles.length,
+    meshCount: activeInstances.length,
+    dimensions: [Number(dx.toFixed(2)), Number(dy.toFixed(2)), Number(dz.toFixed(2))],
+    bounds: {
+      min: [Number(minX.toFixed(3)), Number(minY.toFixed(3)), Number(minZ.toFixed(3))],
+      max: [Number(maxX.toFixed(3)), Number(maxY.toFixed(3)), Number(maxZ.toFixed(3))],
+    },
+    targetZ: Math.max(0.35, (dz * unitScale) * 0.48),
+    unitScale,
+  };
+}
+
 function BlenderStageCanvas({
   fields,
   orbit,
   setOrbit,
   framePhase,
+  glbMesh = null,
+  glbShading = 'shaded',
   t,
 }) {
   const canvasRef = useRef(null);
@@ -357,7 +797,7 @@ function BlenderStageCanvas({
     const sinY = Math.sin(yaw);
     const cosP = Math.cos(pitch);
     const sinP = Math.sin(pitch);
-    const targetZ = 0.82;
+    const targetZ = glbMesh?.targetZ || 0.82;
     const camDist = 6.2 / Math.max(0.45, Math.min(2.6, orbit.zoom));
     const scaleBase = Math.min(w, hVal) * (orbit.ortho ? 0.22 * orbit.zoom : 0.98);
 
@@ -418,29 +858,38 @@ function BlenderStageCanvas({
       ctx.stroke();
     }
 
-    // 3. Build & Z-sort template 3D faces
+    // 3. Build & Z-sort 3D faces (either real parsed GLB mesh or procedural template geometry)
     const accentRgb = parseHexRgb(fields.accentColor);
-    const rawFaces = buildTemplateGeometry(fields.template, accentRgb, framePhase);
+    const rawFaces = glbMesh ? glbMesh.triangles || [] : buildTemplateGeometry(fields.template, accentRgb, framePhase);
     const kDir = palette.keyDir;
     const kLen = Math.hypot(kDir[0], kDir[1], kDir[2]) || 1;
     const lx = kDir[0] / kLen;
     const ly = kDir[1] / kLen;
     const lz = kDir[2] / kLen;
+    const clayRgb = [212, 217, 226];
 
     const projectedFaces = [];
     for (const face of rawFaces) {
       const pts = face.pts;
       if (pts.length < 3) continue;
-      // Normal in world coordinates
-      const u = [pts[1][0] - pts[0][0], pts[1][1] - pts[0][1], pts[1][2] - pts[0][2]];
-      const v = [pts[2][0] - pts[0][0], pts[2][1] - pts[0][1], pts[2][2] - pts[0][2]];
-      let nx = u[1] * v[2] - u[2] * v[1];
-      let ny = u[2] * v[0] - u[0] * v[2];
-      let nz = u[0] * v[1] - u[1] * v[0];
-      const nLen = Math.hypot(nx, ny, nz) || 1;
-      nx /= nLen;
-      ny /= nLen;
-      nz /= nLen;
+      let nx;
+      let ny;
+      let nz;
+      if (Array.isArray(face.normal) && face.normal.length === 3) {
+        nx = face.normal[0];
+        ny = face.normal[1];
+        nz = face.normal[2];
+      } else {
+        const u = [pts[1][0] - pts[0][0], pts[1][1] - pts[0][1], pts[1][2] - pts[0][2]];
+        const v = [pts[2][0] - pts[0][0], pts[2][1] - pts[0][1], pts[2][2] - pts[0][2]];
+        nx = u[1] * v[2] - u[2] * v[1];
+        ny = u[2] * v[0] - u[0] * v[2];
+        nz = u[0] * v[1] - u[1] * v[0];
+        const nLen = Math.hypot(nx, ny, nz) || 1;
+        nx /= nLen;
+        ny /= nLen;
+        nz /= nLen;
+      }
 
       const screenPts = [];
       let avgDepth = 0;
@@ -461,12 +910,31 @@ function BlenderStageCanvas({
       const fillLight = Math.max(0, -nx * 0.45 + ny * 0.35 + nz * 0.35) * 0.28;
       const rim = Math.max(0, 1 - Math.abs(nz));
       const intensity = palette.ambient + ndotl * 0.78 + fillLight;
+
+      let fill;
+      let wire;
+      if (glbMesh) {
+        const glbIntensity = Math.min(1.45, intensity + 0.16);
+        if (glbShading === 'wireframe') {
+          fill = 'rgba(24,32,48,0.22)';
+          wire = 'rgba(96,165,250,0.72)';
+        } else if (glbShading === 'clay') {
+          fill = shadeFaceColor(clayRgb, glbIntensity, 'clay_matte', rim * 0.55);
+          wire = 'rgba(15,23,42,0.10)';
+        } else {
+          fill = shadeFaceColor(face.rgb || clayRgb, glbIntensity, 'ceramic_gloss', rim * 0.85);
+          wire = fill;
+        }
+      } else {
+        fill = shadeFaceColor(face.rgb, intensity, fields.materialPreset, rim);
+        wire = fields.materialPreset === 'toon_cel' ? 'rgba(15,23,42,0.72)' : face.wire;
+      }
       projectedFaces.push({
         screenPts,
         depth: avgDepth,
         layer: face.layer ?? 2,
-        fill: shadeFaceColor(face.rgb, intensity, fields.materialPreset, rim),
-        wire: fields.materialPreset === 'toon_cel' ? 'rgba(15,23,42,0.72)' : face.wire,
+        fill,
+        wire,
       });
     }
 
@@ -482,13 +950,13 @@ function BlenderStageCanvas({
       ctx.fill();
       if (poly.wire) {
         ctx.strokeStyle = poly.wire;
-        ctx.lineWidth = fields.materialPreset === 'toon_cel' ? 1.35 : 0.75;
+        ctx.lineWidth = glbMesh ? (glbShading === 'wireframe' ? 0.7 : 0.45) : fields.materialPreset === 'toon_cel' ? 1.35 : 0.75;
         ctx.stroke();
       }
     }
 
     // 4. Template overlay accents (3D headline for logo-3d, Grease Pencil strokes)
-    if (fields.template === 'logo-3d' && fields.headline?.trim()) {
+    if (!glbMesh && fields.template === 'logo-3d' && fields.headline?.trim()) {
       const anchor = project([0, -0.58, 1.32]);
       if (anchor.visible) {
         ctx.save();
@@ -501,7 +969,7 @@ function BlenderStageCanvas({
         ctx.fillText(fields.headline.trim(), anchor.x, anchor.y);
         ctx.restore();
       }
-    } else if (fields.template === 'grease-pencil-2d') {
+    } else if (!glbMesh && fields.template === 'grease-pencil-2d') {
       const p1 = project([-0.68, -0.86, 0.92]);
       const p2 = project([0, -0.86, 1.18 + Math.sin(framePhase * Math.PI * 2) * 0.12]);
       const p3 = project([0.68, -0.86, 0.88]);
@@ -518,12 +986,14 @@ function BlenderStageCanvas({
       }
     }
 
-    // 5. Three-Point Light Rig Markers
-    const lights = [
-      { pos: [2.2, -1.9, 2.45], color: palette.key, label: 'KEY' },
-      { pos: [-2.1, -1.4, 1.65], color: palette.fill, label: 'FILL' },
-      { pos: [0.4, 2.35, 2.15], color: palette.rim, label: 'RIM' },
-    ];
+    // 5. Three-Point Light Rig Markers (shown in procedural 3D Stage mode; hidden in GLB Mesh inspection)
+    const lights = glbMesh
+      ? []
+      : [
+          { pos: [2.2, -1.9, 2.45], color: palette.key, label: 'KEY' },
+          { pos: [-2.1, -1.4, 1.65], color: palette.fill, label: 'FILL' },
+          { pos: [0.4, 2.35, 2.15], color: palette.rim, label: 'RIM' },
+        ];
     ctx.font = '600 9.5px ui-monospace, monospace';
     ctx.textAlign = 'center';
     for (const lt of lights) {
@@ -610,8 +1080,30 @@ function BlenderStageCanvas({
       ctx.fillText(ax.name, ax.x, ax.y + 0.5);
     }
 
+    // 8. GLB Mesh real-world dimensions & poly readout (bottom-left)
+    if (glbMesh && Array.isArray(glbMesh.dimensions)) {
+      const dimTxt =
+        glbMesh.dimensions.map(d => Number(d).toFixed(2)).join('×') +
+        ' m · ' +
+        (glbMesh.vertexCount || 0) +
+        ' v · ' +
+        (glbMesh.triangleCount || 0) +
+        ' tris' +
+        (glbMesh.renderedTriangles < glbMesh.triangleCount ? ' (LOD ' + glbMesh.renderedTriangles + ')' : '');
+      ctx.save();
+      ctx.font = '600 10.5px ui-monospace, monospace';
+      const tw = ctx.measureText(dimTxt).width;
+      ctx.fillStyle = 'rgba(15,23,42,0.72)';
+      ctx.fillRect(12, hVal - 30, tw + 16, 20);
+      ctx.fillStyle = '#e2e8f0';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(dimTxt, 20, hVal - 20);
+      ctx.restore();
+    }
+
     return undefined;
-  }, [fields.template, fields.accentColor, fields.lightingPreset, fields.materialPreset, fields.transparentBg, fields.headline, fields.aspect, orbit.yaw, orbit.pitch, orbit.zoom, orbit.ortho, framePhase]);
+  }, [fields.template, fields.accentColor, fields.lightingPreset, fields.materialPreset, fields.transparentBg, fields.headline, fields.aspect, orbit.yaw, orbit.pitch, orbit.zoom, orbit.ortho, framePhase, glbMesh, glbShading]);
 
   function onPointerDown(event) {
     if (event.button !== undefined && event.button !== 0) return;
@@ -734,7 +1226,197 @@ const DSH_KIT_SNIPPETS = [
     en: 'Compositor Glare',
     code: 'dsh_setup_compositor(glare=True, glare_threshold=1.15)',
   },
+  {
+    id: 'loft_profile',
+    zh: '放样壳体',
+    en: 'Loft Profile',
+    code: 'hull = dsh_loft_profile("Hero_Hull", [[(-0.5,0,0),(0.5,0,0),(0.4,0,0.4),(-0.4,0,0.4)],[(-0.4,1.2,0.05),(0.4,1.2,0.05),(0.3,1.2,0.45),(-0.3,1.2,0.45)]], closed=True)',
+  },
+  {
+    id: 'bolt_ring',
+    zh: '螺栓环',
+    en: 'Bolt Ring',
+    code: 'bolts = dsh_bolt_ring("Flange_Bolts", radius=0.45, count=12, bolt_radius=0.018, bolt_height=0.024, axis="Z", center=(0, 0, 0.2))',
+  },
+  {
+    id: 'wheel_assembly',
+    zh: '轮毂总成',
+    en: 'Wheel Assembly',
+    code: 'wheel = dsh_wheel_assembly("Wheel_FL", radius=0.35, width=0.28, spokes=10, caliper_color="#f59e0b", location=(-0.9, 1.3, 0.35))',
+  },
+  {
+    id: 'heat_blued_titanium',
+    zh: '热蓝钛金属',
+    en: 'Heat-Blued Ti',
+    code: 'mat_ti = dsh_mat_heat_blued_titanium("Turbine_HeatBluedTi")',
+  },
+  {
+    id: 'anodized_metal',
+    zh: '阳极氧化铝',
+    en: 'Anodized Metal',
+    code: 'mat_anod = dsh_mat_anodized_metal("Aero_AnodizedBlue", color="#1d4ed8", roughness=0.22)',
+  },
+  {
+    id: 'clay_override',
+    zh: '白模体检',
+    en: 'Clay Override',
+    code: 'dsh_render_clay_override(enable=True, color=(0.76, 0.77, 0.79, 1.0))',
+  },
 ];
+
+function BlenderCompareViewer({ project, imageArtifacts, t }) {
+  const [leftId, setLeftId] = useState(() => imageArtifacts[1]?.id || imageArtifacts[0]?.id || '');
+  const [rightId, setRightId] = useState(() => imageArtifacts[0]?.id || '');
+  const [splitPct, setSplitPct] = useState(50);
+  const stageRef = useRef(null);
+  const draggingRef = useRef(false);
+
+  useEffect(() => {
+    const ids = new Set(imageArtifacts.map(a => a.id));
+    if (!ids.has(rightId)) setRightId(imageArtifacts[0]?.id || '');
+    if (!ids.has(leftId)) setLeftId(imageArtifacts[1]?.id || imageArtifacts[0]?.id || '');
+  }, [imageArtifacts, leftId, rightId]);
+
+  const leftArt = imageArtifacts.find(a => a.id === leftId) || imageArtifacts[1] || imageArtifacts[0];
+  const rightArt = imageArtifacts.find(a => a.id === rightId) || imageArtifacts[0];
+  if (!leftArt || !rightArt) return null;
+
+  function artLabel(a) {
+    const kindName = a.kind === 'contact_sheet' ? t('四视角', '4-View') : t('静帧', 'Still');
+    return 'R' + a.revision + ' · ' + a.engine + ' ' + a.samples + 'spp · ' + kindName;
+  }
+
+  function updateFromClientX(clientX) {
+    const rect = stageRef.current?.getBoundingClientRect?.();
+    if (!rect || rect.width <= 0) return;
+    const pct = Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100));
+    setSplitPct(Math.round(pct * 10) / 10);
+  }
+
+  function onSliderPointerDown(e) {
+    draggingRef.current = true;
+    try { e.currentTarget.setPointerCapture?.(e.pointerId); } catch {}
+    updateFromClientX(e.clientX);
+  }
+
+  function onSliderPointerMove(e) {
+    if (!draggingRef.current) return;
+    updateFromClientX(e.clientX);
+  }
+
+  function onSliderPointerUp(e) {
+    draggingRef.current = false;
+    try { e.currentTarget.releasePointerCapture?.(e.pointerId); } catch {}
+  }
+
+  function onSliderKeyDown(e) {
+    const step = e.shiftKey ? 10 : 2;
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      setSplitPct(p => Math.max(0, Math.round((p - step) * 10) / 10));
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      setSplitPct(p => Math.min(100, Math.round((p + step) * 10) / 10));
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      setSplitPct(0);
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      setSplitPct(100);
+    }
+  }
+
+  return h(
+    'div',
+    { className: 'bl-compare-root', 'data-compare-root': 'true', 'data-window-drag-exclude': '' },
+    h(
+      'div',
+      { className: 'bl-compare-pickers' },
+      h(
+        'label',
+        { className: 'bl-compare-picker' },
+        h('span', { className: 'bl-compare-side-tag' }, 'A'),
+        h(
+          'select',
+          {
+            'data-compare-select': 'a',
+            'aria-label': t('选择左侧对比图 A', 'Select left compare image A'),
+            value: leftArt.id,
+            onChange: e => setLeftId(e.target.value),
+          },
+          imageArtifacts.map(a => h('option', { key: a.id, value: a.id }, artLabel(a))),
+        ),
+      ),
+      h(
+        'label',
+        { className: 'bl-compare-picker' },
+        h('span', { className: 'bl-compare-side-tag bl-compare-side-b' }, 'B'),
+        h(
+          'select',
+          {
+            'data-compare-select': 'b',
+            'aria-label': t('选择右侧对比图 B', 'Select right compare image B'),
+            value: rightArt.id,
+            onChange: e => setRightId(e.target.value),
+          },
+          imageArtifacts.map(a => h('option', { key: a.id, value: a.id }, artLabel(a))),
+        ),
+      ),
+    ),
+    h(
+      'div',
+      {
+        ref: stageRef,
+        className: 'bl-compare-stage',
+        'data-compare-stage': 'true',
+        onPointerDown: e => {
+          if (e.target === stageRef.current || e.target.tagName === 'IMG') updateFromClientX(e.clientX);
+        },
+      },
+      h('img', {
+        className: 'bl-compare-img',
+        src: urlFor(project, 'artifact', { artifact: rightArt.id }),
+        alt: 'B: ' + artLabel(rightArt),
+        draggable: false,
+      }),
+      h(
+        'div',
+        {
+          className: 'bl-compare-overlay-a',
+          style: { clipPath: 'inset(0 ' + (100 - splitPct) + '% 0 0)' },
+        },
+        h('img', {
+          className: 'bl-compare-img',
+          src: urlFor(project, 'artifact', { artifact: leftArt.id }),
+          alt: 'A: ' + artLabel(leftArt),
+          draggable: false,
+        }),
+      ),
+      h('span', { className: 'bl-compare-badge bl-compare-badge-a' }, 'A · ' + artLabel(leftArt)),
+      h('span', { className: 'bl-compare-badge bl-compare-badge-b' }, 'B · ' + artLabel(rightArt)),
+      h(
+        'div',
+        {
+          className: 'bl-compare-divider',
+          role: 'slider',
+          tabIndex: 0,
+          'data-compare-slider': 'true',
+          'aria-label': t('拖动或按左右方向键调整 A/B 对比分割线', 'Drag or use Left/Right arrow keys to adjust A/B compare split'),
+          'aria-valuemin': 0,
+          'aria-valuemax': 100,
+          'aria-valuenow': Math.round(splitPct),
+          style: { left: splitPct + '%' },
+          onPointerDown: onSliderPointerDown,
+          onPointerMove: onSliderPointerMove,
+          onPointerUp: onSliderPointerUp,
+          onPointerCancel: onSliderPointerUp,
+          onKeyDown: onSliderKeyDown,
+        },
+        h('span', { className: 'bl-compare-knob', 'aria-hidden': 'true' }, '◂▸'),
+      ),
+    ),
+  );
+}
 
 function renderQcReportCard(qc, t) {
   if (!qc || typeof qc !== 'object') return null;
@@ -862,6 +1544,9 @@ function BlenderStudioPanel({
   const [allowUnsafe, setAllowUnsafe] = useState(false);
   const [pipelineTier, setPipelineTier] = useState('studio');
   const [checkpointNote, setCheckpointNote] = useState('');
+  const [glbShading, setGlbShading] = useState('shaded');
+  const [glbState, setGlbState] = useState({ key: '', loading: false, error: '', mesh: null });
+  const glbCacheRef = useRef(new Map());
   const scriptAreaRef = useRef(null);
   const studioRootRef = useRef(null);
   const formSplit = W.useResizableSplit({ key: 'dsh-blender-studio:form-split', initial: 430, min: 300, max: 620 });
@@ -870,6 +1555,13 @@ function BlenderStudioPanel({
   const frameEnd = Number.isInteger(fields.frameEnd) && fields.frameEnd >= frameStart ? fields.frameEnd : Math.max(frameStart, 48);
   const frameSpan = Math.max(1, frameEnd - frameStart);
   const framePhase = Math.max(0, Math.min(1, (currentFrame - frameStart) / frameSpan));
+
+  const imageArtifacts = Array.isArray(project?.artifacts)
+    ? project.artifacts
+        .filter(a => a.kind === 'still' || a.kind === 'contact_sheet')
+        .slice()
+        .sort((a, b) => Date.parse(b.created || 0) - Date.parse(a.created || 0))
+    : [];
 
   useEffect(() => {
     const preset = CAMERA_PRESET_ANGLES[fields.cameraPreset];
@@ -944,6 +1636,10 @@ function BlenderStudioPanel({
         setStageView('contact_sheet');
       } else if (key === '4') {
         setStageView('animation');
+      } else if (key === '5') {
+        setStageView('mesh');
+      } else if (key === '6' && imageArtifacts.length >= 2) {
+        setStageView('compare');
       } else if (key === 'r' || key === 'R') {
         setTurntablePlaying(false);
         setOrbit(CAMERA_PRESET_ANGLES[fields.cameraPreset] || CAMERA_PRESET_ANGLES.three_quarter);
@@ -951,7 +1647,7 @@ function BlenderStudioPanel({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [dirty, canSave, running, onSave, fields.cameraPreset, setStageView]);
+  }, [dirty, canSave, running, onSave, fields.cameraPreset, setStageView, imageArtifacts.length]);
 
   function patchFields(patch) {
     setFields(prev => ({ ...prev, ...patch }));
@@ -990,6 +1686,59 @@ function BlenderStudioPanel({
   const stillArtifact = latestArtifactOf(project, 'still');
   const qcArtifact = latestArtifactOf(project, 'contact_sheet');
   const animArtifact = latestArtifactOf(project, 'animation');
+  const glbArtifact = latestArtifactOf(project, 'glb');
+  const glbAsset = Array.isArray(project?.assets)
+    ? project.assets.find(a => String(a.ext || '').replace(/^\./, '').toLowerCase() === 'glb' || String(a.file || '').toLowerCase().endsWith('.glb'))
+    : null;
+  const glbSource = glbArtifact
+    ? {
+        key: 'art:' + project.id + ':' + glbArtifact.id,
+        label: glbArtifact.file || 'model.glb',
+        size: glbArtifact.size,
+        url: urlFor(project, 'artifact', { artifact: glbArtifact.id }),
+        downloadUrl: urlFor(project, 'artifact', { artifact: glbArtifact.id, download: '1' }),
+      }
+    : glbAsset && project
+    ? {
+        key: 'asset:' + project.id + ':' + glbAsset.id,
+        label: glbAsset.name || glbAsset.file || 'asset.glb',
+        size: glbAsset.size,
+        url: urlFor(project, 'asset', { asset: glbAsset.id }),
+        downloadUrl: urlFor(project, 'asset', { asset: glbAsset.id, download: '1' }),
+      }
+    : null;
+
+  useEffect(() => {
+    if (stageView !== 'mesh' || !glbSource) return undefined;
+    const cached = glbCacheRef.current.get(glbSource.key);
+    if (cached) {
+      setGlbState({ key: glbSource.key, loading: false, error: '', mesh: cached });
+      return undefined;
+    }
+    let alive = true;
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    setGlbState({ key: glbSource.key, loading: true, error: '', mesh: null });
+    fetch(glbSource.url, { credentials: 'same-origin', ...(controller ? { signal: controller.signal } : {}) })
+      .then(res => {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.arrayBuffer();
+      })
+      .then(buf => {
+        if (!alive) return;
+        const parsed = parseGlbMesh(buf);
+        glbCacheRef.current.set(glbSource.key, parsed);
+        setGlbState({ key: glbSource.key, loading: false, error: '', mesh: parsed });
+      })
+      .catch(err => {
+        if (!alive || err?.name === 'AbortError') return;
+        setGlbState({ key: glbSource.key, loading: false, error: err?.message || 'GLB parse error', mesh: null });
+      });
+    return () => {
+      alive = false;
+      controller?.abort?.();
+    };
+  }, [stageView, glbSource?.key, glbSource?.url]);
+
   const activeArtifact =
     stageView === 'still' ? stillArtifact : stageView === 'contact_sheet' ? qcArtifact : stageView === 'animation' ? animArtifact : null;
   const activeStale = Boolean(activeArtifact && project && (dirty || activeArtifact.revision !== project.revision));
@@ -1033,6 +1782,14 @@ function BlenderStudioPanel({
             { id: 'still', label: t('最新静帧', 'Still'), has: !!stillArtifact },
             { id: 'contact_sheet', label: t('四视角质检', '4-View QC'), has: !!qcArtifact },
             { id: 'animation', label: t('动画回放', 'Animation'), has: !!animArtifact },
+            { id: 'mesh', label: t('3D 网格', '3D Mesh'), has: !!glbSource },
+            {
+              id: 'compare',
+              label: t('A/B 对比', 'A/B Compare'),
+              has: imageArtifacts.length >= 2,
+              disabled: imageArtifacts.length < 2,
+              title: imageArtifacts.length < 2 ? t('需要至少 2 张静帧或四视角图即可进行 A/B 对比', 'Render at least 2 still/QC images to enable A/B compare') : undefined,
+            },
           ].map(tab =>
             h(
               'button',
@@ -1041,8 +1798,11 @@ function BlenderStudioPanel({
                 type: 'button',
                 role: 'tab',
                 className: 'bl-stage-view-btn',
+                'data-stage-view': tab.id,
                 'aria-selected': stageView === tab.id,
                 'data-has-artifact': tab.has ? 'true' : undefined,
+                disabled: Boolean(tab.disabled),
+                title: tab.title,
                 onClick: () => setStageView(tab.id),
               },
               tab.label,
@@ -1058,6 +1818,94 @@ function BlenderStudioPanel({
         { className: 'bl-stage-bezel' },
         stageView === 'stage'
           ? h(BlenderStageCanvas, { fields, orbit, setOrbit, framePhase, t })
+          : stageView === 'mesh'
+          ? glbSource
+            ? h(
+                'div',
+                { className: 'bl-mesh-viewer', 'data-glb-viewer': 'true' },
+                glbState.loading
+                  ? h('div', { className: 'bl-artifact-empty' }, h('p', null, t('正在解析二进制 GLB 网格…', 'Parsing binary GLB mesh…')))
+                  : glbState.error
+                  ? h('div', { className: 'bl-artifact-empty' }, h('p', null, t('GLB 解析失败：', 'GLB parse failed: ') + glbState.error))
+                  : glbState.mesh
+                  ? h(BlenderStageCanvas, { fields, orbit, setOrbit, framePhase, glbMesh: glbState.mesh, glbShading, t })
+                  : null,
+                h(
+                  'div',
+                  { className: 'bl-mesh-bar', 'data-window-drag-exclude': '' },
+                  h(
+                    'div',
+                    { className: 'bl-mesh-shading', role: 'group', 'aria-label': t('3D 网格着色模式', '3D mesh shading mode') },
+                    [
+                      { id: 'shaded', zh: '着色 Shaded', en: 'Shaded' },
+                      { id: 'clay', zh: '白模 Clay', en: 'Clay' },
+                      { id: 'wireframe', zh: '线框 Wire', en: 'Wireframe' },
+                    ].map(mode =>
+                      h(
+                        'button',
+                        {
+                          key: mode.id,
+                          type: 'button',
+                          className: 'bl-cam-mini-btn',
+                          'data-glb-shading': mode.id,
+                          'aria-pressed': glbShading === mode.id,
+                          onClick: () => setGlbShading(mode.id),
+                        },
+                        lang === 'en' ? mode.en : mode.zh,
+                      ),
+                    ),
+                  ),
+                  h(
+                    'div',
+                    { className: 'bl-mesh-meta' },
+                    h('span', null, glbSource.label + (glbSource.size ? ' · ' + formatBytes(glbSource.size) : '')),
+                    glbState.mesh
+                      ? h(
+                          'span',
+                          { 'data-glb-stats': 'true' },
+                          glbState.mesh.dimensions.join('×') + 'm · ' + glbState.mesh.triangleCount + ' tris',
+                        )
+                      : null,
+                    h(
+                      'a',
+                      { className: 'bl-stage-dl-link', href: glbSource.downloadUrl, download: '' },
+                      h(W.Icon, { name: 'download', size: 13 }),
+                      t('下载 GLB', 'Download GLB'),
+                    ),
+                  ),
+                ),
+              )
+            : h(
+                'div',
+                { className: 'bl-artifact-empty', 'data-glb-empty': 'true' },
+                h(W.Icon, { name: 'cube', size: 28 }),
+                h(
+                  'p',
+                  null,
+                  t('当前工程尚无已导出的 .glb 模型或上传的 .glb 资产，导出后即可直接在工作台内 360° 交互检视真实 3D 网格。', 'No exported or uploaded .glb mesh yet. Export a GLB model to inspect the real 3D mesh interactively right here.'),
+                ),
+                h(
+                  W.Button,
+                  {
+                    variant: 'primary',
+                    size: 'sm',
+                    icon: 'download',
+                    'data-action': 'export-glb-cta',
+                    disabled: !project || running || dirty || !environment?.ready,
+                    onClick: () => startJob('export_model', { format: 'glb' }),
+                  },
+                  t('先导出 GLB 模型', 'Export GLB Model'),
+                ),
+              )
+          : stageView === 'compare'
+          ? imageArtifacts.length >= 2
+            ? h(BlenderCompareViewer, { project, imageArtifacts, t })
+            : h(
+                'div',
+                { className: 'bl-artifact-empty' },
+                h(W.Icon, { name: 'sliders', size: 28 }),
+                h('p', null, t('至少需要 2 张已渲染的静帧或四视角图即可开启左右滑动 A/B 对比。', 'Render at least 2 stills or 4-view sheets to enable A/B split comparison.')),
+              )
           : activeArtifact
           ? h(
               'div',
@@ -1133,8 +1981,8 @@ function BlenderStudioPanel({
             ),
       ),
 
-      // Interactive Orbit + Turntable Deck (shown in 3D Stage mode)
-      stageView === 'stage'
+      // Interactive Orbit + Turntable Deck (shown in 3D Stage and 3D GLB Mesh modes)
+      stageView === 'stage' || (stageView === 'mesh' && Boolean(glbSource))
         ? h(
             'div',
             { className: 'bl-orbit-deck', 'data-window-drag-exclude': '' },
@@ -1336,7 +2184,7 @@ function BlenderStudioPanel({
         { className: 'bl-shortcut-bar', 'data-shortcut-bar': 'true' },
         h('span', { className: 'bl-kbd-item' }, h('kbd', null, 'Space'), ' ', t('转台', 'Turntable')),
         h('span', { className: 'bl-kbd-sep', 'aria-hidden': 'true' }, '·'),
-        h('span', { className: 'bl-kbd-item' }, h('kbd', null, '1–4'), ' ', t('切换视图', 'Views')),
+        h('span', { className: 'bl-kbd-item' }, h('kbd', null, '1–5'), ' ', t('切换视图', 'Views')),
         h('span', { className: 'bl-kbd-sep', 'aria-hidden': 'true' }, '·'),
         h('span', { className: 'bl-kbd-item' }, h('kbd', null, 'R'), ' ', t('重置视角', 'Reset Cam')),
         h('span', { className: 'bl-kbd-sep', 'aria-hidden': 'true' }, '·'),
@@ -2266,6 +3114,25 @@ const BLENDER_STUDIO_CSS = `
 .dbw .bl-stage-dl-link:hover{color:#ffd2bf;text-decoration:underline}
 .bl-artifact-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:32px 18px;text-align:center;color:#94a3b8;font-size:13px}
 .bl-artifact-empty p{margin:0;max-width:42ch}
+.bl-mesh-viewer{display:flex;flex-direction:column;gap:8px;width:100%}
+.bl-mesh-bar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:6px 8px;border-radius:8px;background:#272d38;border:1px solid #353e4e}
+.bl-mesh-shading{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap}
+.bl-mesh-meta{display:inline-flex;align-items:center;gap:10px;flex-wrap:wrap;font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:11px;color:#cbd5e1}
+.bl-compare-root{display:flex;flex-direction:column;gap:8px;width:100%}
+.bl-compare-pickers{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.bl-compare-picker{display:flex;align-items:center;gap:6px;margin:0;min-width:0}
+.bl-compare-picker select{flex:1;min-width:0;padding:4px 8px!important;font-size:11.5px!important;background:#2a313e!important;border-color:#414b5e!important;color:#eef2f7!important}
+.bl-compare-side-tag{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:5px;background:#e85d2a;color:#fff;font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:11px;font-weight:750;flex:none}
+.bl-compare-side-b{background:#4176e6}
+.bl-compare-stage{position:relative;width:100%;max-height:400px;aspect-ratio:16/9;margin:0 auto;border-radius:8px;overflow:hidden;background:#1b2029;border:1px solid rgba(255,255,255,0.10);user-select:none;touch-action:none}
+.bl-compare-img{display:block;width:100%;height:100%;object-fit:contain;pointer-events:none}
+.bl-compare-overlay-a{position:absolute;inset:0;pointer-events:none}
+.bl-compare-badge{position:absolute;top:8px;padding:2px 7px;border-radius:5px;background:rgba(15,23,42,0.74);border:1px solid rgba(255,255,255,0.16);color:#f8fafc;font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:10.5px;pointer-events:none;z-index:2}
+.bl-compare-badge-a{left:8px}
+.bl-compare-badge-b{right:8px}
+.bl-compare-divider{position:absolute;top:0;bottom:0;width:2px;background:#ffffff;box-shadow:0 0 8px rgba(15,23,42,0.8);cursor:ew-resize;transform:translateX(-1px);z-index:3}
+.bl-compare-divider:focus-visible{outline:2px solid #e85d2a;outline-offset:2px}
+.bl-compare-knob{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:#e85d2a;border:2px solid #ffffff;color:#ffffff;font-size:11px;font-weight:700;box-shadow:0 2px 8px rgba(15,23,42,0.45)}
 
 .bl-orbit-deck{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:6px 8px;border-radius:8px;background:#272d38;border:1px solid #353e4e}
 .bl-orbit-controls{display:inline-flex;align-items:center;gap:5px;flex-wrap:wrap}

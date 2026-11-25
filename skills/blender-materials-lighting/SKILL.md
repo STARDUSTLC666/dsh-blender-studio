@@ -57,6 +57,14 @@ Always use a socket helper (`set_socket(bsdf, val, "New Name", "Old Name")`) so 
 - **Cycles-safe NPR** (since `ShaderToRGB` is EEVEE-only): Use `ShaderNodeLayerWeight` (`Facing` / `Fresnel`) + stylized low-roughness `Principled BSDF` or `Diffuse` with flat lighting.
 - **Ink Outline**: Add a `SOLIDIFY` modifier (`thickness=-0.012`, `use_flip_normals=True`, `material_offset=1`) with a dark `Emission` material where `mat.use_backface_culling = True`.
 
+### 2.6 Built-In `DSH_KIT` v2 Metallurgy & Clay Override Helpers (`v0.3.0`)
+In `dsh-blender-studio`, every template and `customScript` can call ready-made cross-version procedural shaders directly:
+- `dsh_mat_anodized_metal(name, color='#1d4ed8', roughness=0.22)` — satin aerospace anodized aluminum (bleed ducts, CNC brackets, optical housings)
+- `dsh_mat_heat_blued_titanium(name)` — object-space thermal gradient transitioning silver → straw gold → indigo → violet for jet turbines and hot exhaust shrouds
+- `dsh_mat_copper_gold(name, variant='copper', roughness=0.22)` — machined copper manifolds (`variant='copper'`) or gold thermal shielding (`variant='gold'`)
+- `dsh_mat_car_paint`, `dsh_mat_carbon_fiber`, `dsh_mat_brushed_metal`, `dsh_mat_tinted_glass`, `dsh_mat_rubber_tire`, `dsh_mat_emissive_led`, `dsh_mat_matte_armor`
+- `dsh_render_clay_override(enable=True, color=(0.76, 0.77, 0.79, 1.0))` — applies a clean studio clay material override across hero geometry to verify silhouettes, edge bevels, and lighting ratios independently of textures or metal reflections.
+
 ## 3. Studio Lighting Formulas (Scaled to Subject Radius `R`)
 
 Always compute light distance, size, and energy from the hero bounding radius `R` and center `C` so lighting looks identical on a 0.2m watch or a 3m sculpture.

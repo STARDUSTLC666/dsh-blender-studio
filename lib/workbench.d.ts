@@ -1,10 +1,10 @@
-import { BlenderBridgeClient, type BridgeExecuteOptions, type BridgeExecuteResult, type BridgeLoadScriptOptions, type BridgeLoadScriptResult, type BridgeViewportOptions, type BridgeViewportResult, type LaunchBlenderGuiResult } from './bridge.js';
-import { BlenderEnvironment, type BlenderCandidate, type BlenderVersionProber } from './environment.js';
+import { BlenderBridgeClient, checkScriptSafety, type BridgeAddonInstallExecutor, type BridgeExecuteOptions, type BridgeExecuteResult, type BridgeLoadScriptOptions, type BridgeLoadScriptResult, type BridgeViewportOptions, type BridgeViewportResult, type InstallBridgeAddonResult, type LaunchBlenderGuiResult } from './bridge.js';
+import { BlenderEnvironment, type BlenderCandidate, type BlenderGpuProber, type BlenderVersionProber } from './environment.js';
 import { PolyHavenClient } from './polyhaven.js';
 import { BlenderRunner, type BlenderRunExecutor } from './runner.js';
 import type { SkillBundleHealthReport, SkillsPluginContext } from './skill-bundle.js';
 import { BlenderStore, type TrashPathFn, type TrashPathsFn } from './store.js';
-import { type BlenderBridgeStatus, type BlenderEnvironmentStatus, type BlenderExportFormat, type BlenderJob, type BlenderJobKind, type BlenderPipelineOptions, type BlenderSceneSummary, type BlenderSettings } from './types.js';
+import { type BlenderBridgeStatus, type BlenderEnvironmentStatus, type BlenderExportFormat, type BlenderJob, type BlenderJobKind, type BlenderPipelineOptions, type BlenderProject, type BlenderSceneSummary, type BlenderSettings } from './types.js';
 export interface StartJobOptions {
     format?: BlenderExportFormat;
     frame?: number;
@@ -22,7 +22,10 @@ export interface BlenderWorkbenchOptions {
     polyHaven?: PolyHavenClient;
     addonPath?: string;
     prober?: BlenderVersionProber;
+    gpuProber?: BlenderGpuProber;
+    probeGpu?: boolean;
     executor?: BlenderRunExecutor;
+    addonInstallExecutor?: BridgeAddonInstallExecutor;
     fetchImpl?: typeof fetch;
     skipSystemScan?: boolean;
     extraCandidates?: BlenderCandidate[];
@@ -41,6 +44,7 @@ export declare class BlenderWorkbench {
     readonly addonPath: string;
     private readonly hasCustomBridge;
     private readonly launchGuiFn;
+    private readonly addonInstallExecutor?;
     private readonly jobs;
     private starting;
     private disposed;
@@ -58,6 +62,19 @@ export declare class BlenderWorkbench {
     }): Promise<BridgeLoadScriptResult & {
         projectId: string;
         revision: number;
+    }>;
+    installAddon(): Promise<InstallBridgeAddonResult>;
+    createFromExemplar(exemplarId: string, titleOverride?: string): Promise<BlenderProject>;
+    patchProjectScript(id: string, revision: unknown, opts: {
+        find: string;
+        replace: string;
+        replaceAll?: boolean;
+        note?: string;
+        allowUnsafe?: boolean;
+    }): Promise<BlenderProject & {
+        project: BlenderProject;
+        replacements: number;
+        safety: ReturnType<typeof checkScriptSafety>;
     }>;
     environmentStatus(options?: {
         probeBridge?: boolean;

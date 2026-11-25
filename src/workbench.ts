@@ -7,20 +7,25 @@ import lockfile from 'proper-lockfile'
 import {
   BlenderBridgeClient,
   checkScriptSafety,
+  installBridgeAddon,
   launchBlenderGui,
+  type BridgeAddonInstallExecutor,
   type BridgeExecuteOptions,
   type BridgeExecuteResult,
   type BridgeLoadScriptOptions,
   type BridgeLoadScriptResult,
   type BridgeViewportOptions,
   type BridgeViewportResult,
+  type InstallBridgeAddonResult,
   type LaunchBlenderGuiResult,
 } from './bridge.js'
 import {
   BlenderEnvironment,
   type BlenderCandidate,
+  type BlenderGpuProber,
   type BlenderVersionProber,
 } from './environment.js'
+import { getExemplar, listExemplarSummaries } from './exemplars.js'
 import { PolyHavenClient } from './polyhaven.js'
 import {
   BlenderRunner,
@@ -29,7 +34,7 @@ import {
   type BlenderRunExecutor,
 } from './runner.js'
 import type { SkillBundleHealthReport, SkillsPluginContext } from './skill-bundle.js'
-import { BlenderStore, type TrashPathFn, type TrashPathsFn } from './store.js'
+import { applyScriptPatch, BlenderStore, type TrashPathFn, type TrashPathsFn } from './store.js'
 import { BLENDER_TEMPLATES, generateRunnerHarness, generateSceneScript } from './templates.js'
 import { registerBlenderTools } from './tools.js'
 import {
@@ -87,7 +92,10 @@ export interface BlenderWorkbenchOptions {
   polyHaven?: PolyHavenClient
   addonPath?: string
   prober?: BlenderVersionProber
+  gpuProber?: BlenderGpuProber
+  probeGpu?: boolean
   executor?: BlenderRunExecutor
+  addonInstallExecutor?: BridgeAddonInstallExecutor
   fetchImpl?: typeof fetch
   skipSystemScan?: boolean
   extraCandidates?: BlenderCandidate[]
@@ -231,6 +239,7 @@ export class BlenderWorkbench {
 
   private readonly hasCustomBridge: boolean
   private readonly launchGuiFn: (executablePath: string, blendFile?: string) => Promise<LaunchBlenderGuiResult>
+  private readonly addonInstallExecutor?: BridgeAddonInstallExecutor
   private readonly jobs = new Map<string, RunningJob>()
   private starting = false
   private disposed = false
@@ -243,6 +252,8 @@ export class BlenderWorkbench {
       new BlenderEnvironment({
         root: this.store.root,
         prober: options.prober,
+        gpuProber: options.gpuProber,
+        probeGpu: options.probeGpu,
         skipSystemScan: options.skipSystemScan,
         extraCandidates: options.extraCandidates,
       })
@@ -264,6 +275,7 @@ export class BlenderWorkbench {
     this.addonPath =
       options.addonPath ?? fileURLToPath(new URL('../blender/dsh_blender_bridge.py', import.meta.url))
     this.launchGuiFn = options.launchGui ?? launchBlenderGui
+    this.addonInstallExecutor = options.addonInstallExecutor
   }
 
   private async syncBridgeFromSettings(): Promise<BlenderBridgeClient> {
@@ -318,7 +330,10 @@ export class BlenderWorkbench {
     }
     const projectDir = await this.store.path(validId)
     const assetsDir = join(projectDir, 'assets')
-    const script = generateSceneScript(project, assetsDir)
+    const settings = await this.environment.getSettings()
+    const script = generateSceneScript(project, assetsDir, {
+      computeDevice: settings.computeDevice ?? 'auto',
+    })
     const client = await this.syncBridgeFromSettings()
     const res = await client.loadScript(script, {
       clearScene: opts.clearScene ?? true,
@@ -332,6 +347,72 @@ export class BlenderWorkbench {
       projectId: project.id,
       revision: project.revision,
       ...res,
+    }
+  }
+
+  async installAddon(): Promise<InstallBridgeAddonResult> {
+    const active = await this.environment.requireActiveExecutable()
+    return installBridgeAddon(active.path, this.addonPath, {
+      executor: this.addonInstallExecutor,
+    })
+  }
+
+  async createFromExemplar(exemplarId: string, titleOverride?: string): Promise<BlenderProject> {
+    const exemplar = getExemplar(exemplarId)
+    const customTitle = typeof titleOverride === 'string' && titleOverride.trim() ? titleOverride.trim() : undefined
+    const created = await this.store.create({
+      ...exemplar.fields,
+      title: customTitle || exemplar.fields.title || exemplar.titleEn,
+      scriptMode: 'custom',
+      customScript: exemplar.script,
+    })
+    return this.store.saveCheckpoint(created.id, created.revision, 'Exemplar baseline')
+  }
+
+  async patchProjectScript(
+    id: string,
+    revision: unknown,
+    opts: {
+      find: string
+      replace: string
+      replaceAll?: boolean
+      note?: string
+      allowUnsafe?: boolean
+    },
+  ): Promise<
+    BlenderProject & {
+      project: BlenderProject
+      replacements: number
+      safety: ReturnType<typeof checkScriptSafety>
+    }
+  > {
+    const validId = blenderId(id)
+    const current = await this.store.get(validId)
+    if (revision !== undefined && revision !== current.revision) {
+      throw new BlenderConflict('工程已在另一窗口更新；你的修改已保留，请刷新最新版本后重试。')
+    }
+    const preview = applyScriptPatch(
+      current.customScript,
+      opts.find,
+      opts.replace,
+      Boolean(opts.replaceAll),
+    )
+    assertScriptSafeOrAllowed(preview.patched, opts.allowUnsafe)
+    const { project, replacements } = await this.store.patchScript(
+      validId,
+      revision,
+      opts.find,
+      opts.replace,
+      {
+        replaceAll: Boolean(opts.replaceAll),
+        note: opts.note,
+      },
+    )
+    return {
+      ...project,
+      project,
+      replacements,
+      safety: checkScriptSafety(project.customScript),
     }
   }
 
@@ -554,6 +635,7 @@ export class BlenderWorkbench {
 
       const outputPath = outputSpec ? join(stageRunDir, outputSpec.fileName) : undefined
       const scriptPath = join(stageRunDir, 'run.py')
+      const settings = await this.environment.getSettings()
       const scriptContent = generateRunnerHarness(stageKind, {
         project: stageProject,
         assetsDir,
@@ -561,6 +643,7 @@ export class BlenderWorkbench {
         format: stageOptions.format,
         overrideCode: stageKind === 'run_script' ? stageOptions.overrideCode : undefined,
         frame: stageOptions.frame,
+        computeDevice: settings.computeDevice ?? 'auto',
       })
 
       this.setStage(job, stageOptions.stageCode, stageOptions.stageLabel, stageOptions.progressStart)
@@ -1198,9 +1281,21 @@ export class BlenderWorkbench {
               archivedProjects: archived.projects,
               ...(corruptedCount ? { corruptedCount, corruptedProjects } : {}),
               templates: BLENDER_TEMPLATES,
+              exemplars: listExemplarSummaries(),
               environment,
               jobs: this.listJobs(),
             }
+            break
+          }
+          case 'list_exemplars':
+            value = { exemplars: listExemplarSummaries() }
+            break
+          case 'create_from_exemplar': {
+            const exemplarId = typeof v.exemplarId === 'string' ? v.exemplarId : typeof v.id === 'string' ? v.id : ''
+            value = await this.createFromExemplar(
+              exemplarId,
+              typeof v.title === 'string' ? v.title : undefined,
+            )
             break
           }
           case 'create':
@@ -1232,6 +1327,19 @@ export class BlenderWorkbench {
               blenderId(v.checkpointId ?? v.checkpoint),
             )
             break
+          case 'patch_script': {
+            if (typeof v.find !== 'string' || typeof v.replace !== 'string') {
+              throw new BlenderError('patch_script 需要字符串类型的 find 与 replace 参数。', 'BAD_REQUEST', 400)
+            }
+            value = await this.patchProjectScript(blenderId(v.id), v.revision, {
+              find: v.find,
+              replace: v.replace,
+              replaceAll: v.replaceAll === true,
+              note: typeof v.note === 'string' ? v.note : undefined,
+              allowUnsafe: v.allowUnsafe === true,
+            })
+            break
+          }
           case 'removeAsset':
             value = await this.store.removeAsset(blenderId(v.id), v.revision, blenderId(v.asset ?? v.assetId))
             break
@@ -1332,7 +1440,10 @@ export class BlenderWorkbench {
           }
           case 'generatedScript': {
             const p = await this.store.get(blenderId(v.id))
-            const script = generateSceneScript(p, './assets')
+            const settings = await this.environment.getSettings()
+            const script = generateSceneScript(p, './assets', {
+              computeDevice: settings.computeDevice ?? 'auto',
+            })
             const safety = checkScriptSafety(p.scriptMode === 'custom' ? p.customScript : script)
             value = {
               id: p.id,
@@ -1404,6 +1515,7 @@ export class BlenderWorkbench {
             if (v.bridgePort !== undefined) patch.bridgePort = v.bridgePort
             if (v.bridgeToken !== undefined) patch.bridgeToken = v.bridgeToken
             if (v.polyHavenEnabled !== undefined) patch.polyHavenEnabled = v.polyHavenEnabled
+            if (v.computeDevice !== undefined) patch.computeDevice = v.computeDevice
             value = await this.configureSettings(patch)
             break
           }
@@ -1436,6 +1548,17 @@ export class BlenderWorkbench {
               allowUnsafe: v.allowUnsafe === true,
             })
             break
+          case 'bridge_install_addon': {
+            if (v.confirmed !== true) {
+              throw new BlenderError(
+                '安装并启用 Blender Live Bridge 插件将写入本机 Blender 用户插件配置，请明确确认（confirmed: true）。',
+                'CONFIRM_REQUIRED',
+                400,
+              )
+            }
+            value = await this.installAddon()
+            break
+          }
 
           // Optional Poly Haven CC0 assets
           case 'polyhaven_search': {

@@ -167,6 +167,10 @@ export function registerBlenderTools(
           } else {
             lines.push(`本机 Blender：⚠️ 未检测到（${env.hint}）`)
           }
+          const gpuInfo = env.gpu ?? env.active?.gpu
+          lines.push(
+            `Cycles 计算设备：${env.computeDevice || 'auto'} · ${gpuInfo?.available ? `✅ GPU ${gpuInfo.backend} (${gpuInfo.devices.join(', ')})` : 'CPU'}`,
+          )
           lines.push(
             `Live Bridge：${env.bridge.connected ? `✅ 已连接 ${env.bridge.host}:${env.bridge.port}（Blender ${env.bridge.blenderVersion || '?'}，场景 ${env.bridge.activeScene || '?'}）` : `未连接（${env.bridge.host}:${env.bridge.port}${env.bridge.error ? ' · ' + env.bridge.error : ''}）`}`,
           )
@@ -202,7 +206,7 @@ export function registerBlenderTools(
   registerTool({
     name: 'blender_project',
     description:
-      '管理受管 3D Blender 工程（8 套内置模板含 architectural-pavilion / procedural-abstract，内置 DSH_KIT 电影级材质/倒角/棚拍助手，上传的 HDRI 与 3D 模型会自动装配）：列出/创建/读取/更新/复制（duplicate）/保存或恢复脚本快照（save_checkpoint / restore_checkpoint）/归档/恢复工程、更新自定义 bpy 脚本（≤256 KB）或无头采集场景大纲与 QC-3D 自动评分（inspect_scene）。3D 美术导演建议：主体需调用 dsh_ground_assembly 稳固接地、硬边用 dsh_bevel 倒角、用 dsh_mat_* 赋 PBR 材质，出图前用 inspect_scene 确认 QC-3D ≥85（Grade A）并用 contact_sheet 四视角视觉复核。',
+      '管理受管 3D Blender 工程（8 套入门模板 + 4 套视觉验收通过的 Pro 高阶工程范本：涡扇航发/GT赛车/双发直升机/6轴机械臂，内置 24 个 DSH_KIT 电影级建模与 PBR 助手）：支持 list / create / list_exemplars / create_from_exemplar / get / update / duplicate / update_script / save_checkpoint / restore_checkpoint / inspect_scene / archive / restore。3D 美术导演建议：创作复杂机械或载具前，可先用 list_exemplars + create_from_exemplar 创建高阶工程范本并用 get 参阅其完整 bpy 结构作为 Few-Shot 参考，随后用 blender_script(action: "patch") 局部精修，确保 inspect_scene 的 QC-3D ≥85（Grade A）并用 contact_sheet 四视角视觉复核。',
     parameters: {
       type: 'object',
       properties: {
@@ -210,7 +214,9 @@ export function registerBlenderTools(
           type: 'string',
           enum: [
             'list',
+            'list_exemplars',
             'create',
+            'create_from_exemplar',
             'get',
             'update',
             'duplicate',
@@ -223,8 +229,13 @@ export function registerBlenderTools(
           ],
         },
         id: { type: 'string', description: '工程 UUID' },
+        exemplarId: {
+          type: 'string',
+          description:
+            'create_from_exemplar 时的范本 ID（如 aero-x900-turbofan / apex-09-racecar / vanguard-h145x-helicopter / kuka-6axis-robot-arm）',
+        },
         revision: { type: 'number', description: '工程乐观锁修订号（更新/快照/归档/恢复时必填）' },
-        title: { type: 'string', description: 'duplicate 复制工程时的可选新标题（1–72 字符）' },
+        title: { type: 'string', description: 'duplicate 或 create_from_exemplar 时的可选新标题（1–72 字符）' },
         note: { type: 'string', description: 'save_checkpoint 时的快照备注（≤120 字符）' },
         checkpointId: { type: 'string', description: 'restore_checkpoint 时的目标快照 UUID' },
         archived: { type: 'boolean', description: 'get 时是否读取归档工程' },
@@ -263,8 +274,16 @@ export function registerBlenderTools(
       schema: { type: 'object', additionalProperties: true },
       render(_args: unknown, value: any) {
         const lines = ['Blender 3D 工程工作台']
-        if (Array.isArray(value?.projects)) {
-          lines.push(`活跃工程：${value.projects.length} 个（归档 ${value.archivedProjects?.length ?? 0} 个）`)
+        if (Array.isArray(value?.exemplars) && !Array.isArray(value?.projects)) {
+          lines.push(`高阶工程范本（Pro Exemplars，共 ${value.exemplars.length} 套，均已通过 QC-3D 100/A）：`)
+          for (const ex of value.exemplars) {
+            lines.push(
+              `- [${ex.id}] ${ex.titleZh} / ${ex.titleEn}（${ex.category} · ${ex.engine} ${ex.samples}spp · ${ex.estimatedPolys}）— ${ex.summaryZh}`,
+            )
+          }
+          lines.push('提示：调用 action: "create_from_exemplar" + exemplarId 一键实例化，并用 action: "get" 查看其完整 bpy 代码作为高精工程参考。')
+        } else if (Array.isArray(value?.projects)) {
+          lines.push(`活跃工程：${value.projects.length} 个（归档 ${value.archivedProjects?.length ?? 0} 个；内置范本 ${value.exemplars?.length ?? 0} 套）`)
           for (const p of value.projects as BlenderProject[]) {
             lines.push(
               `- ${p.title} [${p.template} · ${p.engine} ${p.samples}spp · v${p.revision}]（ID: ${p.id}）`,
@@ -306,6 +325,7 @@ export function registerBlenderTools(
       const action = args?.action
       switch (action) {
         case 'list':
+        case 'list_exemplars':
         case 'create':
         case 'get':
         case 'update':
@@ -313,6 +333,12 @@ export function registerBlenderTools(
         case 'archive':
         case 'restore':
           return callWorkbenchPost(workbench, args)
+        case 'create_from_exemplar':
+          return callWorkbenchPost(workbench, {
+            action: 'create_from_exemplar',
+            exemplarId: args.exemplarId ?? args.id,
+            ...(typeof args.title === 'string' && args.title.trim() ? { title: args.title.trim() } : {}),
+          })
         case 'duplicate':
           return callWorkbenchPost(workbench, {
             action: 'duplicate',
@@ -513,17 +539,21 @@ export function registerBlenderTools(
   registerTool({
     name: 'blender_script',
     description:
-      '对 bpy Python 脚本进行静态安全扫描（validate），或在 Headless CLI（run_headless）或运行中的 Blender Live Bridge（run_bridge）中执行脚本，返回日志、场景摘要与 QC-3D 体检报告。编写 bpy 脚本时优先使用 bpy.data / bmesh 构造带倒角的接地实体并分配明确 PBR 材质与三点/柔光布光。',
+      '对 bpy Python 脚本进行静态安全扫描（validate）、精准局部补丁替换（patch：仅发送 find/replace 即可修改大型 40–256 KB 工程脚本，自动安全校验并保存快照，极大节省 Token）、或在 Headless CLI（run_headless）/ Live Bridge（run_bridge）中执行脚本，返回日志、场景摘要与 QC-3D 体检报告。内置 24 个 DSH_KIT 电影级建模与 PBR 助手（dsh_loft_profile / dsh_bolt_ring / dsh_wheel_assembly / dsh_louver_panel / dsh_mat_* / dsh_render_clay_override 等）。',
     parameters: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['validate', 'run_headless', 'run_bridge'],
+          enum: ['validate', 'patch', 'run_headless', 'run_bridge'],
         },
         code: { type: 'string', description: '待校验或执行的 bpy Python 代码' },
-        id: { type: 'string', description: '工程 UUID（run_headless 必填；validate 可选用于检查该工程脚本）' },
-        revision: { type: 'number', description: '工程修订号（run_headless 可选）' },
+        id: { type: 'string', description: '工程 UUID（patch / run_headless 必填；validate 可选）' },
+        revision: { type: 'number', description: '工程修订号（patch 建议传入乐观锁修订号；run_headless 可选）' },
+        find: { type: 'string', description: 'patch 动作：精确查找的原始脚本文本片段（非空）' },
+        replace: { type: 'string', description: 'patch 动作：替换后的新脚本文本片段' },
+        replaceAll: { type: 'boolean', description: 'patch 动作：是否允许替换全部多处匹配（默认 false，匹配多处时报错防误改）' },
+        note: { type: 'string', description: 'patch 动作：自动快照备注（可选）' },
         allowUnsafe: { type: 'boolean', description: '显式确认放行安全警告（默认 false）' },
         pushUndo: { type: 'boolean', description: 'run_bridge 执行后是否写入 Blender 撤销栈（默认 true）' },
       },
@@ -533,7 +563,12 @@ export function registerBlenderTools(
       schema: { type: 'object', additionalProperties: true },
       render(_args: unknown, value: any) {
         const lines = ['Blender bpy 脚本工具']
-        if (typeof value?.safe === 'boolean' && Array.isArray(value?.findings)) {
+        if (typeof value?.replacements === 'number' && value?.id) {
+          lines.push(
+            `局部脚本补丁完成：已替换 ${value.replacements} 处片段 → 工程「${value.title}」已更新至 v${value.revision}（已自动保存先前快照）。`,
+            `脚本长度：${value.customScript?.length ?? 0} 字符 · 静态安全检查：${value.safety?.safe ? '✅ 通过' : '⚠️ 已按 allowUnsafe 放行'}`,
+          )
+        } else if (typeof value?.safe === 'boolean' && Array.isArray(value?.findings)) {
           lines.push(value.safe ? '静态安全检查：✅ 未发现高危调用。' : `静态安全检查：⚠️ 发现 ${value.findings.length} 项高危模式：`)
           for (const f of value.findings) {
             lines.push(`- 第 ${f.line} 行 [${f.rule}]：${f.detail}`)
@@ -565,6 +600,17 @@ export function registerBlenderTools(
             byteLength: Buffer.byteLength(code, 'utf8'),
           }
         }
+        case 'patch':
+          return callWorkbenchPost(workbench, {
+            action: 'patch_script',
+            id: blenderId(args.id),
+            revision: args.revision,
+            find: args.find,
+            replace: args.replace,
+            replaceAll: args.replaceAll === true,
+            note: typeof args.note === 'string' ? args.note : undefined,
+            allowUnsafe: args.allowUnsafe === true,
+          })
         case 'run_headless':
           return callWorkbenchPost(workbench, {
             action: 'run_script',
@@ -590,16 +636,25 @@ export function registerBlenderTools(
   registerTool({
     name: 'blender_bridge',
     description:
-      '与本机桌面 Blender 实时交互（仅限 127.0.0.1 回环）：查询连接状态（status）、获取内置 Add-on 安装信息（get_addon_info）、读取实时场景树（scene_info）、截取视口画面（viewport_capture）、同步 DSH 工程到打开的 Blender（sync_project），或在桌面 Blender 中打开工程 .blend（open_gui）。',
+      '与本机桌面 Blender 实时交互（仅限 127.0.0.1 回环）：查询连接状态（status）、获取内置 Add-on 安装信息（get_addon_info）、一键自动安装并启用 Bridge 插件到本机 Blender（install_addon，需 confirmed: true）、读取实时场景树与 QC-3D（scene_info）、截取视口画面（viewport_capture）、同步 DSH 工程到打开的 Blender（sync_project），或在桌面 Blender 中打开工程 .blend（open_gui）。',
     parameters: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['status', 'get_addon_info', 'scene_info', 'viewport_capture', 'sync_project', 'open_gui'],
+          enum: [
+            'status',
+            'get_addon_info',
+            'install_addon',
+            'scene_info',
+            'viewport_capture',
+            'sync_project',
+            'open_gui',
+          ],
         },
         id: { type: 'string', description: '工程 UUID（sync_project / open_gui 必填）' },
         revision: { type: 'number', description: '工程修订号（open_gui 可选）' },
+        confirmed: { type: 'boolean', description: 'install_addon 时需显式设为 true 以确认写入本机 Blender 用户插件配置' },
         clearScene: { type: 'boolean', description: 'sync_project 时是否先清空当前 Blender 场景（默认 true）' },
         allowUnsafe: { type: 'boolean', description: 'sync_project 时若包含自定义高危脚本是否显式放行' },
         width: { type: 'number', description: 'viewport_capture 宽度（默认 960）' },
@@ -617,12 +672,19 @@ export function registerBlenderTools(
               ? `状态：✅ 已连接 ${value.host}:${value.port}（Blender ${value.blenderVersion || '?'}，当前场景 ${value.activeScene || '?'}）`
               : `状态：未连接（${value.host}:${value.port}${value.error ? ' · ' + value.error : ''}）`,
           )
+        } else if (value?.installed && value?.enabled) {
+          lines.push(
+            '✅ 已一键安装并启用 DSH Blender Bridge 插件！',
+            `Blender 可执行路径：${value.executablePath}`,
+            `插件源文件：${value.addonPath}`,
+            '下一步：打开桌面 Blender，在 3D 视口按 N 打开右侧栏「DSH Bridge」标签页并点击 Start DSH Bridge。',
+          )
         } else if (value?.addonPath) {
           lines.push(
             `内置 Add-on 路径：${value.addonPath}`,
             `下载地址：${value.downloadUrl}`,
             `默认监听地址：${value.host}:${value.port}（严格仅限本机回环）`,
-            '安装步骤：Blender -> 编辑 -> 偏好设置 -> 插件 -> 从磁盘安装 -> 选择 dsh_blender_bridge.py -> 勾选启用 -> View3D 右侧 N 面板「DSH Bridge」点击 Start。',
+            '安装步骤：可直接调用 action: "install_addon" (confirmed: true) 一键安装，或在 Blender -> 偏好设置 -> 插件 -> 从磁盘安装选择 dsh_blender_bridge.py 并勾选启用。',
           )
         } else if (value?.mime === 'image/png' && value?.base64) {
           lines.push(
@@ -657,12 +719,17 @@ export function registerBlenderTools(
             hasToken: workbench.bridge.hasToken || Boolean(settings.bridgeToken),
             compatibleVersions: 'Blender 3.6 / 4.x / 5.x',
             installSteps: [
-              '打开 Blender -> Edit -> Preferences -> Add-ons -> Install from Disk',
-              '选择 dsh_blender_bridge.py 并勾选启用 "System: DSH Blender Bridge"',
+              '推荐：调用 blender_bridge(action: "install_addon", confirmed: true) 一键安装并启用',
+              '手动：打开 Blender -> Edit -> Preferences -> Add-ons -> Install from Disk 选择 dsh_blender_bridge.py 并勾选启用',
               '在 3D 视口按 N 打开右侧栏，切换至 "DSH Bridge" 标签页并点击 "Start DSH Bridge"',
             ],
           }
         }
+        case 'install_addon':
+          return callWorkbenchPost(workbench, {
+            action: 'bridge_install_addon',
+            confirmed: args.confirmed === true,
+          })
         case 'scene_info':
           return callWorkbenchPost(workbench, { action: 'bridge_scene' })
         case 'viewport_capture':

@@ -24,6 +24,8 @@ function BlenderBridgeEnvPanel({
   const [liveCode, setLiveCode] = useState('import bpy\nprint("Active scene:", bpy.context.scene.name, "Objects:", len(bpy.data.objects))');
   const [liveExecResult, setLiveExecResult] = useState(null);
   const [bridgeWorking, setBridgeWorking] = useState(false);
+  const [installDialogOpen, setInstallDialogOpen] = useState(false);
+  const [installResult, setInstallResult] = useState(null);
 
   const controlId = typeof React.useId === 'function' ? React.useId() : 'bl-be';
 
@@ -38,6 +40,8 @@ function BlenderBridgeEnvPanel({
   const bridge = environment?.bridge || { host: '127.0.0.1', port: 9876, hasToken: false, connected: false };
   const detected = Array.isArray(environment?.detected) ? environment.detected : [];
   const activeBlender = environment?.active;
+  const gpuInfo = environment?.gpu || activeBlender?.gpu || null;
+  const computeDevice = environment?.computeDevice || 'auto';
 
   async function saveBridgeConfig(e) {
     if (e && typeof e.preventDefault === 'function') e.preventDefault();
@@ -121,16 +125,43 @@ function BlenderBridgeEnvPanel({
             : null,
         ),
         h(
-          'a',
-          {
-            className: 'w-button w-primary',
-            href: addonUrl(),
-            download: 'dsh_blender_bridge.py',
-          },
-          h(W.Icon, { name: 'download', size: 15 }),
-          t('下载 dsh_blender_bridge.py', 'Download dsh_blender_bridge.py'),
+          'div',
+          { className: 'bl-be-head-actions' },
+          h(
+            W.Button,
+            {
+              variant: 'primary',
+              size: 'sm',
+              icon: 'sparkles',
+              'data-action': 'bridge-install-addon',
+              disabled: !environment?.ready || running || bridgeWorking,
+              title: !environment?.ready
+                ? t('请先在下方配置或探测到本机 Blender 安装。', 'Detect or configure a local Blender executable first.')
+                : t('自动在无头 Blender 中安装并启用 dsh_blender_bridge.py 插件', 'Install and enable dsh_blender_bridge.py via headless Blender'),
+              onClick: () => setInstallDialogOpen(true),
+            },
+            t('一键安装到本机 Blender', 'Install Add-on to Blender'),
+          ),
+          h(
+            'a',
+            {
+              className: 'w-button',
+              href: addonUrl(),
+              download: 'dsh_blender_bridge.py',
+            },
+            h(W.Icon, { name: 'download', size: 15 }),
+            t('下载 dsh_blender_bridge.py', 'Download dsh_blender_bridge.py'),
+          ),
         ),
       ),
+      installResult
+        ? h(
+            W.Status,
+            { tone: 'success' },
+            t('Live Bridge 插件已安装并启用：', 'Live Bridge add-on installed & enabled: ') +
+              (installResult.executablePath || activeBlender?.path || 'Blender'),
+          )
+        : null,
 
       // Connection Form
       h(
@@ -464,10 +495,75 @@ function BlenderBridgeEnvPanel({
               h('span', { className: 'w-tag' }, 'Blender ' + activeBlender.version),
               h('span', { className: 'w-tag' }, activeBlender.major >= 5 ? 'EEVEE (5.x)' : activeBlender.eeveeEngine === 'BLENDER_EEVEE_NEXT' ? 'EEVEE Next (4.2+)' : 'EEVEE Legacy'),
               h('span', { className: 'w-tag' }, activeBlender.greasePencilApi === 'gpv3' ? 'Grease Pencil v3 (4.3+)' : 'Grease Pencil v2'),
+              h(
+                'span',
+                {
+                  className: 'w-tag bl-gpu-chip',
+                  'data-gpu-badge': 'true',
+                  'data-gpu-available': gpuInfo?.available ? 'true' : 'false',
+                },
+                gpuInfo?.available
+                  ? 'Cycles GPU: ' + gpuInfo.backend + (Array.isArray(gpuInfo.devices) && gpuInfo.devices.length ? ' · ' + gpuInfo.devices[0] : '')
+                  : 'Cycles: CPU',
+              ),
               h('span', { className: 'w-tag' }, t('来源：', 'Source: ') + activeBlender.source),
             ),
           )
         : null,
+
+      // Cycles Compute Device Selector
+      h(
+        'div',
+        { className: 'bl-policy-box bl-compute-box' },
+        h(
+          'div',
+          null,
+          h('strong', null, t('Cycles 计算设备', 'Cycles Compute Device')),
+          h(
+            'p',
+            { className: 'w-muted bl-be-sub' },
+            t(
+              '控制 Cycles 渲染时是否启用本机 GPU 加速（OPTIX / CUDA / METAL / HIP / ONEAPI）；若驱动或显存异常可切回「仅 CPU」。',
+              'Controls GPU acceleration (OPTIX / CUDA / METAL / HIP / ONEAPI) for Cycles renders; switch to CPU Only if drivers are unstable.',
+            ),
+          ),
+        ),
+        h(
+          'div',
+          {
+            className: 'bl-compute-group',
+            role: 'group',
+            'data-compute-device-group': 'true',
+            'aria-label': t('Cycles 计算设备选择', 'Cycles compute device selection'),
+          },
+          [
+            { id: 'auto', zh: '自动 Auto', en: 'Auto' },
+            { id: 'gpu', zh: '优先 GPU', en: 'Prefer GPU' },
+            { id: 'cpu', zh: '仅 CPU', en: 'CPU Only' },
+          ].map(opt =>
+            h(
+              'button',
+              {
+                key: opt.id,
+                type: 'button',
+                className: 'bl-compute-btn',
+                'data-compute-device': opt.id,
+                'aria-pressed': computeDevice === opt.id,
+                disabled: running,
+                onClick: () =>
+                  perform(async () => {
+                    await api({ action: 'configure', computeDevice: opt.id });
+                    await refresh();
+                    setNotice(
+                      t('Cycles 计算设备已切换为：', 'Cycles compute device set to: ') + (lang === 'en' ? opt.en : opt.zh),
+                    );
+                  }),
+              },
+              lang === 'en' ? opt.en : opt.zh,
+            ),
+          ),
+        ),
+      ),
 
       // Auto-detected installations list
       detected.length > 0
@@ -580,6 +676,66 @@ function BlenderBridgeEnvPanel({
         }),
       ),
     ),
+
+    installDialogOpen
+      ? h(
+          W.Dialog,
+          {
+            className: 'dbw blender-dialog',
+            title: t('一键安装 Live Bridge 插件到本机 Blender', 'Install Live Bridge Add-on to Blender'),
+            closeLabel: t('取消安装', 'Cancel install'),
+            busy: bridgeWorking || running,
+            onClose: () => setInstallDialogOpen(false),
+          },
+          h(
+            'div',
+            { 'data-bridge-install-dialog': 'true' },
+            h(
+              'p',
+              null,
+              t(
+                '确认后将调用本机无头 Blender（--background --factory-startup）执行官方偏好设置命令：addon_install、addon_enable("dsh_blender_bridge") 与 save_userpref()，不会覆盖你的工程文件。',
+                'This runs headless Blender (--background --factory-startup) to execute addon_install, addon_enable("dsh_blender_bridge"), and save_userpref() without modifying your project files.',
+              ),
+            ),
+            activeBlender
+              ? h('p', { className: 'w-muted' }, t('目标可执行程序：', 'Target executable: '), h('code', null, activeBlender.path))
+              : null,
+            h(
+              'div',
+              { className: 'w-toolbar' },
+              h(
+                W.Button,
+                {
+                  variant: 'primary',
+                  icon: 'check',
+                  'data-action': 'confirm-bridge-install',
+                  disabled: bridgeWorking || running,
+                  onClick: () =>
+                    runBridgeAction(async () => {
+                      const res = await api({ action: 'bridge_install_addon', confirmed: true });
+                      setInstallResult(res || { installed: true, enabled: true });
+                      setInstallDialogOpen(false);
+                      await refresh();
+                      setNotice(
+                        t(
+                          '已成功将 dsh_blender_bridge.py 安装并启用到本机 Blender！打开桌面 Blender 侧栏即可一键启动桥接服务。',
+                          'Successfully installed and enabled dsh_blender_bridge.py in local Blender! Open Blender sidebar to start the bridge.',
+                        ),
+                      );
+                    }),
+                },
+                bridgeWorking ? t('安装中…', 'Installing…') : t('确认安装并启用', 'Confirm Install & Enable'),
+              ),
+              h(
+                W.Button,
+                { variant: 'ghost', disabled: bridgeWorking, onClick: () => setInstallDialogOpen(false) },
+                t('取消', 'Cancel'),
+              ),
+            ),
+          ),
+        )
+      : null,
   );
 }
 
@@ -587,6 +743,12 @@ const BLENDER_BRIDGE_CSS = `
 .bl-be-root{display:flex;flex-direction:column;gap:14px;max-width:1040px;padding:8px 0 24px;min-width:0}
 .bl-be-card{display:flex;flex-direction:column;gap:14px;padding:16px 18px;border:var(--dsh-control-border-width,1px) solid var(--w-border);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-settings-card-fill,var(--w-canvas));min-width:0}
 .bl-be-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.bl-be-head-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.bl-gpu-chip[data-gpu-available="true"]{background:color-mix(in oklab,#10b981 14%,var(--w-bg));border-color:color-mix(in oklab,#10b981 36%,var(--w-border));color:#047857;font-weight:700}
+[data-theme="dark"] .bl-gpu-chip[data-gpu-available="true"]{color:#6ee7b7}
+.bl-compute-group{display:inline-flex;align-items:center;gap:5px;flex-wrap:wrap}
+.bl-compute-btn{padding:5px 11px;border-radius:var(--dsw-radius-sm,8px);border:var(--dsh-control-border-width,1px) solid var(--w-border);background:var(--w-bg);color:var(--w-text);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+.bl-compute-btn[aria-pressed="true"]{background:var(--w-selected);border-color:var(--w-accent);color:var(--w-accent);box-shadow:inset 0 0 0 1px var(--w-accent)}
 .bl-be-title-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .bl-be-title-row h3{margin:0}
 .bl-be-sub{margin:4px 0 0;font-size:12px;line-height:1.5;max-width:72ch}

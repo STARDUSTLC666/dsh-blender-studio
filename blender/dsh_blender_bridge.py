@@ -1,7 +1,7 @@
 bl_info = {
     "name": "DSH Blender Bridge",
     "author": "stardustlc / DeepSeek Harness",
-    "version": (0, 2, 0),
+    "version": (0, 3, 0),
     "blender": (3, 6, 0),
     "location": "View3D > Sidebar (N) > DSH Bridge",
     "description": "Loopback-only JSON-RPC live bridge for DeepSeek Harness (dsh-blender-studio)",
@@ -435,6 +435,32 @@ def _read_png_dimensions(data, fallback_w, fallback_h):
     return int(fallback_w), int(fallback_h)
 
 
+def _detect_cycles_gpu():
+    """Probe available Cycles GPU backends cleanly without mutating user preferences."""
+    try:
+        addons = getattr(bpy.context.preferences, "addons", None)
+        cycles_addon = addons.get("cycles") if addons is not None else None
+        prefs = getattr(cycles_addon, "preferences", None)
+        if prefs is None:
+            return {"available": False, "backend": "CPU", "devices": []}
+
+        for backend in ("OPTIX", "CUDA", "METAL", "HIP", "ONEAPI"):
+            try:
+                devices = prefs.get_devices_for_type(backend)
+            except Exception:
+                continue
+            gpu_names = [
+                str(dev.name)
+                for dev in (devices or ())
+                if str(getattr(dev, "type", "")).upper() != "CPU"
+            ]
+            if gpu_names:
+                return {"available": True, "backend": backend, "devices": gpu_names}
+    except Exception:
+        pass
+    return {"available": False, "backend": "CPU", "devices": []}
+
+
 def _cmd_ping(_params):
     scene = bpy.context.scene
     return {
@@ -443,6 +469,7 @@ def _cmd_ping(_params):
         "engine": str(scene.render.engine),
         "frameCurrent": int(scene.frame_current),
         "objectCount": int(len(scene.objects)),
+        "gpu": _detect_cycles_gpu(),
     }
 
 
@@ -1057,6 +1084,29 @@ class DSHBridgeServer:
 _SERVER = DSHBridgeServer()
 
 
+class DSHBridgeAddonPreferences(bpy.types.AddonPreferences):
+    bl_idname = __name__
+
+    auto_start: bpy.props.BoolProperty(
+        name="Auto-start bridge server on launch",
+        description="Automatically start the loopback-only (127.0.0.1) DSH Bridge TCP server when Blender launches (disabled by default for security)",
+        default=False,
+    )
+    default_port: bpy.props.IntProperty(
+        name="Default Port",
+        description="Default loopback TCP port when auto-starting DSH Bridge",
+        default=DEFAULT_PORT,
+        min=1024,
+        max=65535,
+    )
+
+    def draw(self, _context):
+        layout = self.layout
+        layout.label(text="Security: Strictly bound to 127.0.0.1 (Loopback Only)", icon="LOCKED")
+        layout.prop(self, "auto_start")
+        layout.prop(self, "default_port")
+
+
 class DSHBridgeProperties(bpy.types.PropertyGroup):
     port: bpy.props.IntProperty(
         name="Port",
@@ -1153,6 +1203,7 @@ class DSHBRIDGE_PT_panel(bpy.types.Panel):
 
 
 _CLASSES = (
+    DSHBridgeAddonPreferences,
     DSHBridgeProperties,
     DSHBRIDGE_OT_start,
     DSHBRIDGE_OT_stop,
@@ -1167,14 +1218,46 @@ def _atexit_cleanup():
         pass
 
 
+def _get_addon_preferences():
+    try:
+        addons = getattr(bpy.context.preferences, "addons", None)
+        entry = addons.get(__name__) if addons is not None else None
+        return getattr(entry, "preferences", None)
+    except Exception:
+        return None
+
+
+def _auto_start_timer():
+    try:
+        prefs = _get_addon_preferences()
+        if prefs is not None and getattr(prefs, "auto_start", False) and not _SERVER.running:
+            port = int(getattr(prefs, "default_port", DEFAULT_PORT))
+            _SERVER.start(port=port, token="")
+    except Exception:
+        pass
+    return None
+
+
 def register():
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.WindowManager.dsh_bridge = bpy.props.PointerProperty(type=DSHBridgeProperties)
     atexit.register(_atexit_cleanup)
+    prefs = _get_addon_preferences()
+    if prefs is not None and getattr(prefs, "auto_start", False):
+        try:
+            if not bpy.app.timers.is_registered(_auto_start_timer):
+                bpy.app.timers.register(_auto_start_timer, first_interval=0.5)
+        except Exception:
+            pass
 
 
 def unregister():
+    try:
+        if bpy.app.timers.is_registered(_auto_start_timer):
+            bpy.app.timers.unregister(_auto_start_timer)
+    except Exception:
+        pass
     _SERVER.stop()
     try:
         atexit.unregister(_atexit_cleanup)
