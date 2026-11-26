@@ -412,7 +412,7 @@ function decodeUtf8Bytes(bytes) {
 }
 
 function parseGlbMesh(input, options = {}) {
-  const maxTriangles = Math.max(100, Math.min(14000, Number(options.maxTriangles) || 6500));
+  const maxTriangles = Math.max(100, Math.min(16000, Number(options.maxTriangles) || 9000));
   const isArrayBuffer =
     input instanceof ArrayBuffer || Object.prototype.toString.call(input) === '[object ArrayBuffer]';
   const bytes = isArrayBuffer
@@ -496,25 +496,30 @@ function parseGlbMesh(input, options = {}) {
 
   function materialProps(matIdx) {
     const mat = matIdx !== undefined ? materials[matIdx] : null;
+    const matName = String(mat?.name || '');
     const pbr = mat?.pbrMetallicRoughness;
     const factor = pbr?.baseColorFactor;
+    const isNamedGlassFallback = !pbr && /(?:glass|crystal|sapphire|canopy|windshield|lens|visor)/i.test(matName);
     const toSrgb = c => Math.max(20, Math.min(248, Math.round(Math.pow(Math.max(0, Math.min(1, Number(c) || 0)), 1 / 2.2) * 255)));
-    const rgb =
-      Array.isArray(factor) && factor.length >= 3
-        ? [toSrgb(factor[0]), toSrgb(factor[1]), toSrgb(factor[2])]
-        : [192, 204, 220];
+    const rgb = isNamedGlassFallback
+      ? [208, 228, 248]
+      : Array.isArray(factor) && factor.length >= 3
+      ? [toSrgb(factor[0]), toSrgb(factor[1]), toSrgb(factor[2])]
+      : [192, 204, 220];
     // Per glTF 2.0 spec, omitted metallicFactor on a pbrMetallicRoughness material defaults to 1.0
     // (Blender's glTF exporter omits metallicFactor when Metallic == 1.0).
-    const metallic =
-      pbr && typeof pbr.metallicFactor === 'number' && Number.isFinite(pbr.metallicFactor)
-        ? Math.max(0, Math.min(1, pbr.metallicFactor))
-        : pbr && !pbr.metallicRoughnessTexture
-        ? 1.0
-        : 0.12;
-    const roughness =
-      pbr && typeof pbr.roughnessFactor === 'number' && Number.isFinite(pbr.roughnessFactor)
-        ? Math.max(0.04, Math.min(1, pbr.roughnessFactor))
-        : 0.52;
+    const metallic = isNamedGlassFallback
+      ? 0.04
+      : pbr && typeof pbr.metallicFactor === 'number' && Number.isFinite(pbr.metallicFactor)
+      ? Math.max(0, Math.min(1, pbr.metallicFactor))
+      : pbr && !pbr.metallicRoughnessTexture
+      ? 1.0
+      : 0.12;
+    const roughness = isNamedGlassFallback
+      ? 0.06
+      : pbr && typeof pbr.roughnessFactor === 'number' && Number.isFinite(pbr.roughnessFactor)
+      ? Math.max(0.04, Math.min(1, pbr.roughnessFactor))
+      : 0.52;
     const em = mat?.emissiveFactor;
     const emissive =
       Array.isArray(em) && em.length >= 3 && (Number(em[0]) > 0.02 || Number(em[1]) > 0.02 || Number(em[2]) > 0.02)
@@ -524,11 +529,30 @@ function parseGlbMesh(input, options = {}) {
             Math.min(255, Math.round(Math.pow(Math.max(0, Math.min(1, Number(em[2]) || 0)), 1 / 2.2) * 255)),
           ]
         : null;
+    const baseAlpha =
+      Array.isArray(factor) && factor.length >= 4 && Number.isFinite(Number(factor[3]))
+        ? Math.max(0, Math.min(1, Number(factor[3])))
+        : 1;
+    const transmission = Number(mat?.extensions?.KHR_materials_transmission?.transmissionFactor) || 0;
+    let alpha = 1.0;
+    if (isNamedGlassFallback) {
+      alpha = 0.16;
+    } else if (mat?.alphaMode === 'BLEND' && baseAlpha < 0.96) {
+      alpha = Math.max(0.14, Math.min(0.88, baseAlpha));
+    } else if (transmission > 0.25) {
+      alpha = emissive
+        ? Math.max(0.58, Math.min(0.92, 1 - transmission * 0.35))
+        : Math.max(0.16, Math.min(0.45, 1 - transmission * 0.78));
+    }
+    const transparent = alpha < 0.94;
     return {
       rgb,
       metallic,
       roughness,
       emissive,
+      alpha,
+      transparent,
+      layer: transparent ? 3 : 2,
       matKey: matIdx !== undefined && matIdx !== null ? Number(matIdx) : -1,
     };
   }
@@ -572,7 +596,7 @@ function parseGlbMesh(input, options = {}) {
     }
   }
 
-  const backdropRe = /^(?:Studio_|Backdrop_|Stage_Floor|Softbox_|Cyclorama|Ground_Plane|Abstract_Floor|Logo_Floor|GP_Paper_Card)/i;
+  const backdropRe = /^(?:Studio_|Backdrop_|Stage_Floor|Softbox_|Cyclorama|Ground_Plane|Abstract_Floor|Logo_Floor|GP_Paper_Card|Pavilion_Ground|Pavilion_Water)/i;
   const heroInstances = meshInstances.filter(inst => !backdropRe.test(inst.name || ''));
   const activeInstances = heroInstances.length > 0 ? heroInstances : meshInstances;
 
@@ -590,6 +614,11 @@ function parseGlbMesh(input, options = {}) {
   for (const inst of activeInstances) {
     const mesh = meshes[inst.meshIndex];
     if (!mesh || !Array.isArray(mesh.primitives)) continue;
+    const instStartIdx = rawTris.length;
+    let sumAx = 0, sumAy = 0, sumAz = 0;
+    let sumArea = 0;
+    let signedVol = 0;
+    let refPt = null;
     for (const prim of mesh.primitives) {
       const primMode = prim.mode === undefined ? 4 : prim.mode;
       if (primMode !== 4 && primMode !== 5 && primMode !== 6) continue;
@@ -652,6 +681,26 @@ function parseGlbMesh(input, options = {}) {
         if (!p0 || !p1 || !p2) continue;
         totalTriangles += 1;
 
+        const ux = p1[0] - p0[0];
+        const uy = p1[1] - p0[1];
+        const uz = p1[2] - p0[2];
+        const vx = p2[0] - p0[0];
+        const vy = p2[1] - p0[1];
+        const vz = p2[2] - p0[2];
+        const gnx = uy * vz - uz * vy;
+        const gny = uz * vx - ux * vz;
+        const gnz = ux * vy - uy * vx;
+        const gnLen = Math.hypot(gnx, gny, gnz) || 1;
+        const gNormal = [gnx / gnLen, gny / gnLen, gnz / gnLen];
+
+        if (!refPt) refPt = p0;
+        const q0x = p0[0] - refPt[0], q0y = p0[1] - refPt[1], q0z = p0[2] - refPt[2];
+        const q1x = p1[0] - refPt[0], q1y = p1[1] - refPt[1], q1z = p1[2] - refPt[2];
+        const q2x = p2[0] - refPt[0], q2y = p2[1] - refPt[1], q2z = p2[2] - refPt[2];
+        sumAx += gnx; sumAy += gny; sumAz += gnz;
+        sumArea += gnLen;
+        signedVol += (q0x * (q1y * q2z - q1z * q2y) + q0y * (q1z * q2x - q1x * q2z) + q0z * (q1x * q2y - q1y * q2x)) / 6;
+
         let normal;
         if (normArr && i0 * 3 + 2 < normArr.length && i1 * 3 + 2 < normArr.length && i2 * 3 + 2 < normArr.length) {
           const anx = (normArr[i0 * 3] + normArr[i1 * 3] + normArr[i2 * 3]) / 3;
@@ -659,29 +708,36 @@ function parseGlbMesh(input, options = {}) {
           const anz = (normArr[i0 * 3 + 2] + normArr[i1 * 3 + 2] + normArr[i2 * 3 + 2]) / 3;
           normal = transformNormalGltfToBlenderZUp(inst.matrix, anx, any, anz);
         } else {
-          const ux = p1[0] - p0[0];
-          const uy = p1[1] - p0[1];
-          const uz = p1[2] - p0[2];
-          const vx = p2[0] - p0[0];
-          const vy = p2[1] - p0[1];
-          const vz = p2[2] - p0[2];
-          const nx = uy * vz - uz * vy;
-          const ny = uz * vx - ux * vz;
-          const nz = ux * vy - uy * vx;
-          const nLen = Math.hypot(nx, ny, nz) || 1;
-          normal = [nx / nLen, ny / nLen, nz / nLen];
+          normal = gNormal;
         }
         rawTris.push({
           p0,
           p1,
           p2,
           normal,
+          gNormal,
+          cullDir: 0,
           rgb: mat.rgb,
           metallic: mat.metallic,
           roughness: mat.roughness,
           emissive: mat.emissive,
+          alpha: mat.alpha,
+          transparent: mat.transparent,
+          layer: mat.layer,
           matKey: mat.matKey,
         });
+      }
+    }
+    // Divergence theorem: a closed solid mesh satisfies sum(areaVec) == 0 and signedVol != 0.
+    // Mark closed solid instances for safe geometric backface culling (open planes stay double-sided).
+    const instTriCount = rawTris.length - instStartIdx;
+    if (instTriCount >= 4 && sumArea > 1e-8) {
+      const closureRatio = Math.hypot(sumAx, sumAy, sumAz) / sumArea;
+      if (closureRatio < 0.02 && Math.abs(signedVol) > 1e-9) {
+        const cullDir = signedVol > 0 ? 1 : -1;
+        for (let k = instStartIdx; k < rawTris.length; k++) {
+          rawTris[k].cullDir = cullDir;
+        }
       }
     }
   }
@@ -712,15 +768,43 @@ function parseGlbMesh(input, options = {}) {
 
   let triangles;
   if (rawTris.length <= maxTriangles) {
-    triangles = rawTris.map(tri => ({
-      pts: [normPt(tri.p0), normPt(tri.p1), normPt(tri.p2)],
-      normal: tri.normal,
-      rgb: tri.rgb,
-      metallic: tri.metallic,
-      roughness: tri.roughness,
-      emissive: tri.emissive,
-      layer: 2,
-    }));
+    // Subdivide oversized cap/chord triangles on multi-part/complex meshes (>= 64 tris) to prevent Painter's Algorithm sorting pops
+    triangles = [];
+    const allowSubdiv = rawTris.length >= 64;
+    let extraBudget = allowSubdiv ? Math.max(0, maxTriangles - rawTris.length) : 0;
+    const pushSubdiv = (a, b, c, tri, depth) => {
+      const e01 = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+      const e12 = Math.hypot(c[0] - b[0], c[1] - b[1], c[2] - b[2]);
+      const e20 = Math.hypot(a[0] - c[0], a[1] - c[1], a[2] - c[2]);
+      if (allowSubdiv && depth > 0 && extraBudget >= 3 && Math.max(e01, e12, e20) > 0.48) {
+        extraBudget -= 3;
+        const m01 = [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5];
+        const m12 = [(b[0] + c[0]) * 0.5, (b[1] + c[1]) * 0.5, (b[2] + c[2]) * 0.5];
+        const m20 = [(c[0] + a[0]) * 0.5, (c[1] + a[1]) * 0.5, (c[2] + a[2]) * 0.5];
+        pushSubdiv(a, m01, m20, tri, depth - 1);
+        pushSubdiv(m01, b, m12, tri, depth - 1);
+        pushSubdiv(m20, m12, c, tri, depth - 1);
+        pushSubdiv(m01, m12, m20, tri, depth - 1);
+        return;
+      }
+      triangles.push({
+        pts: [a, b, c],
+        normal: tri.normal,
+        gNormal: tri.gNormal,
+        cullDir: tri.cullDir,
+        rgb: tri.rgb,
+        metallic: tri.metallic,
+        roughness: tri.roughness,
+        emissive: tri.emissive,
+        alpha: tri.alpha,
+        transparent: tri.transparent,
+        layer: tri.layer ?? 2,
+      });
+    };
+    for (let i = 0; i < rawTris.length; i++) {
+      const tri = rawTris[i];
+      pushSubdiv(normPt(tri.p0), normPt(tri.p1), normPt(tri.p2), tri, 2);
+    }
   } else {
     // Material-aware Rossignac-Borrel spatial vertex-clustering decimation:
     // keeps surfaces solid & watertight while preserving crisp material boundaries.
@@ -765,6 +849,10 @@ function parseGlbMesh(input, options = {}) {
             metallic: tri.metallic,
             roughness: tri.roughness,
             emissive: tri.emissive,
+            alpha: tri.alpha,
+            transparent: tri.transparent,
+            layer: tri.layer ?? 2,
+            cullDir: tri.cullDir,
             normal: tri.normal,
           };
         }
@@ -796,35 +884,50 @@ function parseGlbMesh(input, options = {}) {
         const nz = ux * vy - uy * vx;
         const area2 = Math.hypot(nx, ny, nz);
         if (area2 < 1e-6) continue;
+        const gNormal = [nx / area2, ny / area2, nz / area2];
         out.push({
           pts: [p0, p1, p2],
-          normal: [nx / area2, ny / area2, nz / area2],
+          normal: gNormal,
+          gNormal,
+          cullDir: m.cullDir,
           rgb: m.rgb,
           metallic: m.metallic,
           roughness: m.roughness,
           emissive: m.emissive,
+          alpha: m.alpha,
+          transparent: m.transparent,
           area: area2,
-          layer: 2,
+          layer: m.layer ?? 2,
         });
       }
       return out;
     };
 
-    let clustered = clusterAt(44);
-    if (clustered.length > maxTriangles * 1.4) clustered = clusterAt(32);
-    if (clustered.length > maxTriangles * 1.4) clustered = clusterAt(24);
+    let clustered = clusterAt(68);
+    if (clustered.length > maxTriangles * 1.45) clustered = clusterAt(52);
+    if (clustered.length > maxTriangles * 1.45) clustered = clusterAt(40);
+    if (clustered.length > maxTriangles * 1.45) clustered = clusterAt(30);
     if (clustered.length > maxTriangles) {
-      clustered.sort((a, b) => b.area - a.area);
-      clustered = clustered.slice(0, maxTriangles);
+      const opaqueTris = clustered.filter(t => !t.transparent);
+      const glassTris = clustered.filter(t => t.transparent);
+      const glassBudget = Math.min(glassTris.length, Math.max(80, Math.floor(maxTriangles * 0.12)));
+      const opaqueBudget = Math.max(0, maxTriangles - glassBudget);
+      opaqueTris.sort((a, b) => (b.emissive ? 1 : 0) - (a.emissive ? 1 : 0) || b.area - a.area);
+      glassTris.sort((a, b) => b.area - a.area);
+      clustered = opaqueTris.slice(0, opaqueBudget).concat(glassTris.slice(0, glassBudget));
     }
     triangles = clustered.map(t => ({
       pts: t.pts,
       normal: t.normal,
+      gNormal: t.gNormal,
+      cullDir: t.cullDir,
       rgb: t.rgb,
       metallic: t.metallic,
       roughness: t.roughness,
       emissive: t.emissive,
-      layer: 2,
+      alpha: t.alpha,
+      transparent: t.transparent,
+      layer: t.layer ?? 2,
     }));
   }
 
@@ -1058,6 +1161,15 @@ function BlenderStageCanvas({
       let fill;
       let wire;
       if (glbMesh) {
+        const faceAlpha = typeof face.alpha === 'number' ? face.alpha : 1;
+        const isGlass = Boolean(face.transparent) || faceAlpha < 0.94;
+        // Closed-solid geometric backface culling prevents hidden undersides/back walls from popping through stacked parts
+        if (face.cullDir && !isGlass && glbShading !== 'wireframe') {
+          const gn = face.gNormal;
+          if (gn && (gn[0] * vx + gn[1] * vy + gn[2] * vz) * face.cullDir < -0.02) {
+            continue;
+          }
+        }
         // Two-sided normal flip toward camera for crisp 3-light studio Phong shading
         const ndotvRaw = nx * vx + ny * vy + nz * vz;
         const fnx = ndotvRaw < 0 ? -nx : nx;
@@ -1075,17 +1187,18 @@ function BlenderStageCanvas({
         const baseColor = glbShading === 'clay' ? clayRgb : face.rgb || clayRgb;
 
         if (glbShading === 'wireframe') {
-          fill = 'rgba(24,32,48,0.22)';
-          wire = 'rgba(96,165,250,0.75)';
+          fill = isGlass ? 'rgba(56,189,248,0.08)' : 'rgba(24,32,48,0.22)';
+          wire = isGlass ? 'rgba(125,211,252,0.45)' : 'rgba(96,165,250,0.75)';
         } else if (glbShading === 'clay') {
           const clayFactor = Math.min(1.45, (palette.ambient + 0.14 + keyDiff * 0.72 + fillDiff * 0.30 + rimDiff * 0.22) * evGain);
           const cr = Math.min(255, Math.round(clayRgb[0] * clayFactor + fresnel * 14));
           const cg = Math.min(255, Math.round(clayRgb[1] * clayFactor + fresnel * 16));
           const cb = Math.min(255, Math.round(clayRgb[2] * clayFactor + fresnel * 20));
-          fill = `rgba(${cr},${cg},${cb},0.98)`;
-          wire = 'rgba(15,23,42,0.10)';
+          const clayAlpha = isGlass ? Number(Math.min(0.28, Math.max(0.10, faceAlpha * 0.75)).toFixed(3)) : 0.98;
+          fill = `rgba(${cr},${cg},${cb},${clayAlpha})`;
+          wire = isGlass ? null : 'rgba(15,23,42,0.10)';
         } else {
-          // PBR-aware 3-Light Studio Shading (metallic tint, roughness specular lobe, emissive glow & exposure EV)
+          // PBR-aware 3-Light Studio Shading (metallic tint, roughness specular lobe, emissive glow, glass transmission & exposure EV)
           const diffScale = 1 - metal * 0.35;
           const diff = Math.min(1.5, (palette.ambient + 0.12 + keyDiff * 0.76 + fillDiff * 0.32 + rimDiff * 0.26) * diffScale * evGain);
           const specStrength = (spec * (55 + (1 - rough) * 95) + fresnel * (24 + metal * 36)) * evGain;
@@ -1096,8 +1209,14 @@ function BlenderStageCanvas({
           const r = Math.max(0, Math.min(255, Math.round(baseColor[0] * diff + specStrength * specR + fillDiff * 8 + (em ? em[0] * 0.92 : 0))));
           const g = Math.max(0, Math.min(255, Math.round(baseColor[1] * diff + specStrength * specG + fillDiff * 14 + (em ? em[1] * 0.92 : 0))));
           const b = Math.max(0, Math.min(255, Math.round(baseColor[2] * diff + specStrength * specB + fillDiff * 24 + rimDiff * 14 + (em ? em[2] * 0.92 : 0))));
-          fill = `rgba(${r},${g},${b},0.98)`;
-          wire = glbShading === 'wire-overlay' ? 'rgba(15,23,42,0.34)' : fill;
+          if (isGlass) {
+            const glassAlpha = Number(Math.min(0.72, Math.max(0.09, faceAlpha * (0.52 + fresnel * 0.92) + spec * 0.32)).toFixed(3));
+            fill = `rgba(${r},${g},${b},${glassAlpha})`;
+            wire = glbShading === 'wire-overlay' ? 'rgba(186,230,253,0.24)' : null;
+          } else {
+            fill = `rgba(${r},${g},${b},0.98)`;
+            wire = glbShading === 'wire-overlay' ? 'rgba(15,23,42,0.34)' : fill;
+          }
         }
       } else {
         const ndotl = Math.abs(nx * lx + ny * ly + nz * lz);

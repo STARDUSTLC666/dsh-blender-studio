@@ -1,6 +1,6 @@
 {
   "name": "dsh-blender-studio",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "DeepSeek Harness Blender 3D 创作与渲染工作台插件：6 工具与 9 技能（兼容 Blender 3.6–5.x），支持 Headless CLI（Cycles GPU 自动加速 / OPTIX 安全白模 / EEVEE 4.2+ 光追 / 单启多机位分镜 / numpy 四视角质检 / MP4 / 自动去背景 GLB·FBX·OBJ·STL·.blend）、实时 Lookdev 覆写、原子多段 patch_script 与 wait 同步等待、可选本地回环 Live Bridge 深度材质重绘与对象变换直控、8 模板 + 5 高阶范本、24 项 DSH_KIT、QC-3D、4 阶段流水线、PBR GLB 网格视口 v3、A/B 对比及 13 套主题 / 8 套字体。",
   "type": "module",
   "main": "lib/index.js",

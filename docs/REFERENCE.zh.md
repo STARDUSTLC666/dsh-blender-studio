@@ -13,7 +13,7 @@
 | 模式 | 触发方式 | 适用场景 |
 | :--- | :--- | :--- |
 | **Track A：Headless Blender CLI（默认）** | 通过 `spawn(executable, ['--background', '--factory-startup', '--python', scriptFile], { shell: false })` 无头执行 | 开箱即用；静帧 PNG、2×2 四视角质检拼图、单进程多机位分镜包（`render_shots`）、MP4 动画、GLB/FBX/OBJ/STL/`.blend` 导出与场景大纲采集 |
-| **Track B：Live Socket Bridge v2（可选）** | 连接本机运行中的 Blender GUI 所加载的 `blender/dsh_blender_bridge.py`（`0.5.0`，仅 `127.0.0.1:9876`） | 实时同步工程到打开的 Blender（含 Lookdev 覆写）、查看实时场景树（Depsgraph 真实面数与节点材质详情）、带撤销栈在线执行 `bpy`、结构化直控相机/3 轴物体变换/深度节点链材质重绘（`set_camera` / `transform_object` / `set_material`）、抓取视口 OpenGL 预览图 |
+| **Track B：Live Socket Bridge v2（可选）** | 连接本机运行中的 Blender GUI 所加载的 `blender/dsh_blender_bridge.py`（`0.5.1`，仅 `127.0.0.1:9876`） | 实时同步工程到打开的 Blender（含 Lookdev 覆写）、查看实时场景树（Depsgraph 真实面数与节点材质/发光色详情）、带撤销栈在线执行 `bpy`、结构化直控相机/全旋转模式 3 轴物体变换/深度节点链材质重绘（`set_camera` / `transform_object` / `set_material`）、抓取视口 OpenGL 预览图 |
 | **Track C：Open in Blender GUI** | 一键物化 `.blend` 并以分离进程启动本机桌面 Blender | 人工精修材质/建模/打光后继续回到 DSH 管线 |
 
 ---
@@ -26,7 +26,7 @@
 | :--- | :--- | :--- |
 | **`blender_health`** | 只读全局自检 | 验证 9 个内置技能文件与宿主注册状态、本机 Blender 可执行路径/版本（含 `BLENDER_EEVEE_NEXT`/`BLENDER_EEVEE`、`gpv3`/`gpv2` 与 **Cycles GPU 后端/设备探测**）、`computeDevice` 配置、Live Bridge 连接状态及 Poly Haven 开关；不修改文件或注册表。 |
 | **`blender_project`** | `list` \| `create` \| `get` \| `update` \| `update_script` \| `duplicate` \| `list_exemplars` \| `create_from_exemplar` \| `save_checkpoint` \| `restore_checkpoint` \| `inspect_scene` \| `archive` \| `restore` | 管理 3D 工程生命周期。支持列出与一键创建 **5 套高阶工程范本**（`aero-x900-turbofan` / `apex-09-racecar` / `vanguard-h145x-helicopter` / `kuka-6axis-robot-arm` / `chronograph-tourbillon-watch`，可用 `get` 读取脚本作 Few-Shot 参考）；支持 **实时 Lookdev 覆写参数**（`accentColor` 零改码重绘 5 套范本主色、`lensMm` `18–135mm`、`exposure` `-3..+3 EV`、`clayMode` OPTIX 安全白模体检）；`duplicate` 一键克隆工程与素材；更新 `customScript` 时自动保留最近 10 份快照，支持 `save_checkpoint` / `restore_checkpoint` 回滚；`inspect_scene` 支持 `wait: true` 同步等待并直接输出 Depsgraph 真实面数与 **`QC-3D` 质量评分（`0–100` / `A–D`）**。 |
-| **`blender_render`** | `preview_still` \| `contact_sheet` \| `render_shots` \| `render_animation` \| `export_model` \| `pipeline` \| `job` \| `cancel` | 驱动 Headless CLI 渲染与导出（6 个异步动作均支持 **`wait: true`** 同步等待并直接返回成品路径与 `QC-3D`）：`preview_still`（单帧 PNG）、`contact_sheet`（零依赖内置 `numpy` 加速 2×2 四视角质检 PNG）、**`render_shots`（单次 Blender 启动构建一次场景后批量出图 1–5 组摄影机位预设 `hero_3q` / `low_dramatic` / `macro_dof` / `side_profile` / `top_plan`，支持 `shots[]` 与 `qualityTier`，单调精准进度，每帧以 `kind: 'shot'` 注册）**、`render_animation`（兼容 Blender 5.x `media_type` 的 FFmpeg H.264 MP4 或 PNG 序列）、`export_model`（`format`: `glb` \| `fbx` \| `obj` \| `stl` \| `blend`，自动烘焙修改器 `export_apply=True` 并在交换格式中自动剥离影棚背景、`.blend` 自动打包并压缩），以及 **`pipeline` 一键全流程**（串联 `inspect_scene` → `contact_sheet` → `preview_still`/`render_animation` → `export_model`，支持 `qualityTier`: `draft` \| `studio` \| `beauty` 与 `abortOnQcError` 早停）。Cycles 按 `computeDevice` 自动启用 GPU（`OPTIX`/`CUDA`/`METAL`/`HIP`/`ONEAPI`，安全回退 CPU）+ OpenImageDenoise + AgX；EEVEE 4.2+/5.x 自动开启光追与降噪。 |
+| **`blender_render`** | `preview_still` \| `contact_sheet` \| `render_shots` \| `render_animation` \| `export_model` \| `pipeline` \| `job` \| `cancel` | 驱动 Headless CLI 渲染与导出（6 个异步动作均支持 **`wait: true`** 同步等待并直接返回成品路径、`QC-3D` 与失败错误详情）：`preview_still`（单帧 PNG）、`contact_sheet`（零依赖内置 `numpy` 加速 2×2 四视角质检 PNG）、**`render_shots`（单次 Blender 启动构建一次场景后批量出图 1–5 组摄影机位预设 `hero_3q` / `low_dramatic` / `macro_dof` / `side_profile` / `top_plan`，支持 `shots[]` 与 `qualityTier`，单调精准采样进度，每帧以 `kind: 'shot'` 注册）**、`render_animation`（兼容 Blender 5.x `media_type` 与 `Video append frame` 进度的 FFmpeg H.264 MP4 或 PNG 序列）、`export_model`（`format`: `glb` \| `fbx` \| `obj` \| `stl` \| `blend`，自动烘焙修改器 `export_apply=True` 并在交换格式中自动剥离影棚背景，`.blend` 自动应用 Lookdev 覆写、打包并压缩），以及 **`pipeline` 一键全流程**（串联 `inspect_scene` → `contact_sheet` → `preview_still`/`render_animation` → `export_model`，支持 `qualityTier`: `draft` \| `studio` \| `beauty` 与 `abortOnQcError` 早停）。Cycles 按 `computeDevice` 自动启用 GPU（`OPTIX`/`CUDA`/`METAL`/`HIP`/`ONEAPI`，安全回退 CPU）+ OpenImageDenoise + AgX；EEVEE 4.2+/5.x 自动开启光追与降噪。 |
 | **`blender_script`** | `validate` \| `patch` \| `run_headless` \| `run_bridge` | 对 `bpy` 代码执行 13 条静态安全扫描（`validate`）；使用 **`patch`** 支持单处（`find`/`replace`/`replaceAll?`）或**原子多段 `edits[]`（最多 50 处修改，任一处失败整批回滚且仅保存 1 份快照）**对 40–256 KB 大型脚本精准迭代（写前安全扫描 + 自动快照，节省 Token）；或在无头环境（`run_headless`，支持 `wait: true`）/ Live Bridge（`run_bridge`）运行并返回 `sceneSummary`（含 `QC-3D` 评分）。 |
 | **`blender_bridge`** | `status` \| `get_addon_info` \| `install_addon` \| `scene_info` \| `viewport_capture` \| `sync_project` \| `set_camera` \| `transform_object` \| `set_material` \| `open_gui` | 检测 Live Bridge 状态与 GPU 信息、获取 `dsh_blender_bridge.py` 路径、**`install_addon`（需 `confirmed: true`，无头自动向本机 Blender 安装并启用 Bridge 插件）**、拉取实时场景大纲（含实时 `QC-3D`）、截取视口 PNG、同步工程至 Blender、**Live Bridge v2 结构化直控**（全部带 Undo 撤销栈：`set_camera` 调机位/焦点/焦段/景深、`transform_object` 调物体位移/旋转/缩放、`set_material` 实时改色/金属度/粗糙度），或直接启动桌面 Blender 打开 `.blend`。 |
 | **`blender_assets`** | `list` \| `remove` \| `search_polyhaven` \| `import_polyhaven` | 查看/移除工程素材；在用户显式启用 `polyHavenEnabled` 后，按白名单检索与导入 Poly Haven CC0 的 `hdris` / `textures` / `models`（`resolution`: `1k` \| `2k`）。 |
@@ -85,7 +85,7 @@
 
 ### 零代码自动资产装配（Auto-Wired Assets）
 - **上传 HDRI（`.hdr` / `.exr`）**：自动接入 World `ShaderNodeTexEnvironment -> Background` 提供环境光与反射（无 HDRI 时回退内置棚拍布光）。
-- **上传 3D 模型（`.glb` / `.gltf` / `.obj` / `.fbx` / `.stl`）**：自动导入舞台、归一化缩放至约 `1.6 m` 并精准落台对齐底座顶面，拖拽即渲；上传的 `.glb` 也可在工作台 **GLB 3D 网格预览器 v2** 中直接旋转检视。
+- **上传 3D 模型（`.glb` / `.gltf` / `.obj` / `.fbx` / `.stl`）**：自动导入舞台、归一化缩放至约 `1.6 m` 并精准落台对齐底座顶面，拖拽即渲；上传的 `.glb` 也可在工作台 **PBR 3D 网格预览器 v3** 中直接旋转检视。
 - **上传贴图 / 参考图（`.png` / `.jpg` / `.webp`）**：通过 `DSH_ASSETS` 字典注入脚本上下文，模板与自定义 `bpy` 均可直接复用。
 
 ### 5 套高阶工程范本（Pro Engineering Exemplars，`v0.4.0` 全系支持实时 `accentColor` 零改码重绘）
@@ -101,7 +101,7 @@
 
 | 分镜预设 ID | 中文名 | 英文名 | 焦段 (`lensMm`) | 方位角 / 俯仰角 | 取景边距 / 景深 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `hero_3q` | 英雄 3/4 透视 | Hero 3/4 | `50 mm` | `35°` / `18°` | `margin 1.18`（默认开启） |
+| `hero_3q` | 主 3/4 视 | Hero 3/4 | `58 mm` | `35°` / `22°` | `margin 1.18`（默认开启） |
 | `low_dramatic` | 低角度仰拍 | Low Dramatic | `35 mm` | `-42°` / `8°` | `margin 1.15`（默认开启） |
 | `macro_dof` | 微距景深特写 | Macro DOF | `85 mm` | `22°` / `14°` | `margin 0.78` · `f/2.8`（默认开启） |
 | `side_profile` | 正侧轮廓 | Side Profile | `70 mm` | `90°` / `6°` | `margin 1.16` |
@@ -114,7 +114,7 @@
 - **棚拍环境、白模覆盖与后期（4 项）**：`dsh_setup_hero_studio`（`dark_cyclorama` / `wet_asphalt` / `engineering_bay` / `helipad`）、`dsh_render_clay_override`、`dsh_setup_compositor`（`FOG_GLOW` 泛光）、`dsh_add_dof`；另提供 `dsh_configure_cycles_device` 自动调度 Cycles GPU/CPU 加速，以及 `dsh_apply_lookdev_overrides` 在场景构建后非破坏应用 `DSH_OVERRIDES`（`lensMm`、`exposure`、`clayMode`、`transparentBg`）。
 
 ### 内置 PBR 3D 网格预览器 v3（Zero-Dependency Canvas GLB Viewer）
-工作台舞台内置零依赖 Canvas 2D 3D 网格预览器 v3，同时支持预览导出的 `.glb` 成品（导出后自动聚焦）与已上传的 `.glb` 素材，提供 glTF PBR（金属度高光着色、粗糙度波瓣与自发光）3 光源着色、余子式法线矩阵（精确处理非均匀/镜像缩放）、`TRIANGLE_STRIP` / `TRIANGLE_FAN` 支持、材质边界感知减面、4 种视图模式（`Shaded`、`Shaded + Wire`、`Clay`、`Wireframe`）、`ResizeObserver` 响应式重绘、`Shift+拖拽` / 右键平移、滚轮缩放、双击复位视角与一键导出当前画布 PNG 快照。
+工作台舞台内置零依赖 Canvas 2D 3D 网格预览器 v3，同时支持预览导出的 `.glb` 成品（导出后自动聚焦）与已上传的 `.glb` 素材，提供 glTF PBR（金属度高光着色、粗糙度波瓣、自发光、`alphaMode: "BLEND"` 与 `KHR_materials_transmission` 半透明玻璃/蓝宝石表镜分层透视渲染）3 光源着色、散度定理闭体背面剔除与超大三角自动细分、余子式法线矩阵（精确处理非均匀/镜像缩放）、`TRIANGLE_STRIP` / `TRIANGLE_FAN` 支持、材质边界感知减面、4 种视图模式（`Shaded`、`Shaded + Wire`、`Clay`、`Wireframe`）、`ResizeObserver` 响应式重绘、`Shift+拖拽` / 右键平移、滚轮缩放、双击复位视角与一键导出当前画布 PNG 快照。
 
 ### `QC-3D` 确定性场景体检
 无头 `inspect_scene`、自定义脚本运行与 Live Bridge `scene_info` 均自动计算 `sceneSummary.qc`（`score`: `0–100`、`grade`: `A|B|C|D`、`issues[]`），内置 8 类检查项：`EMPTY_SCENE`、`NO_CAMERA`、`NO_LIGHTS`、`UNASSIGNED_MATERIAL`、`FLAT_UNBEVELED_PRIMITIVE`、`FLOATING_HERO`（装配体感知）、`OFF_FRAME_HERO`（相机 NDC 视锥投影检测）与 `HIGH_POLYCOUNT`。

@@ -1848,6 +1848,62 @@ def dsh_apply_lookdev_overrides():
         dsh_render_clay_override(True)
 
 
+def dsh_install_render_progress_hook():
+    handlers = getattr(getattr(bpy.app, "handlers", None), "render_stats", None)
+    if handlers is None:
+        return
+    for fn in list(handlers):
+        if getattr(fn, "_dsh_progress_hook", False):
+            handlers.remove(fn)
+    if bpy.app.version < (5, 0, 0):
+        return
+    import re as _re
+    _sample_re = _re.compile(
+        r"(?:\\bSample\\s+(\\d+)\\s*/\\s*(\\d+)|\\bRendering\\s+(\\d+)\\s*/\\s*(\\d+)\\s+samples)",
+        _re.IGNORECASE,
+    )
+    _state = {"last_key": None, "last_bucket": -1, "last_done": -1, "last_frame": None}
+
+    def _on_render_stats(*args):
+        stat = next((a for a in args if isinstance(a, str) and a.strip()), "")
+        if not stat:
+            return
+        if "Finished" in stat or stat.startswith("Time:"):
+            _state["last_key"] = None
+            _state["last_bucket"] = -1
+            _state["last_done"] = -1
+            return
+        scene = getattr(bpy.context, "scene", None)
+        frame = int(getattr(scene, "frame_current", 1)) if scene is not None else 1
+        m = _sample_re.search(stat)
+        if m:
+            done = int(m.group(1) or m.group(3))
+            total = max(1, int(m.group(2) or m.group(4)))
+            if _state["last_frame"] != frame or done < _state["last_done"]:
+                _state["last_frame"] = frame
+                _state["last_bucket"] = -1
+            bucket = int((done * 16) // total)
+            if done < total and done > 1 and bucket <= _state["last_bucket"]:
+                _state["last_done"] = done
+                return
+            _state["last_bucket"] = bucket
+            _state["last_done"] = done
+            key = ("sample", frame, done, total)
+        elif "Denoising" in stat:
+            key = ("denoise", frame)
+        elif "Compositing" in stat:
+            key = ("comp", frame)
+        else:
+            return
+        if key == _state["last_key"]:
+            return
+        _state["last_key"] = key
+        print(f"Fra:{frame} | {stat}", flush=True)
+
+    _on_render_stats._dsh_progress_hook = True
+    handlers.append(_on_render_stats)
+
+
 def dsh_load_texture_image(asset_or_name=None):
     if not DSH_ASSETS_DIR:
         return None
@@ -2203,11 +2259,25 @@ def dsh_collect_scene_summary():
                             pass
             total_polys += polys
         if idx < 200:
+            _rmode = getattr(obj, "rotation_mode", "XYZ")
+            _reuler = None
+            if _rmode == "QUATERNION":
+                try:
+                    _reuler = obj.rotation_quaternion.to_euler("XYZ")
+                except Exception:
+                    _reuler = None
+            elif _rmode == "AXIS_ANGLE":
+                try:
+                    _reuler = obj.matrix_basis.to_euler("XYZ")
+                except Exception:
+                    _reuler = None
+            if _reuler is None:
+                _reuler = obj.rotation_euler
             entry = {
                 "name": obj.name,
                 "type": otype,
                 "location": [round(float(obj.location.x), 4), round(float(obj.location.y), 4), round(float(obj.location.z), 4)],
-                "rotationDeg": [round(math.degrees(float(a)), 2) for a in obj.rotation_euler],
+                "rotationDeg": [round(math.degrees(float(a)), 2) for a in _reuler],
                 "scale": [round(float(obj.scale.x), 4), round(float(obj.scale.y), 4), round(float(obj.scale.z), 4)],
                 "dimensions": [round(float(obj.dimensions.x), 4), round(float(obj.dimensions.y), 4), round(float(obj.dimensions.z), 4)],
             }
@@ -3146,6 +3216,7 @@ dsh_emit_scene_summary()
       const targetFrame = options.frame ?? project.frameStart
       return `${baseScene}
 dsh_apply_lookdev_overrides()
+dsh_install_render_progress_hook()
 print("__DSH_STAGE__=渲染静帧预览", flush=True)
 _dsh_scene = bpy.context.scene
 _dsh_out = ${pyStr(outputPath)}
@@ -3165,6 +3236,7 @@ dsh_emit_scene_summary()
       const outDir = options.outputDir || (outputPath ? dirname(outputPath) : '.')
       return `${baseScene}
 dsh_apply_lookdev_overrides()
+dsh_install_render_progress_hook()
 print("__DSH_STAGE__=批量渲染多机位分镜 Lookdev 组图", flush=True)
 
 
@@ -3250,6 +3322,7 @@ dsh_emit_scene_summary()
       const cellH = Math.max(256, Math.floor(sheetH / 2))
       return `${baseScene}
 dsh_apply_lookdev_overrides()
+dsh_install_render_progress_hook()
 print("__DSH_STAGE__=渲染 2x2 四视角视觉自检拼图", flush=True)
 
 
@@ -3417,6 +3490,7 @@ dsh_emit_scene_summary()
     case 'render_animation':
       return `${baseScene}
 dsh_apply_lookdev_overrides()
+dsh_install_render_progress_hook()
 print("__DSH_STAGE__=渲染动画序列", flush=True)
 _dsh_scene = bpy.context.scene
 _dsh_out = ${pyStr(outputPath)}
@@ -3503,8 +3577,9 @@ if _dsh_export_heroes:
         if _dsh_bg.type == "MESH" and dsh_is_backdrop_object(_dsh_bg):
             bpy.data.objects.remove(_dsh_bg, do_unlink=True)
 `
+      const lookdevExportBlock = format === 'blend' ? 'dsh_apply_lookdev_overrides()\n' : ''
       return `${baseScene}
-print("__DSH_STAGE__=导出 3D 模型 (${format.toUpperCase()})", flush=True)
+${lookdevExportBlock}print("__DSH_STAGE__=导出 3D 模型 (${format.toUpperCase()})", flush=True)
 _dsh_out = ${pyStr(outputPath)}
 os.makedirs(os.path.dirname(_dsh_out) or ".", exist_ok=True)
 

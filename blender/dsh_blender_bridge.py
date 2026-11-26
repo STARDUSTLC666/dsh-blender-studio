@@ -1,7 +1,7 @@
 bl_info = {
     "name": "DSH Blender Bridge",
     "author": "stardustlc / DeepSeek Harness",
-    "version": (0, 5, 0),
+    "version": (0, 5, 1),
     "blender": (3, 6, 0),
     "location": "View3D > Sidebar (N) > DSH Bridge",
     "description": "Loopback-only JSON-RPC live bridge for DeepSeek Harness (dsh-blender-studio)",
@@ -63,6 +63,89 @@ def _blender_version_str():
 
 def _round_vec(vec, digits=4):
     return [round(float(vec[0]), digits), round(float(vec[1]), digits), round(float(vec[2]), digits)]
+
+
+def _get_object_rotation_deg(obj, digits=2):
+    mode = str(getattr(obj, "rotation_mode", "XYZ"))
+    euler = None
+    if mode == "QUATERNION":
+        try:
+            euler = obj.rotation_quaternion.to_euler("XYZ")
+        except Exception:
+            euler = None
+    elif mode == "AXIS_ANGLE":
+        try:
+            euler = obj.matrix_basis.to_euler("XYZ")
+        except Exception:
+            euler = None
+    if euler is None:
+        euler = obj.rotation_euler
+    return [round(math.degrees(float(a)), digits) for a in euler]
+
+
+def _set_object_rotation_deg(obj, rx, ry, rz):
+    rad = (math.radians(rx), math.radians(ry), math.radians(rz))
+    mode = str(getattr(obj, "rotation_mode", "XYZ"))
+    if mode == "QUATERNION" and mathutils is not None:
+        obj.rotation_quaternion = mathutils.Euler(rad, "XYZ").to_quaternion()
+    elif mode == "AXIS_ANGLE" and mathutils is not None:
+        axis, angle = mathutils.Euler(rad, "XYZ").to_quaternion().to_axis_angle()
+        obj.rotation_axis_angle = (float(angle), float(axis.x), float(axis.y), float(axis.z))
+    else:
+        obj.rotation_euler = rad
+
+
+def _read_linked_color(sock, depth=0, visited=None):
+    if visited is None:
+        visited = set()
+    if sock is None:
+        return None
+    if depth > 4 or not getattr(sock, "is_linked", False) or not sock.links:
+        return getattr(sock, "default_value", None)
+    try:
+        sn = sock.links[0].from_node
+        nid = id(sn)
+        if nid in visited:
+            return getattr(sock, "default_value", None)
+        visited.add(nid)
+        if sn.type == "VALTORGB" and hasattr(sn, "color_ramp") and len(sn.color_ramp.elements) > 0:
+            return sn.color_ramp.elements[0].color
+        if sn.type == "RGB" and sn.outputs:
+            return sn.outputs[0].default_value
+        if sn.type == "TEX_CHECKER" and "Color2" in sn.inputs:
+            c2 = sn.inputs["Color2"]
+            return _read_linked_color(c2, depth + 1, visited) if c2.is_linked else c2.default_value
+        if (sn.type == "MIX" and getattr(sn, "data_type", "") == "RGBA") or sn.type == "MIX_RGB":
+            rgba_inputs = [s for s in sn.inputs if getattr(s, "type", "") == "RGBA"]
+            if rgba_inputs:
+                return _read_linked_color(rgba_inputs[0], depth + 1, visited) if rgba_inputs[0].is_linked else rgba_inputs[0].default_value
+        if sn.type in ("HUE_SAT", "BRIGHTCONTRAST", "GAMMA", "INVERT"):
+            col_in = sn.inputs.get("Color")
+            if col_in is not None:
+                return _read_linked_color(col_in, depth + 1, visited) if col_in.is_linked else col_in.default_value
+    except Exception:
+        pass
+    return getattr(sock, "default_value", None)
+
+
+def _read_linked_roughness(sock):
+    if sock is None:
+        return None
+    if getattr(sock, "is_linked", False) and sock.links:
+        try:
+            rn = sock.links[0].from_node
+            if rn.type == "MAP_RANGE" and "To Min" in rn.inputs and "To Max" in rn.inputs:
+                lo = float(rn.inputs["To Min"].default_value)
+                hi = float(rn.inputs["To Max"].default_value)
+                return max(0.0, min(1.0, (lo + hi) * 0.5))
+            if rn.type == "VALTORGB" and hasattr(rn, "color_ramp") and len(rn.color_ramp.elements) > 0:
+                elems = rn.color_ramp.elements
+                lo = float(elems[0].color[0])
+                hi = float(elems[-1].color[0])
+                return max(0.0, min(1.0, (lo + hi) * 0.5))
+        except Exception:
+            pass
+    return max(0.0, min(1.0, float(sock.default_value)))
 
 
 def _safe_undo_push(message):
@@ -342,7 +425,7 @@ def _collect_scene_summary():
                 "location": _round_vec(obj.location),
             }
             try:
-                entry["rotationDeg"] = [round(math.degrees(float(a)), 2) for a in obj.rotation_euler]
+                entry["rotationDeg"] = _get_object_rotation_deg(obj, 2)
             except Exception:
                 pass
             try:
@@ -376,57 +459,6 @@ def _collect_scene_summary():
     materials = [mat.name for mat in bpy.data.materials]
     material_details = {}
 
-    def _read_linked_color(sock, depth=0, visited=None):
-        if visited is None:
-            visited = set()
-        if sock is None:
-            return None
-        if depth > 4 or not getattr(sock, "is_linked", False) or not sock.links:
-            return getattr(sock, "default_value", None)
-        try:
-            sn = sock.links[0].from_node
-            nid = id(sn)
-            if nid in visited:
-                return getattr(sock, "default_value", None)
-            visited.add(nid)
-            if sn.type == "VALTORGB" and hasattr(sn, "color_ramp") and len(sn.color_ramp.elements) > 0:
-                return sn.color_ramp.elements[0].color
-            if sn.type == "RGB" and sn.outputs:
-                return sn.outputs[0].default_value
-            if sn.type == "TEX_CHECKER" and "Color2" in sn.inputs:
-                c2 = sn.inputs["Color2"]
-                return _read_linked_color(c2, depth + 1, visited) if c2.is_linked else c2.default_value
-            if (sn.type == "MIX" and getattr(sn, "data_type", "") == "RGBA") or sn.type == "MIX_RGB":
-                rgba_inputs = [s for s in sn.inputs if getattr(s, "type", "") == "RGBA"]
-                if rgba_inputs:
-                    return _read_linked_color(rgba_inputs[0], depth + 1, visited) if rgba_inputs[0].is_linked else rgba_inputs[0].default_value
-            if sn.type in ("HUE_SAT", "BRIGHTCONTRAST", "GAMMA", "INVERT"):
-                col_in = sn.inputs.get("Color")
-                if col_in is not None:
-                    return _read_linked_color(col_in, depth + 1, visited) if col_in.is_linked else col_in.default_value
-        except Exception:
-            pass
-        return getattr(sock, "default_value", None)
-
-    def _read_linked_roughness(sock):
-        if sock is None:
-            return None
-        if getattr(sock, "is_linked", False) and sock.links:
-            try:
-                rn = sock.links[0].from_node
-                if rn.type == "MAP_RANGE" and "To Min" in rn.inputs and "To Max" in rn.inputs:
-                    lo = float(rn.inputs["To Min"].default_value)
-                    hi = float(rn.inputs["To Max"].default_value)
-                    return max(0.0, min(1.0, (lo + hi) * 0.5))
-                if rn.type == "VALTORGB" and hasattr(rn, "color_ramp") and len(rn.color_ramp.elements) > 0:
-                    elems = rn.color_ramp.elements
-                    lo = float(elems[0].color[0])
-                    hi = float(elems[-1].color[0])
-                    return max(0.0, min(1.0, (lo + hi) * 0.5))
-            except Exception:
-                pass
-        return max(0.0, min(1.0, float(sock.default_value)))
-
     for mat in list(bpy.data.materials)[:120]:
         try:
             detail = {}
@@ -439,6 +471,24 @@ def _collect_scene_summary():
                     resolved = _read_linked_color(bc)
                     if resolved is not None:
                         rgba_src = resolved
+                em_str = bsdf.inputs.get("Emission Strength")
+                em_col = bsdf.inputs.get("Emission Color") or bsdf.inputs.get("Emission")
+                if em_str is not None and em_col is not None:
+                    try:
+                        if float(em_str.default_value) > 0.5:
+                            base_lum = (
+                                (float(rgba_src[0]) + float(rgba_src[1]) + float(rgba_src[2])) / 3.0
+                                if rgba_src is not None and len(rgba_src) >= 3
+                                else 0.0
+                            )
+                            if base_lum < 0.08:
+                                em_resolved = _read_linked_color(em_col)
+                                if em_resolved is not None and len(em_resolved) >= 3:
+                                    em_lum = (float(em_resolved[0]) + float(em_resolved[1]) + float(em_resolved[2])) / 3.0
+                                    if em_lum > 0.02:
+                                        rgba_src = em_resolved
+                    except Exception:
+                        pass
                 ms = bsdf.inputs.get("Metallic")
                 if ms is not None:
                     detail["metallic"] = round(max(0.0, min(1.0, float(ms.default_value))), 4)
@@ -943,7 +993,7 @@ def _cmd_transform_object(params):
         obj.location = _parse_vec3(location, "location")
     if rotation_deg is not None:
         rx, ry, rz = _parse_vec3(rotation_deg, "rotationDeg")
-        obj.rotation_euler = (math.radians(rx), math.radians(ry), math.radians(rz))
+        _set_object_rotation_deg(obj, rx, ry, rz)
     if scale is not None:
         obj.scale = _parse_vec3(scale, "scale")
 
@@ -959,7 +1009,7 @@ def _cmd_transform_object(params):
             "name": obj.name,
             "type": str(obj.type),
             "location": _round_vec(obj.location),
-            "rotationDeg": [round(math.degrees(float(a)), 3) for a in obj.rotation_euler],
+            "rotationDeg": _get_object_rotation_deg(obj, 3),
             "scale": _round_vec(obj.scale),
         },
         "sceneSummary": _collect_scene_summary(),
@@ -1127,7 +1177,10 @@ def _cmd_set_material_color(params):
                                 relems[0].color = (roughness, roughness, roughness, 1.0)
                     except Exception:
                         pass
-            final_roughness = float(rough_sock.default_value)
+                final_roughness = float(roughness)
+            else:
+                rv = _read_linked_roughness(rough_sock)
+                final_roughness = float(rv) if rv is not None else float(rough_sock.default_value)
     else:
         if metallic is not None:
             final_metallic = metallic

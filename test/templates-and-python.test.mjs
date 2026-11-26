@@ -548,27 +548,46 @@ test('Blender 3.6–5.x engine upgrades: OPTIX-safe clay override, export_apply=
   assert.match(baseScene, /_obj\.hide_render = True/)
   assert.match(summaryFnMatch[0], /"rotationDeg"/)
 
-  // 5c. Blender 5.x render_animation media_type="VIDEO" + Blender 5.x timestamp-prefixed Saved: log parsing
+  // 5c. Blender 5.x render_animation media_type="VIDEO" + timestamp-prefixed Saved:, Video append frame, and render_stats hook
   const animHarness = generateRunnerHarness('render_animation', { project, assetsDir: '/tmp/assets', outputPath: '/tmp/a.mp4' })
   assert.match(animHarness, /media_type = "VIDEO"/)
   assert.match(animHarness, /media_type = "IMAGE"/)
+  assert.match(animHarness, /dsh_install_render_progress_hook\(\)/)
+  const stillHarness = generateRunnerHarness('preview_still', { project, assetsDir: '/tmp/assets', outputPath: '/tmp/s.png' })
+  assert.match(stillHarness, /def dsh_install_render_progress_hook\(/)
+  assert.match(stillHarness, /render_stats/)
+  assert.ok(stillHarness.includes('\\bSample\\s+(\\d+)'), 'render_stats regex must preserve Python backslash escapes')
+  assert.ok(!stillHarness.includes('\x08'), 'generated Python must not contain unescaped JS backspace control characters')
+  assert.match(stillHarness, /dsh_install_render_progress_hook\(\)/)
   const saved5 = parseBlenderProgressLine("00:05.359  render           | Saved: 'C:\\tmp\\still.png'", 1, 1)
   assert.equal(saved5.savedFile, 'C:\\tmp\\still.png')
+  const vid5 = parseBlenderProgressLine('00:21.906  render           | Video append frame 2', 1, 4)
+  assert.ok(vid5.progress >= 40 && vid5.progress <= 60, `expected mid-animation progress for Video append frame 2/4, got ${vid5.progress}`)
+  assert.match(vid5.stage ?? '', /2\/4/)
+  const stat5Cycles = parseBlenderProgressLine('Fra:1 | Remaining: 00:01.98 | Mem: 151M | Sample 16/32', 1, 1)
+  assert.ok(stat5Cycles.progress >= 45 && stat5Cycles.progress <= 55, `expected ~48% mid-sample progress, got ${stat5Cycles.progress}`)
+  const stat5Eevee = parseBlenderProgressLine('Fra:1 | Rendering 32 / 64 samples', 1, 1)
+  assert.ok(stat5Eevee.progress >= 45 && stat5Eevee.progress <= 55, `expected ~48% mid-EEVEE progress, got ${stat5Eevee.progress}`)
+
+  // 5d. Quaternion/Axis-Angle rotation readout in dsh_collect_scene_summary
+  assert.match(summaryFnMatch[0], /rotation_quaternion/)
 
   // 6. Fast built-in numpy stitching path (with pure-Python fallback) in contact_sheet
   const contact = generateRunnerHarness('contact_sheet', { project, assetsDir: '/tmp/assets', outputPath: '/tmp/c.png' })
   assert.match(contact, /import numpy as _np/)
   assert.match(contact, /foreach_get/)
 
-  // 7. export_model bakes modifiers, strips enclosing studio backdrops on mesh interchange formats (not .blend), and emits summary first
+  // 7. export_model bakes modifiers, strips enclosing studio backdrops on mesh interchange formats (not .blend),
+  //    and applies Lookdev overrides on .blend exports while keeping interchange PBR intact
   const glbExp = generateRunnerHarness('export_model', { project, assetsDir: '/tmp/assets', outputPath: '/tmp/m.glb', format: 'glb' })
   assert.match(glbExp, /_dsh_safe_export/)
   assert.match(glbExp, /export_apply=True/)
   assert.match(glbExp, /export_materials="EXPORT"/)
   assert.match(glbExp, /_dsh_export_heroes/)
-  assert.doesNotMatch(glbExp, /\ndsh_apply_lookdev_overrides\(\)/, 'export_model must not overwrite PBR materials with clay override')
+  assert.doesNotMatch(glbExp, /\ndsh_apply_lookdev_overrides\(\)/, 'GLB export_model must not overwrite PBR materials with clay override')
 
   const blendExp = generateRunnerHarness('export_model', { project, assetsDir: '/tmp/assets', outputPath: '/tmp/m.blend', format: 'blend' })
+  assert.match(blendExp, /\ndsh_apply_lookdev_overrides\(\)/, '.blend export_model must apply Lookdev overrides consistently with build_blend')
   assert.match(blendExp, /pack_all\(\)/)
   assert.match(blendExp, /compress=True/)
   assert.doesNotMatch(blendExp, /_dsh_export_heroes/, '.blend export must preserve full studio stage')

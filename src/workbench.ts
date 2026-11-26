@@ -701,13 +701,17 @@ export class BlenderWorkbench {
       let tileIndex = 0
       let tileTotal = 0
 
+      const singleFrame = Math.max(1, Math.floor(stageOptions.frame ?? stageProject.frameStart))
+      const runFrameStart = stageKind === 'render_animation' ? stageProject.frameStart : singleFrame
+      const runFrameEnd = stageKind === 'render_animation' ? stageProject.frameEnd : singleFrame
+
       const result = await this.runner.run({
         executablePath,
         scriptPath,
         scriptContent,
         cwd: stageRunDir,
-        frameStart: stageProject.frameStart,
-        frameEnd: stageProject.frameEnd,
+        frameStart: runFrameStart,
+        frameEnd: runFrameEnd,
         timeoutMs: stageOptions.timeoutMs,
         signal: job.controller.signal,
         onLine: line => this.pushJobLine(job, line),
@@ -1042,13 +1046,14 @@ export class BlenderWorkbench {
           const shotSliceEnd = (idx: number) => 8 + (Math.min(idx + 1, totalShots) / totalShots) * 86
           let doneCount = 0
 
+          const shotFrame = Math.max(1, Math.floor(options.frame ?? renderProject.frameStart))
           const result = await this.runner.run({
             executablePath,
             scriptPath,
             scriptContent,
             cwd: batchRunDir,
-            frameStart: renderProject.frameStart,
-            frameEnd: renderProject.frameEnd,
+            frameStart: shotFrame,
+            frameEnd: shotFrame,
             timeoutMs,
             signal: job.controller.signal,
             onLine: line => this.pushJobLine(job, line),

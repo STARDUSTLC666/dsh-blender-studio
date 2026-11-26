@@ -474,6 +474,7 @@ export function registerBlenderTools(
             value.stage ? `当前阶段：${value.stage}` : '',
           )
           if (value.projectId) lines.push(`工程 ID：${value.projectId}（v${value.revision}）`)
+          if (value.error) lines.push(`错误：${value.error}`)
           if (value.state === 'running') {
             lines.push('提示：可使用 action: "job" 查询最新进度，或 action: "cancel" 取消任务。')
           }

@@ -119,7 +119,7 @@ export class PolyHavenClient {
           redirect: 'manual',
           signal: AbortSignal.timeout(this.timeoutMs),
           headers: {
-            'user-agent': 'dsh-blender-studio/0.5.0 (DeepSeek Harness Plugin)',
+            'user-agent': 'dsh-blender-studio/0.5.1 (DeepSeek Harness Plugin)',
             accept: '*/*',
           },
         })

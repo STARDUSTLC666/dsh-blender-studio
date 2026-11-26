@@ -182,8 +182,8 @@ Updates the active scene camera live on Blender's main thread without writing Py
   - `dofFstop` (`number`, optional): Aperture f-stop for Depth of Field
 - **Result**: `{ "camera": { "name": "...", "location": [...], "lensMm": 58 }, "sceneSummary": { ... } }`
 
-#### 7. `transform_object` *(Live Bridge v2 — `0.4.0`)*
-Applies precise transform adjustments to any named object in `bpy.data.objects` with automatic Undo.
+#### 7. `transform_object` *(Live Bridge v2 — upgraded in `0.5.1`)*
+Applies precise transform adjustments to any named object in `bpy.data.objects` with automatic Undo. Supports `XYZ`/Euler, `QUATERNION` (including glTF-imported nodes), and `AXIS_ANGLE` rotation modes natively and reports accurate Euler degrees.
 - **Params**:
   - `name` (`string`, required): Exact object name
   - `location` (`[x, y, z]`, optional)
@@ -191,8 +191,8 @@ Applies precise transform adjustments to any named object in `bpy.data.objects` 
   - `scale` (`[sx, sy, sz]`, optional)
 - **Result**: `{ "object": { "name": "...", "location": [...], "rotationDeg": [...], "scale": [...] }, "sceneSummary": { ... } }`
 
-#### 8. `set_material_color` *(Live Bridge v2 — upgraded in `0.5.0`)*
-Repaints a named Principled BSDF material live in Blender (compatible across Blender `3.6–5.x`) with automatic Undo. In `0.5.0`, recursively repaints linked procedural shader nodes (`VALTORGB` ColorRamp, `RGB`, `TEX_CHECKER`, `MIX`/`MIX_RGB`, `HUE_SAT`/`BRIGHTCONTRAST`/`GAMMA`), active `Emission Color`, and linked `Roughness` `MAP_RANGE` / `VALTORGB` ranges so `DSH_KIT` procedural materials repaint cleanly live.
+#### 8. `set_material_color` *(Live Bridge v2 — upgraded in `0.5.1`)*
+Repaints a named Principled BSDF material live in Blender (compatible across Blender `3.6–5.x`) with automatic Undo. Recursively repaints linked procedural shader nodes (`VALTORGB` ColorRamp, `RGB`, `TEX_CHECKER`, `MIX`/`MIX_RGB`, `HUE_SAT`/`BRIGHTCONTRAST`/`GAMMA`), active `Emission Color`, and linked `Roughness` `MAP_RANGE` / `VALTORGB` ranges so `DSH_KIT` procedural materials repaint cleanly live; accurately returns linked roughness midpoints even when `roughness` is omitted, and reports active emissive colors for dark-base LED shaders in `sceneSummary.materialDetails`.
 - **Params**:
   - `materialName` (`string`, required): Material name in `bpy.data.materials`
   - `color` (`string`, required): `#RRGGBB` hex color (converted cleanly to linear sRGB)

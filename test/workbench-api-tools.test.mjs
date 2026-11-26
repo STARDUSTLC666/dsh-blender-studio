@@ -1561,7 +1561,7 @@ test('Boost workflow upgrades: atomic multi-hunk patch_script (with safety rollb
   assert.equal(waitedInspect.state, 'done')
   assert.equal(waitedInspect.sceneSummary?.qc?.grade, 'A')
 
-  // 7. Failed wait: true job outputs surface error & recent log lines in both inspect_scene & run_headless renderers
+  // 7. Failed wait: true job outputs surface error & recent log lines in inspect_scene, blender_render & run_headless renderers
   const failedInspectText = projectTool.output.render(
     { action: 'inspect_scene', wait: true },
     { id: 'job-1', kind: 'inspect_scene', state: 'failed', stage: '执行失败', error: 'SyntaxError at line 12', lines: ['Traceback...', 'SyntaxError: invalid syntax'] },
@@ -1569,10 +1569,31 @@ test('Boost workflow upgrades: atomic multi-hunk patch_script (with safety rollb
   assert.match(failedInspectText, /SyntaxError at line 12/)
   assert.match(failedInspectText, /最近日志/)
 
+  const failedRenderText = renderTool.output.render(
+    { action: 'preview_still', wait: true },
+    { id: 'job-r1', kind: 'preview_still', state: 'failed', stage: '执行失败', error: 'OPTIX kernel compile failed', lines: ['Cycles OPTIX error'] },
+  )[0].text
+  assert.match(failedRenderText, /错误：OPTIX kernel compile failed/)
+  assert.match(failedRenderText, /最近日志/)
+
   const failedScriptText = scriptTool.output.render(
     { action: 'run_headless', wait: true },
     { id: 'job-2', kind: 'run_script', state: 'failed', stage: '执行失败', error: 'NameError: foo', lines: ['NameError: name foo is not defined'] },
   )[0].text
   assert.match(failedScriptText, /NameError: foo/)
   assert.match(failedScriptText, /最近日志/)
+
+  // 8. Single-frame stages pass [targetFrame, targetFrame] to runner.run (never clamp progress to 5% on a 48-frame project)
+  const runnerFrames = []
+  const origRun = workbench.runner.run.bind(workbench.runner)
+  workbench.runner.run = async (req) => {
+    runnerFrames.push({ frameStart: req.frameStart, frameEnd: req.frameEnd })
+    return origRun(req)
+  }
+  await renderTool.execute({ action: 'preview_still', id: proj.id, revision: multiPatched.revision, wait: true })
+  assert.deepEqual(runnerFrames.at(-1), { frameStart: 1, frameEnd: 1 }, 'preview_still must pass single-frame range [1, 1] instead of [1, 48]')
+  await renderTool.execute({ action: 'render_shots', id: proj.id, revision: multiPatched.revision, frame: 12, wait: true })
+  assert.deepEqual(runnerFrames.at(-1), { frameStart: 12, frameEnd: 12 }, 'render_shots must pass single-frame range [12, 12]')
+  await renderTool.execute({ action: 'render_animation', id: proj.id, revision: multiPatched.revision, wait: true })
+  assert.deepEqual(runnerFrames.at(-1), { frameStart: 1, frameEnd: 48 }, 'render_animation must keep full project [frameStart, frameEnd]')
 })

@@ -115,6 +115,7 @@ export function parseBlenderProgressLine(
 
   const totalFrames = Math.max(1, frameEnd - frameStart + 1)
   const fraMatch = /\bFra:(\d+)\b/.exec(line)
+  const videoAppendMatch = !fraMatch ? /\bVideo append frame\s+(\d+)\b/i.exec(line) : null
   const sampleMatch =
     /\bSample\s+(\d+)\s*\/\s*(\d+)/i.exec(line) ??
     /\bRendering\s+(\d+)\s*\/\s*(\d+)\s+samples/i.exec(line)
@@ -139,6 +140,11 @@ export function parseBlenderProgressLine(
     }
     const pct = Math.round(((frameIndex + subFraction) / totalFrames) * 95)
     result.progress = Math.max(5, Math.min(99, pct))
+  } else if (videoAppendMatch) {
+    const currentFrame = Number(videoAppendMatch[1])
+    const doneFrames = Math.max(1, Math.min(totalFrames, currentFrame - frameStart + 1))
+    result.progress = Math.max(5, Math.min(99, Math.round((doneFrames / totalFrames) * 96)))
+    result.stage = totalFrames > 1 ? `编码视频第 ${currentFrame}/${frameEnd} 帧` : `编码视频第 ${currentFrame} 帧`
   } else if (sampleMatch) {
     const done = Number(sampleMatch[1])
     const total = Math.max(1, Number(sampleMatch[2]))

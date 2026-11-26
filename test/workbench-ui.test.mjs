@@ -1486,6 +1486,55 @@ test('GLB Viewer v3 parser (cofactor normals, PBR metallic/roughness/emissive, T
   assert.ok(Math.abs(parsed.triangles[0].roughness - 0.14) < 1e-4)
   assert.ok(Array.isArray(parsed.triangles[0].emissive) && parsed.triangles[0].emissive[0] === 255)
   assert.equal(parsed.triangles[2].metallic, 1.0, 'glTF 2.0 omitted metallicFactor on pbrMetallicRoughness defaults to 1.0')
+  assert.equal(parsed.triangles[0].cullDir, 0, 'open flat quad mesh stays double-sided (cullDir === 0)')
+
+  // 1c. Translucent glass (alphaMode: BLEND, KHR_materials_transmission, named MixShader sapphire crystal) + closed-solid backface culling
+  const closedParsed = parserCtx.parseGlbMesh(SYNTHETIC_GLB_AB)
+  assert.ok(closedParsed.triangles.every((tr) => tr.cullDir !== 0), 'closed solid tetrahedron enables divergence-theorem backface culling')
+
+  const glassPosBytes = Buffer.from(stripPos.buffer)
+  const glassJson = {
+    asset: { version: '2.0' },
+    scene: 0,
+    scenes: [{ nodes: [0] }],
+    nodes: [{ name: 'GlassSet', mesh: 0 }],
+    materials: [
+      { name: 'Mat_Frosted', alphaMode: 'BLEND', pbrMetallicRoughness: { baseColorFactor: [0.9, 0.95, 1.0, 0.36], metallicFactor: 0, roughnessFactor: 0.12 } },
+      { name: 'Mat_Canopy', pbrMetallicRoughness: { baseColorFactor: [0.1, 0.2, 0.3, 1.0], metallicFactor: 0, roughnessFactor: 0.04 }, extensions: { KHR_materials_transmission: { transmissionFactor: 0.85 } } },
+      { name: 'Mat_Domed_SapphireCrystal', doubleSided: true },
+    ],
+    buffers: [{ byteLength: glassPosBytes.byteLength }],
+    bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: glassPosBytes.byteLength }],
+    accessors: [{ bufferView: 0, componentType: 5126, count: 4, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] }],
+    meshes: [
+      {
+        name: 'GlassPrims',
+        primitives: [
+          { attributes: { POSITION: 0 }, mode: 5, material: 0 },
+          { attributes: { POSITION: 0 }, mode: 5, material: 1 },
+          { attributes: { POSITION: 0 }, mode: 5, material: 2 },
+        ],
+      },
+    ],
+  }
+  let gJsonRaw = Buffer.from(JSON.stringify(glassJson), 'utf8')
+  if (gJsonRaw.byteLength % 4 !== 0) gJsonRaw = Buffer.concat([gJsonRaw, Buffer.alloc(4 - (gJsonRaw.byteLength % 4), 0x20)])
+  let gBinRaw = Buffer.from(glassPosBytes)
+  if (gBinRaw.byteLength % 4 !== 0) gBinRaw = Buffer.concat([gBinRaw, Buffer.alloc(4 - (gBinRaw.byteLength % 4), 0)])
+  const gBuf = Buffer.alloc(12 + 8 + gJsonRaw.byteLength + 8 + gBinRaw.byteLength)
+  gBuf.writeUInt32LE(0x46546c67, 0)
+  gBuf.writeUInt32LE(2, 4)
+  gBuf.writeUInt32LE(gBuf.byteLength, 8)
+  gBuf.writeUInt32LE(gJsonRaw.byteLength, 12)
+  gBuf.writeUInt32LE(0x4e4f534a, 16)
+  gJsonRaw.copy(gBuf, 20)
+  const gBinOff = 20 + gJsonRaw.byteLength
+  gBuf.writeUInt32LE(gBinRaw.byteLength, gBinOff)
+  gBuf.writeUInt32LE(0x004e4942, gBinOff + 4)
+  gBinRaw.copy(gBuf, gBinOff + 8)
+  const gParsed = parserCtx.parseGlbMesh(gBuf.buffer.slice(gBuf.byteOffset, gBuf.byteOffset + gBuf.byteLength))
+  assert.equal(gParsed.triangleCount, 6)
+  assert.ok(gParsed.triangles.every((tr) => tr.transparent === true && tr.layer === 3 && tr.alpha < 0.5), 'BLEND, KHR_materials_transmission, and named sapphire crystal materials all parse as translucent layer-3 glass')
 
   // 2. Full jsdom verification for Assets & Exports shot/GLB inspect jumps & Bridge Live Object Transform UI
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {

@@ -1,9 +1,9 @@
 ---
 name: "blender-production-pipeline"
-description: "Orchestrate the 5-phase AAA 3D production workflow in dsh-blender-studio v0.5.0: 5 live-repaintable Pro Exemplars, 24-helper DSH_KIT v2, OPTIX-safe clay & live lookdev overrides, single-launch multi-shot rendering, atomic multi-hunk patching, synchronous wait: true, and Live Bridge 0.5.0 deep PBR controls."
+description: "Orchestrate the 5-phase AAA 3D production workflow in dsh-blender-studio v0.5.1: 5 live-repaintable Pro Exemplars, 24-helper DSH_KIT v2, OPTIX-safe clay & live lookdev overrides, single-launch multi-shot rendering, atomic multi-hunk patching, synchronous wait: true, and Live Bridge 0.5.1 deep PBR controls."
 ---
 
-# High-Quality 3D Production Pipeline (`dsh-blender-studio` v0.5.0)
+# High-Quality 3D Production Pipeline (`dsh-blender-studio` v0.5.1)
 
 Use this skill whenever building complex, portfolio-grade 3D vehicles, industrial machinery, robotics, horology, architectural hero pieces, or detailed product assemblies inside `dsh-blender-studio`. Rather than writing one blind monolithic script and hoping the final Cycles render looks good, follow this deterministic **5-Phase AAA Production Loop**.
 

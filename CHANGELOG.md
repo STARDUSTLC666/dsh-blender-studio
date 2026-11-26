@@ -2,6 +2,21 @@
 
 [返回简介](README.md) · [完整说明](docs/REFERENCE.zh.md) · [Live Bridge 指南](docs/BRIDGE.md) · [验证说明](docs/VALIDATION.md)
 
+## [0.5.1] - 2026-11-27
+
+- **PBR `.glb` 3D 网格视口 v3 视觉修复与画质升级（实机 Chromium Canvas 2D 实测验证）**：
+  - **透明玻璃与透射材质分层渲染**：完整解析 glTF `alphaMode: "BLEND"`、`baseColorFactor[3]`、`KHR_materials_transmission` 及 Blender `MixShader` 玻璃/蓝宝石表镜材质，在 `layer: 3` 叠加 Fresnel 玻璃高光与半透明透视（`CHRONO-X1` 陀飞轮腕表透过蓝宝石表镜清晰呈现内部金质齿轮系与烤蓝指针，`product-studio` 磨砂玻璃罩呈现晶莹半透效果）。
+  - **散度定理闭体背面剔除与大三角自动细分**：基于零额外内存占用的闭体法向量和检测对闭合实心网格启用安全几何背面剔除（单面薄片保持双面绘制），提升默认上限至 `9000` 三角并自动细分超大 N-gon 顶盖三角、渐进式网格聚簇（`68 → 52 → 40 → 30`），彻底消除堆叠底座穿插与小细节丢失。
+- **渲染进度、`.blend` 导出与 Agent 诊断修复**：
+  - 修复单帧渲染（`preview_still` / `contact_sheet` / `render_shots`）在默认 48 帧工程上向进度解析器误传 `frameEnd=48` 导致进度条卡在 5% 的问题；新增 Blender 5.x `bpy.app.handlers.render_stats` 节流采样进度钩子（`dsh_install_render_progress_hook`，覆盖 Cycles `Sample X/Y` 与 EEVEE `Rendering X / Y samples`）与 `Video append frame N` 动画编码进度识别，彻底解决 Blender 5.x 无头模式默认静默隐藏逐采样进度的问题。
+  - 修复 `export_model(format: 'blend')` 遗漏 `dsh_apply_lookdev_overrides()` 的问题，确保导出 `.blend` 完整保留 `lensMm`、`exposure`、`clayMode` 与 `transparentBg` 覆写。
+  - 修复 `blender_render` 工具在 `wait: true` 失败时未渲染 `错误：${value.error}` 的问题，与 `blender_project` / `blender_script` 保持一致。
+- **Live Bridge (`0.5.1`) 与旋转模式/发光材质修复**：
+  - 修复 `transform_object` 与场景大纲对 `QUATERNION`（含 glTF 导入节点）与 `AXIS_ANGLE` 旋转模式对象静默不旋转/回报零角度的问题。
+  - 修复 `set_material_color` 省略 `roughness` 时返回未链接端口默认值 `0.5` 而与 `sceneSummary` 链表粗糙度不一致的问题；为暗底活跃 `Emission` LED 材质准确回读发光主色。
+- **仓库展示与文档对齐**：优化 4 套中英浅深色 `workflow-*.svg` 横幅卡片排版防右侧贴边溢出，首页新增「6 个智能体工具与 9 个开放技能」速览表，修正 `docs/REFERENCE.{zh,en}.md` 中 `hero_3q` 焦段/俯仰角（`58 mm / 22°`）与 `GLB v3` 引用，并全面同步 `templates/DESIGN.md` 至 `v0.5.1`。
+- **GLB v3 Translucent Glass & Backface Culling, Blender 5.x Live Sample Progress, `.blend` Lookdev Export & Bridge `0.5.1` (`0.5.1`)**: adds glTF `BLEND` / `KHR_materials_transmission` / sapphire-crystal layered translucent rendering, divergence-theorem closed-solid backface culling, oversized cap subdivision & progressive `68→30` LOD clustering to the Canvas GLB Viewer v3; fixes single-frame progress clamping (passing `[targetFrame, targetFrame]` for non-animation jobs), adds throttled Blender 5.x `render_stats` live sample progress streaming (`dsh_install_render_progress_hook`) + `Video append frame` parsing; applies `dsh_apply_lookdev_overrides()` on `.blend` exports; surfaces `value.error` on failed `blender_render` jobs; fixes `QUATERNION`/`AXIS_ANGLE` rotations, omitted-roughness return parity, and active LED emission color introspection in `dsh_blender_bridge.py` (`0.5.1`); fixes right-edge text crowding across all 4 `workflow-*.svg` hero banners and aligns `README`, `REFERENCE`, and `templates/DESIGN.md`.
+
 ## [0.5.0] - 2026-11-27
 
 - **Blender 3.6–5.x 引擎级画质、稳定性与导出全面升级**：
