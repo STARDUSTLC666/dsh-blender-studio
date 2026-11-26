@@ -1392,3 +1392,389 @@ test('full Workbench renders in jsdom: themes, fonts, Canvas 3D viewport, Studio
   assert.match(enFilmstripText, /Shot Filmstrip/)
   assert.doesNotMatch(enFilmstripText, /[\u3400-\u9fff]/, 'en-US Shot Filmstrip must contain zero Chinese characters')
 })
+
+test('GLB Viewer v3 parser (cofactor normals, PBR metallic/roughness/emissive, TRIANGLE_STRIP & TRIANGLE_FAN), Assets shot/GLB inspect jumps, and Bridge Live Object Transform UI', async (t) => {
+  // 1. Directly unit-test GLB parser v3 math & geometry modes by evaluating the helper block from 02-studio.js
+  const studioPanelSrc = readFileSync(new URL('../templates/panels/02-studio.js', import.meta.url), 'utf8')
+  const parserStart = studioPanelSrc.indexOf('function mat4Identity()')
+  const parserEnd = studioPanelSrc.indexOf('function BlenderStageCanvas(')
+  assert.ok(parserStart > 0 && parserEnd > parserStart, 'GLB parser helpers located in 02-studio.js')
+  const parserCtx = { Float32Array, Uint8Array, Uint16Array, Uint32Array, DataView, ArrayBuffer, Math, Map, Set, Number, String, Array, Object, JSON, Error, TextDecoder }
+  runInNewContext(studioPanelSrc.slice(parserStart, parserEnd) + '\nthis.parseGlbMesh = parseGlbMesh;\nthis.transformNormalGltfToBlenderZUp = transformNormalGltfToBlenderZUp;', parserCtx)
+
+  // Cofactor inverse-transpose normal under non-uniform scale (4, 1, 1)
+  const scaleMat = [4, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+  const nInvT = parserCtx.transformNormalGltfToBlenderZUp(scaleMat, Math.SQRT1_2, Math.SQRT1_2, 0)
+  // In glTF space: (1/4, 1, 0) normalized => x ~ 0.2425, y ~ 0.9701 => Blender Z-up [x, -z, y] => [0.2425, 0, 0.9701]
+  assert.ok(Math.abs(nInvT[0] - 0.2425) < 0.01, `expected cofactor normal x ~ 0.2425, got ${nInvT[0]}`)
+  assert.ok(Math.abs(nInvT[2] - 0.9701) < 0.01, `expected cofactor normal z ~ 0.9701, got ${nInvT[2]}`)
+
+  // Build synthetic GLB with TRIANGLE_STRIP (mode 5), TRIANGLE_FAN (mode 6), metallic/roughness/emissive factors
+  const stripPos = new Float32Array([
+    0, 0, 0,
+    1, 0, 0,
+    0, 1, 0,
+    1, 1, 0,
+  ])
+  const fanPos = new Float32Array([
+    0, 0, 2,
+    1, 0, 2,
+    0, 1, 2,
+    -1, 0, 2,
+  ])
+  const binRaw = Buffer.concat([Buffer.from(stripPos.buffer), Buffer.from(fanPos.buffer)])
+  const gltfObj = {
+    asset: { version: '2.0' },
+    scene: 0,
+    scenes: [{ nodes: [0] }],
+    nodes: [{ name: 'PbrStripFan', mesh: 0 }],
+    materials: [
+      {
+        pbrMetallicRoughness: {
+          baseColorFactor: [0.8, 0.2, 0.1, 1.0],
+          metallicFactor: 0.92,
+          roughnessFactor: 0.14,
+        },
+        emissiveFactor: [1.0, 0.25, 0.0],
+      },
+      {
+        // glTF 2.0 pure metal: Blender omits metallicFactor when Metallic == 1.0
+        pbrMetallicRoughness: {
+          baseColorFactor: [0.9, 0.75, 0.3, 1.0],
+        },
+      },
+    ],
+    meshes: [
+      {
+        primitives: [
+          { mode: 5, attributes: { POSITION: 0 }, material: 0 }, // 4 verts -> 2 strip triangles
+          { mode: 6, attributes: { POSITION: 1 }, material: 1 }, // 4 verts -> 2 fan triangles (pure metal)
+        ],
+      },
+    ],
+    buffers: [{ byteLength: binRaw.length }],
+    bufferViews: [
+      { buffer: 0, byteOffset: 0, byteLength: stripPos.byteLength },
+      { buffer: 0, byteOffset: stripPos.byteLength, byteLength: fanPos.byteLength },
+    ],
+    accessors: [
+      { bufferView: 0, componentType: 5126, count: 4, type: 'VEC3' },
+      { bufferView: 1, componentType: 5126, count: 4, type: 'VEC3' },
+    ],
+  }
+  const jsonBuf = Buffer.from(JSON.stringify(gltfObj), 'utf8')
+  const jsonPad = (4 - (jsonBuf.length % 4)) % 4
+  const jsonChunk = Buffer.concat([jsonBuf, Buffer.alloc(jsonPad, 0x20)])
+  const binPad = (4 - (binRaw.length % 4)) % 4
+  const binChunk = Buffer.concat([binRaw, Buffer.alloc(binPad)])
+  const glbBuf = Buffer.alloc(12 + 8 + jsonChunk.length + 8 + binChunk.length)
+  glbBuf.write('glTF', 0, 'ascii')
+  glbBuf.writeUInt32LE(2, 4)
+  glbBuf.writeUInt32LE(glbBuf.length, 8)
+  glbBuf.writeUInt32LE(jsonChunk.length, 12)
+  glbBuf.writeUInt32LE(0x4e4f534a, 16)
+  jsonChunk.copy(glbBuf, 20)
+  const binOff = 20 + jsonChunk.length
+  glbBuf.writeUInt32LE(binChunk.length, binOff)
+  glbBuf.writeUInt32LE(0x004e4942, binOff + 4)
+  binChunk.copy(glbBuf, binOff + 8)
+
+  const parsed = parserCtx.parseGlbMesh(glbBuf.buffer.slice(glbBuf.byteOffset, glbBuf.byteOffset + glbBuf.byteLength))
+  assert.equal(parsed.triangleCount, 4, 'TRIANGLE_STRIP (2) + TRIANGLE_FAN (2) = 4 triangles')
+  assert.equal(parsed.triangles.length, 4)
+  assert.ok(Math.abs(parsed.triangles[0].metallic - 0.92) < 1e-4)
+  assert.ok(Math.abs(parsed.triangles[0].roughness - 0.14) < 1e-4)
+  assert.ok(Array.isArray(parsed.triangles[0].emissive) && parsed.triangles[0].emissive[0] === 255)
+  assert.equal(parsed.triangles[2].metallic, 1.0, 'glTF 2.0 omitted metallicFactor on pbrMetallicRoughness defaults to 1.0')
+
+  // 2. Full jsdom verification for Assets & Exports shot/GLB inspect jumps & Bridge Live Object Transform UI
+  const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
+    url: 'http://127.0.0.1:4567/',
+  })
+  const prevWindow = globalThis.window
+  const prevDocument = globalThis.document
+  const prevNavigator = globalThis.navigator
+  const prevHTMLElement = globalThis.HTMLElement
+  const prevFetch = globalThis.fetch
+  const prevRAF = globalThis.requestAnimationFrame
+  const prevCAF = globalThis.cancelAnimationFrame
+
+  const prevActEnv = globalThis.IS_REACT_ACT_ENVIRONMENT
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true
+  globalThis.window = dom.window
+  globalThis.document = dom.window.document
+  Object.defineProperty(globalThis, 'navigator', { value: dom.window.navigator, configurable: true })
+  globalThis.HTMLElement = dom.window.HTMLElement
+  globalThis.requestAnimationFrame = (cb) => setTimeout(cb, 0)
+  globalThis.cancelAnimationFrame = (id) => clearTimeout(id)
+
+  const apiCalls = []
+  globalThis.fetch = async (url, init = {}) => {
+    const method = (init.method || 'GET').toUpperCase()
+    const urlStr = String(url)
+    if (method === 'GET' && (urlStr.includes('kind=artifact') || urlStr.includes('kind=asset'))) {
+      return { ok: true, status: 200, arrayBuffer: async () => SYNTHETIC_GLB_AB.slice(0) }
+    }
+    const body = init.body ? JSON.parse(String(init.body)) : {}
+    apiCalls.push(body)
+    if (body.action === 'list') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          value: {
+            projects: [SAMPLE_PROJECT],
+            archivedProjects: [],
+            templates: [{ id: 'product-studio', zh: '产品影棚', en: 'Product Studio', recommendedEngine: 'EEVEE' }],
+            exemplars: SAMPLE_EXEMPLARS,
+            environment: SAMPLE_ENV,
+            jobs: [],
+          },
+        }),
+      }
+    }
+    if (body.action === 'get') {
+      return { ok: true, status: 200, json: async () => ({ ok: true, value: SAMPLE_PROJECT }) }
+    }
+    if (body.action === 'bridge_scene') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          value: {
+            ...SAMPLE_PROJECT.sceneSummary,
+            materialDetails: {
+              Mat_Hero_Body: { color: '#3B82F6', metallic: 0.04, roughness: 0.14 },
+              Mat_Studio_Stage: { color: '#C2C7D1', metallic: 0.0, roughness: 0.82 },
+            },
+            objects: [
+              { name: 'Product_Body', type: 'MESH', location: [0, 0, 1.04], rotationDeg: [18, -14, 30], scale: [1, 1, 1], vertices: 384, polygons: 338 },
+              ...SAMPLE_PROJECT.sceneSummary.objects.slice(1),
+            ],
+          },
+        }),
+      }
+    }
+    if (body.action === 'bridge_transform_object') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          value: {
+            object: { name: body.name, type: 'MESH', location: body.location, rotationDeg: body.rotationDeg, scale: [1, 1, 1] },
+            sceneSummary: SAMPLE_PROJECT.sceneSummary,
+          },
+        }),
+      }
+    }
+    return { ok: true, status: 200, json: async () => ({ ok: true, value: {} }) }
+  }
+
+  let root
+  const cleanups = []
+  t.after(async () => {
+    if (root) await act(async () => { root.unmount() })
+    for (const fn of cleanups.splice(0)) {
+      try { fn() } catch {}
+    }
+    dom.window.close()
+    globalThis.window = prevWindow
+    globalThis.document = prevDocument
+    Object.defineProperty(globalThis, 'navigator', { value: prevNavigator, configurable: true })
+    globalThis.HTMLElement = prevHTMLElement
+    globalThis.fetch = prevFetch
+    globalThis.requestAnimationFrame = prevRAF
+    globalThis.cancelAnimationFrame = prevCAF
+    globalThis.IS_REACT_ACT_ENVIRONMENT = prevActEnv
+  })
+
+  let loadedEntry
+  dom.window.__ModuleLoader__ = {
+    load(entry) {
+      loadedEntry = entry
+    },
+  }
+  runInNewContext(BUNDLE, {
+    window: dom.window,
+    document: dom.window.document,
+    navigator: dom.window.navigator,
+    localStorage: dom.window.localStorage,
+    CustomEvent: dom.window.CustomEvent,
+    Event: dom.window.Event,
+    KeyboardEvent: dom.window.KeyboardEvent,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    fetch: globalThis.fetch,
+    crypto: globalThis.crypto,
+    AbortController,
+    URL,
+    URLSearchParams,
+    TextEncoder,
+    TextDecoder,
+    ArrayBuffer,
+    Uint8Array,
+    Uint16Array,
+    Uint32Array,
+    Float32Array,
+    Int32Array,
+    DataView,
+    setTimeout,
+    clearTimeout,
+    setInterval: () => 0,
+    clearInterval() {},
+    requestAnimationFrame: () => 0,
+    cancelAnimationFrame() {},
+    console,
+  })
+  assert.ok(loadedEntry, 'client bundle loaded via __ModuleLoader__.load')
+  const plugin = loadedEntry.factory((name) => {
+    if (name === 'react') return React
+    throw new Error('Module not mounted: ' + name)
+  })
+  const registrations = []
+  const enLocale = { getSnapshot: () => ({ active: 'en-US' }) }
+  const hostCtx = {
+    locale: enLocale,
+    get: () => enLocale,
+    effect(fn) {
+      const dispose = fn?.()
+      if (typeof dispose === 'function') cleanups.push(dispose)
+    },
+    slots: {
+      inject(_name, fn) { fn() },
+      register(meta, component) {
+        registrations.push({ meta, component })
+        return () => {}
+      },
+    },
+    inject(_deps, fn) { fn(hostCtx) },
+    plugin(def) {
+      def?.apply?.(hostCtx)
+      return { dispose() {} }
+    },
+  }
+  hostCtx.root = hostCtx
+  plugin.apply(hostCtx)
+
+  const mainSlot = registrations.find((r) => r.meta.name === 'main')
+  assert.ok(mainSlot, 'main slot registered')
+  const container = dom.window.document.getElementById('root')
+  root = createRoot(container)
+
+  await act(async () => {
+    root.render(React.createElement(mainSlot.component, { workbench: true, locale: enLocale }))
+    await new Promise((r) => setTimeout(r, 40))
+  })
+
+  // Open SAMPLE_PROJECT
+  const openBtn = container.querySelector('button.w-row-button')
+  assert.ok(openBtn, 'Open project button found')
+  await act(async () => {
+    openBtn.click()
+    await new Promise((r) => setTimeout(r, 40))
+  })
+
+  // Check corrected shortcut bar ("1–6") & side_profile 70mm in bundle
+  assert.match(container.querySelector('[data-shortcut-bar="true"]')?.textContent || '', /1–6/)
+  assert.match(BUNDLE, /Side Profile · 70mm/)
+  assert.doesNotMatch(BUNDLE, /Side Profile · 50mm/)
+
+  // Switch to Assets & Exports -> verify Shots filter pill, shot thumbnails & Inspect button, and GLB Inspect 3D button
+  const assetsTab = [...container.querySelectorAll('.dsh-header [role="tab"]')].find((el) => /Assets/.test(el.textContent || ''))
+  assert.ok(assetsTab)
+  await act(async () => {
+    assetsTab.click()
+    await new Promise((r) => setTimeout(r, 30))
+  })
+  const shotsFilterPill = [...container.querySelectorAll('.bl-filter-pills button')].find((b) => /^Shots$/.test((b.textContent || '').trim()))
+  assert.ok(shotsFilterPill, 'Assets & Exports renders Shots filter pill')
+
+  const inspectGlbArtBtn = container.querySelector('button[data-action="inspect-glb-artifact"]')
+  assert.ok(inspectGlbArtBtn, 'Exported GLB artifact row renders Inspect 3D button')
+  await act(async () => {
+    inspectGlbArtBtn.click()
+    await new Promise((r) => setTimeout(r, 50))
+  })
+  assert.ok(container.querySelector('[data-glb-viewer="true"]'), 'Clicking Inspect 3D on GLB artifact jumps directly to Studio 3D Mesh viewer')
+
+  // Jump back to Assets & Exports -> filter by Shots -> click Inspect on a shot artifact
+  const assetsTab2 = [...container.querySelectorAll('.dsh-header [role="tab"]')].find((el) => /Assets/.test(el.textContent || ''))
+  await act(async () => {
+    assetsTab2.click()
+    await new Promise((r) => setTimeout(r, 30))
+  })
+  const shotsPill2 = [...container.querySelectorAll('.bl-filter-pills button')].find((b) => /^Shots$/.test((b.textContent || '').trim()))
+  await act(async () => {
+    shotsPill2.click()
+  })
+  const shotThumbs = container.querySelectorAll('.bl-ae-thumb')
+  assert.ok(shotThumbs.length >= 2, 'Shot artifacts render preview thumbnails in Assets & Exports')
+  const inspectShotBtns = [...container.querySelectorAll('button[data-action="inspect-artifact"]')]
+  assert.ok(inspectShotBtns.length >= 2, 'Multiple shot artifact rows render Inspect buttons')
+  // Click the 2nd shot (low_dramatic / newer or non-first shot in filmstrip) and verify Studio actually selects THAT exact shot (not shot[0]!)
+  const secondShotRow = inspectShotBtns[1].closest('li')
+  const clickedShotLabel = secondShotRow?.textContent || ''
+  await act(async () => {
+    inspectShotBtns[1].click()
+    await new Promise((r) => setTimeout(r, 30))
+  })
+  assert.ok(container.querySelector('[data-shot-filmstrip="true"]'), 'Clicking Inspect on a shot artifact jumps directly to Studio Multi-Shot view')
+  const activeFilmstripBtn = container.querySelector('[data-shot-filmstrip="true"] button[aria-pressed="true"], [data-shot-filmstrip="true"] .is-active')
+  assert.ok(activeFilmstripBtn, 'Active shot button highlighted in filmstrip')
+  if (/Low Angle|Hero 3\/4|Macro/i.test(clickedShotLabel)) {
+    const expectedToken = /Low Angle/i.test(clickedShotLabel) ? /Low Angle/i : /Macro/i.test(clickedShotLabel) ? /Macro/i : /Hero 3\/4/i
+    assert.match(activeFilmstripBtn.textContent || '', expectedToken, 'Studio must select the exact shot clicked in Assets & Exports without mount-effect overwrite')
+  }
+
+  // Switch to Bridge & Env -> pull live scene -> verify corrected walkthrough, synced Metallic slider, and 3-axis Live Object Transform preservation
+  const bridgeTab = [...container.querySelectorAll('.dsh-header [role="tab"]')].find((el) => /Bridge & Env/.test(el.textContent || ''))
+  await act(async () => {
+    bridgeTab.click()
+    await new Promise((r) => setTimeout(r, 30))
+  })
+  const guideText = container.querySelector('.bl-guide-steps')?.textContent || ''
+  assert.match(guideText, /DSH Blender Bridge/)
+  assert.match(guideText, /DSH Bridge/)
+  assert.match(guideText, /Start DSH Bridge/)
+
+  const pullBtn = [...container.querySelectorAll('.bl-bridge-ops button')].find((b) => /Pull Live Scene/.test(b.textContent || ''))
+  assert.ok(pullBtn)
+  await act(async () => {
+    pullBtn.click()
+    await new Promise((r) => setTimeout(r, 30))
+  })
+  const metallicSlider = container.querySelector('[data-bridge-mat-metallic="true"]')
+  assert.ok(metallicSlider, 'Metallic slider rendered on Live Material Repaint card')
+  assert.ok(Math.abs(Number(metallicSlider.value) - 0.04) < 0.02, `Metallic slider synced to Mat_Hero_Body (0.04), got ${metallicSlider.value}`)
+  assert.ok(container.querySelector('[data-bridge-obj-rx="true"]'), 'Rot X° input rendered')
+  assert.ok(container.querySelector('[data-bridge-obj-ry="true"]'), 'Rot Y° input rendered')
+  const txBtn = container.querySelector('button[data-action="bridge-transform-object"]')
+  assert.ok(txBtn && !txBtn.disabled, 'Apply Transform button enabled after pulling live scene')
+  await act(async () => {
+    txBtn.click()
+    await new Promise((r) => setTimeout(r, 30))
+  })
+  const txCall = apiCalls.find((c) => c.action === 'bridge_transform_object' && c.name === 'Product_Body')
+  assert.ok(txCall, 'Apply Transform invokes POST { action: "bridge_transform_object" }')
+  assert.deepEqual(txCall.rotationDeg, [18, -14, 30], 'Live Object Transform preserves full 3-axis X/Y/Z rotation instead of zeroing X/Y')
+  // Clearing a coordinate input must disable Apply Transform instead of coercing "" -> 0
+  const locXInput = container.querySelector('[data-bridge-obj-x="true"]')
+  assert.ok(locXInput)
+  const locXPropsKey = Object.keys(locXInput).find((k) => k.startsWith('__reactProps'))
+  assert.ok(locXPropsKey && typeof locXInput[locXPropsKey]?.onChange === 'function', 'React onChange handler present on X coordinate input')
+  await act(async () => {
+    locXInput[locXPropsKey].onChange({ target: { value: '' } })
+    await new Promise((r) => setTimeout(r, 20))
+  })
+  assert.equal(container.querySelector('button[data-action="bridge-transform-object"]')?.disabled, true, 'Empty coordinate input disables Apply Transform')
+  await act(async () => {
+    locXInput[locXPropsKey].onChange({ target: { value: '1.25' } })
+    await new Promise((r) => setTimeout(r, 20))
+  })
+  assert.equal(container.querySelector('button[data-action="bridge-transform-object"]')?.disabled, false, 'Valid finite coordinate re-enables Apply Transform')
+  const enDirectText = container.querySelector('[data-bridge-direct="true"]')?.textContent || ''
+  assert.doesNotMatch(enDirectText, /[\u3400-\u9fff]/, 'en-US Live Bridge Direct Controls (with Object Transform + Metallic) contain zero Chinese characters')
+})

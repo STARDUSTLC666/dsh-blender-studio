@@ -369,9 +369,32 @@ function transformPointGltfToBlenderZUp(m, x, y, z) {
 }
 
 function transformNormalGltfToBlenderZUp(m, nx, ny, nz) {
-  const gx = m[0] * nx + m[4] * ny + m[8] * nz;
-  const gy = m[1] * nx + m[5] * ny + m[9] * nz;
-  const gz = m[2] * nx + m[6] * ny + m[10] * nz;
+  // Use the cofactor matrix (proportional to inverse-transpose of the upper-left 3x3)
+  // so normals remain perpendicular to surfaces even under non-uniform or mirrored scale.
+  const a00 = m[0], a01 = m[4], a02 = m[8];
+  const a10 = m[1], a11 = m[5], a12 = m[9];
+  const a20 = m[2], a21 = m[6], a22 = m[10];
+  const c00 = a11 * a22 - a12 * a21;
+  const c01 = a12 * a20 - a10 * a22;
+  const c02 = a10 * a21 - a11 * a20;
+  const c10 = a02 * a21 - a01 * a22;
+  const c11 = a00 * a22 - a02 * a20;
+  const c12 = a01 * a20 - a00 * a21;
+  const c20 = a01 * a12 - a02 * a11;
+  const c21 = a02 * a10 - a00 * a12;
+  const c22 = a00 * a11 - a01 * a10;
+  const det = a00 * c00 + a01 * c01 + a02 * c02;
+  let gx, gy, gz;
+  if (Math.abs(det) > 1e-10) {
+    const sign = det < 0 ? -1 : 1;
+    gx = (c00 * nx + c01 * ny + c02 * nz) * sign;
+    gy = (c10 * nx + c11 * ny + c12 * nz) * sign;
+    gz = (c20 * nx + c21 * ny + c22 * nz) * sign;
+  } else {
+    gx = a00 * nx + a01 * ny + a02 * nz;
+    gy = a10 * nx + a11 * ny + a12 * nz;
+    gz = a20 * nx + a21 * ny + a22 * nz;
+  }
   const bx = gx;
   const by = -gz;
   const bz = gy;
@@ -471,14 +494,43 @@ function parseGlbMesh(input, options = {}) {
     return out;
   }
 
-  function materialRgb(matIdx) {
+  function materialProps(matIdx) {
     const mat = matIdx !== undefined ? materials[matIdx] : null;
-    const factor = mat?.pbrMetallicRoughness?.baseColorFactor;
-    if (Array.isArray(factor) && factor.length >= 3) {
-      const toSrgb = c => Math.max(24, Math.min(248, Math.round(Math.pow(Math.max(0, Math.min(1, Number(c) || 0)), 1 / 2.2) * 255)));
-      return [toSrgb(factor[0]), toSrgb(factor[1]), toSrgb(factor[2])];
-    }
-    return [192, 204, 220];
+    const pbr = mat?.pbrMetallicRoughness;
+    const factor = pbr?.baseColorFactor;
+    const toSrgb = c => Math.max(20, Math.min(248, Math.round(Math.pow(Math.max(0, Math.min(1, Number(c) || 0)), 1 / 2.2) * 255)));
+    const rgb =
+      Array.isArray(factor) && factor.length >= 3
+        ? [toSrgb(factor[0]), toSrgb(factor[1]), toSrgb(factor[2])]
+        : [192, 204, 220];
+    // Per glTF 2.0 spec, omitted metallicFactor on a pbrMetallicRoughness material defaults to 1.0
+    // (Blender's glTF exporter omits metallicFactor when Metallic == 1.0).
+    const metallic =
+      pbr && typeof pbr.metallicFactor === 'number' && Number.isFinite(pbr.metallicFactor)
+        ? Math.max(0, Math.min(1, pbr.metallicFactor))
+        : pbr && !pbr.metallicRoughnessTexture
+        ? 1.0
+        : 0.12;
+    const roughness =
+      pbr && typeof pbr.roughnessFactor === 'number' && Number.isFinite(pbr.roughnessFactor)
+        ? Math.max(0.04, Math.min(1, pbr.roughnessFactor))
+        : 0.52;
+    const em = mat?.emissiveFactor;
+    const emissive =
+      Array.isArray(em) && em.length >= 3 && (Number(em[0]) > 0.02 || Number(em[1]) > 0.02 || Number(em[2]) > 0.02)
+        ? [
+            Math.min(255, Math.round(Math.pow(Math.max(0, Math.min(1, Number(em[0]) || 0)), 1 / 2.2) * 255)),
+            Math.min(255, Math.round(Math.pow(Math.max(0, Math.min(1, Number(em[1]) || 0)), 1 / 2.2) * 255)),
+            Math.min(255, Math.round(Math.pow(Math.max(0, Math.min(1, Number(em[2]) || 0)), 1 / 2.2) * 255)),
+          ]
+        : null;
+    return {
+      rgb,
+      metallic,
+      roughness,
+      emissive,
+      matKey: matIdx !== undefined && matIdx !== null ? Number(matIdx) : -1,
+    };
   }
 
   // Collect (meshIndex, worldMatrix) from active scene node graph
@@ -533,13 +585,14 @@ function parseGlbMesh(input, options = {}) {
   let vertexCount = 0;
   let totalTriangles = 0;
 
-  // Pass 1: gather world-transformed triangles and exact bounding box
+  // Pass 1: gather world-transformed triangles (supports TRIANGLES=4, TRIANGLE_STRIP=5, TRIANGLE_FAN=6) and exact bounds
   const rawTris = [];
   for (const inst of activeInstances) {
     const mesh = meshes[inst.meshIndex];
     if (!mesh || !Array.isArray(mesh.primitives)) continue;
     for (const prim of mesh.primitives) {
-      if (prim.mode !== undefined && prim.mode !== 4) continue;
+      const primMode = prim.mode === undefined ? 4 : prim.mode;
+      if (primMode !== 4 && primMode !== 5 && primMode !== 6) continue;
       const posIdx = prim.attributes?.POSITION;
       if (posIdx === undefined) continue;
       const posArr = readVec3(posIdx);
@@ -548,7 +601,7 @@ function parseGlbMesh(input, options = {}) {
       vertexCount += vCount;
       const normArr = prim.attributes?.NORMAL !== undefined ? readVec3(prim.attributes.NORMAL) : null;
       const idxArr = prim.indices !== undefined ? readIndices(prim.indices) : null;
-      const rgb = materialRgb(prim.material);
+      const mat = materialProps(prim.material);
 
       const transformedPts = new Array(vCount);
       for (let i = 0; i < vCount; i++) {
@@ -562,17 +615,42 @@ function parseGlbMesh(input, options = {}) {
         if (pt[2] > maxZ) maxZ = pt[2];
       }
 
-      const triCount = idxArr ? Math.floor(idxArr.length / 3) : Math.floor(vCount / 3);
-      totalTriangles += triCount;
+      const elemCount = idxArr ? idxArr.length : vCount;
+      const triCount =
+        primMode === 4
+          ? Math.floor(elemCount / 3)
+          : elemCount >= 3
+          ? elemCount - 2
+          : 0;
 
       for (let t = 0; t < triCount; t++) {
-        const i0 = idxArr ? idxArr[t * 3] : t * 3;
-        const i1 = idxArr ? idxArr[t * 3 + 1] : t * 3 + 1;
-        const i2 = idxArr ? idxArr[t * 3 + 2] : t * 3 + 2;
+        let i0, i1, i2;
+        if (primMode === 4) {
+          i0 = idxArr ? idxArr[t * 3] : t * 3;
+          i1 = idxArr ? idxArr[t * 3 + 1] : t * 3 + 1;
+          i2 = idxArr ? idxArr[t * 3 + 2] : t * 3 + 2;
+        } else if (primMode === 5) {
+          // TRIANGLE_STRIP: alternate winding on odd triangles to keep consistent outward normals
+          const a = idxArr ? idxArr[t] : t;
+          const b = idxArr ? idxArr[t + 1] : t + 1;
+          const c = idxArr ? idxArr[t + 2] : t + 2;
+          if ((t & 1) === 0) {
+            i0 = a; i1 = b; i2 = c;
+          } else {
+            i0 = b; i1 = a; i2 = c;
+          }
+        } else {
+          // TRIANGLE_FAN
+          i0 = idxArr ? idxArr[0] : 0;
+          i1 = idxArr ? idxArr[t + 1] : t + 1;
+          i2 = idxArr ? idxArr[t + 2] : t + 2;
+        }
+        if (i0 === i1 || i1 === i2 || i2 === i0) continue;
         const p0 = transformedPts[i0];
         const p1 = transformedPts[i1];
         const p2 = transformedPts[i2];
         if (!p0 || !p1 || !p2) continue;
+        totalTriangles += 1;
 
         let normal;
         if (normArr && i0 * 3 + 2 < normArr.length && i1 * 3 + 2 < normArr.length && i2 * 3 + 2 < normArr.length) {
@@ -593,7 +671,17 @@ function parseGlbMesh(input, options = {}) {
           const nLen = Math.hypot(nx, ny, nz) || 1;
           normal = [nx / nLen, ny / nLen, nz / nLen];
         }
-        rawTris.push({ p0, p1, p2, normal, rgb });
+        rawTris.push({
+          p0,
+          p1,
+          p2,
+          normal,
+          rgb: mat.rgb,
+          metallic: mat.metallic,
+          roughness: mat.roughness,
+          emissive: mat.emissive,
+          matKey: mat.matKey,
+        });
       }
     }
   }
@@ -628,18 +716,22 @@ function parseGlbMesh(input, options = {}) {
       pts: [normPt(tri.p0), normPt(tri.p1), normPt(tri.p2)],
       normal: tri.normal,
       rgb: tri.rgb,
+      metallic: tri.metallic,
+      roughness: tri.roughness,
+      emissive: tri.emissive,
       layer: 2,
     }));
   } else {
-    // Rossignac-Borrel spatial vertex-clustering decimation: keeps surfaces solid & watertight with zero speckle holes!
+    // Material-aware Rossignac-Borrel spatial vertex-clustering decimation:
+    // keeps surfaces solid & watertight while preserving crisp material boundaries.
     const clusterAt = gridRes => {
       const cellSize = 3.45 / gridRes;
       const accum = new Map();
-      const keyOf = np => {
+      const keyOf = (matKey, np) => {
         const ix = Math.round(np[0] / cellSize);
         const iy = Math.round(np[1] / cellSize);
         const iz = Math.round(np[2] / cellSize);
-        return ix + ',' + iy + ',' + iz;
+        return matKey + ':' + ix + ',' + iy + ',' + iz;
       };
       const mapped = new Array(rawTris.length);
       for (let i = 0; i < rawTris.length; i++) {
@@ -647,9 +739,9 @@ function parseGlbMesh(input, options = {}) {
         const a = normPt(tri.p0);
         const b = normPt(tri.p1);
         const c = normPt(tri.p2);
-        const ka = keyOf(a);
-        const kb = keyOf(b);
-        const kc = keyOf(c);
+        const ka = keyOf(tri.matKey, a);
+        const kb = keyOf(tri.matKey, b);
+        const kc = keyOf(tri.matKey, c);
         const addPt = (k, pt) => {
           let cell = accum.get(k);
           if (!cell) {
@@ -665,7 +757,16 @@ function parseGlbMesh(input, options = {}) {
         addPt(kb, b);
         addPt(kc, c);
         if (ka !== kb && kb !== kc && kc !== ka) {
-          mapped[i] = { ka, kb, kc, rgb: tri.rgb, normal: tri.normal };
+          mapped[i] = {
+            ka,
+            kb,
+            kc,
+            rgb: tri.rgb,
+            metallic: tri.metallic,
+            roughness: tri.roughness,
+            emissive: tri.emissive,
+            normal: tri.normal,
+          };
         }
       }
       const centroid = new Map();
@@ -699,6 +800,9 @@ function parseGlbMesh(input, options = {}) {
           pts: [p0, p1, p2],
           normal: [nx / area2, ny / area2, nz / area2],
           rgb: m.rgb,
+          metallic: m.metallic,
+          roughness: m.roughness,
+          emissive: m.emissive,
           area: area2,
           layer: 2,
         });
@@ -713,7 +817,15 @@ function parseGlbMesh(input, options = {}) {
       clustered.sort((a, b) => b.area - a.area);
       clustered = clustered.slice(0, maxTriangles);
     }
-    triangles = clustered.map(t => ({ pts: t.pts, normal: t.normal, rgb: t.rgb, layer: 2 }));
+    triangles = clustered.map(t => ({
+      pts: t.pts,
+      normal: t.normal,
+      rgb: t.rgb,
+      metallic: t.metallic,
+      roughness: t.roughness,
+      emissive: t.emissive,
+      layer: 2,
+    }));
   }
 
   return {
@@ -746,7 +858,21 @@ function BlenderStageCanvas({
   const internalCanvasRef = useRef(null);
   const canvasRef = canvasRefExternal || internalCanvasRef;
   const dragRef = useRef(null);
+  const [resizeTick, setResizeTick] = useState(0);
   const ratioCss = fields.aspect === 'portrait' ? '9 / 16' : fields.aspect === 'square' ? '1 / 1' : '16 / 9';
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const host = canvas?.parentElement || canvas;
+    if (!host || typeof ResizeObserver !== 'function') return undefined;
+    const ro = new ResizeObserver(() => setResizeTick(v => (v + 1) % 100000));
+    try {
+      ro.observe(host);
+    } catch {
+      return undefined;
+    }
+    return () => ro.disconnect();
+  }, [canvasRef]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -802,7 +928,11 @@ function BlenderStageCanvas({
     const sinP = Math.sin(pitch);
     const targetZ = glbMesh?.targetZ || 0.82;
     const camDist = 6.2 / Math.max(0.45, Math.min(2.6, orbit.zoom));
-    const scaleBase = Math.min(w, hVal) * (orbit.ortho ? 0.22 * orbit.zoom : 0.98);
+    const rawLens = Number(fields.lensMm);
+    const lensFactor = Number.isFinite(rawLens) && rawLens > 0 ? Math.max(0.48, Math.min(2.2, rawLens / 50)) : 1;
+    const scaleBase = Math.min(w, hVal) * (orbit.ortho ? 0.22 * orbit.zoom : 0.98 * lensFactor);
+    const rawEv = Number(fields.exposure);
+    const evGain = Number.isFinite(rawEv) ? Math.pow(2, Math.max(-3, Math.min(3, rawEv)) * 0.42) : 1;
 
     function toCamera(p) {
       const x = p[0];
@@ -938,26 +1068,34 @@ function BlenderStageCanvas({
         const fillDiff = Math.max(0, fnx * flx + fny * fly + fnz * flz);
         const rimDiff = Math.max(0, fnx * rlx + fny * rly + fnz * rlz);
         const fresnel = Math.pow(Math.max(0, 1 - ndotv), 2.2);
-        const spec = Math.pow(Math.max(0, (fnx * hkx + fny * hky + fnz * hkz) / hkLen), 24);
+        const rough = typeof face.roughness === 'number' ? face.roughness : 0.52;
+        const metal = typeof face.metallic === 'number' ? face.metallic : 0.12;
+        const shininess = Math.round(8 + (1 - rough) * (1 - rough) * 72);
+        const spec = Math.pow(Math.max(0, (fnx * hkx + fny * hky + fnz * hkz) / hkLen), shininess);
         const baseColor = glbShading === 'clay' ? clayRgb : face.rgb || clayRgb;
 
         if (glbShading === 'wireframe') {
           fill = 'rgba(24,32,48,0.22)';
           wire = 'rgba(96,165,250,0.75)';
         } else if (glbShading === 'clay') {
-          const clayFactor = Math.min(1.38, palette.ambient + 0.14 + keyDiff * 0.72 + fillDiff * 0.30 + rimDiff * 0.22);
+          const clayFactor = Math.min(1.45, (palette.ambient + 0.14 + keyDiff * 0.72 + fillDiff * 0.30 + rimDiff * 0.22) * evGain);
           const cr = Math.min(255, Math.round(clayRgb[0] * clayFactor + fresnel * 14));
           const cg = Math.min(255, Math.round(clayRgb[1] * clayFactor + fresnel * 16));
           const cb = Math.min(255, Math.round(clayRgb[2] * clayFactor + fresnel * 20));
           fill = `rgba(${cr},${cg},${cb},0.98)`;
           wire = 'rgba(15,23,42,0.10)';
         } else {
-          // 3-Light Studio Key + Cool Fill + Warm/Crisp Rim + Blinn-Phong Specular
-          const diff = Math.min(1.42, palette.ambient + 0.12 + keyDiff * 0.76 + fillDiff * 0.32 + rimDiff * 0.26);
-          const specBoost = spec * 92 + fresnel * 34;
-          const r = Math.max(0, Math.min(255, Math.round(baseColor[0] * diff + specBoost * 1.0 + fillDiff * 8)));
-          const g = Math.max(0, Math.min(255, Math.round(baseColor[1] * diff + specBoost * 0.98 + fillDiff * 14)));
-          const b = Math.max(0, Math.min(255, Math.round(baseColor[2] * diff + specBoost * 1.05 + fillDiff * 24 + rimDiff * 14)));
+          // PBR-aware 3-Light Studio Shading (metallic tint, roughness specular lobe, emissive glow & exposure EV)
+          const diffScale = 1 - metal * 0.35;
+          const diff = Math.min(1.5, (palette.ambient + 0.12 + keyDiff * 0.76 + fillDiff * 0.32 + rimDiff * 0.26) * diffScale * evGain);
+          const specStrength = (spec * (55 + (1 - rough) * 95) + fresnel * (24 + metal * 36)) * evGain;
+          const specR = 1 - metal + (baseColor[0] / 255) * metal;
+          const specG = 1 - metal + (baseColor[1] / 255) * metal;
+          const specB = 1 - metal + (baseColor[2] / 255) * metal;
+          const em = face.emissive;
+          const r = Math.max(0, Math.min(255, Math.round(baseColor[0] * diff + specStrength * specR + fillDiff * 8 + (em ? em[0] * 0.92 : 0))));
+          const g = Math.max(0, Math.min(255, Math.round(baseColor[1] * diff + specStrength * specG + fillDiff * 14 + (em ? em[1] * 0.92 : 0))));
+          const b = Math.max(0, Math.min(255, Math.round(baseColor[2] * diff + specStrength * specB + fillDiff * 24 + rimDiff * 14 + (em ? em[2] * 0.92 : 0))));
           fill = `rgba(${r},${g},${b},0.98)`;
           wire = glbShading === 'wire-overlay' ? 'rgba(15,23,42,0.34)' : fill;
         }
@@ -965,7 +1103,7 @@ function BlenderStageCanvas({
         const ndotl = Math.abs(nx * lx + ny * ly + nz * lz);
         const fillLight = Math.max(0, -nx * 0.45 + ny * 0.35 + nz * 0.35) * 0.28;
         const rim = Math.max(0, 1 - Math.abs(nz));
-        const intensity = palette.ambient + ndotl * 0.78 + fillLight;
+        const intensity = (palette.ambient + ndotl * 0.78 + fillLight) * evGain;
         fill = shadeFaceColor(fields.clayMode ? clayRgb : face.rgb, intensity, fields.clayMode ? 'clay_matte' : fields.materialPreset, rim);
         wire = !fields.clayMode && fields.materialPreset === 'toon_cel' ? 'rgba(15,23,42,0.72)' : face.wire;
       }
@@ -1151,7 +1289,7 @@ function BlenderStageCanvas({
     }
 
     return undefined;
-  }, [fields.template, fields.accentColor, fields.lightingPreset, fields.materialPreset, fields.transparentBg, fields.clayMode, fields.headline, fields.aspect, orbit.yaw, orbit.pitch, orbit.zoom, orbit.ortho, orbit.panX, orbit.panY, framePhase, glbMesh, glbShading]);
+  }, [fields.template, fields.accentColor, fields.lightingPreset, fields.materialPreset, fields.transparentBg, fields.clayMode, fields.lensMm, fields.exposure, fields.headline, fields.aspect, orbit.yaw, orbit.pitch, orbit.zoom, orbit.ortho, orbit.panX, orbit.panY, framePhase, glbMesh, glbShading, resizeTick]);
 
   function onPointerDown(event) {
     const isPan = event.button === 2 || Boolean(event.shiftKey);
@@ -1341,7 +1479,7 @@ const SHOT_PRESET_LABELS = {
   hero_3q: { zh: '主 3/4 · 58mm', en: 'Hero 3/4 · 58mm' },
   low_dramatic: { zh: '低角度 · 35mm', en: 'Low Angle · 35mm' },
   macro_dof: { zh: '微距景深 · 85mm', en: 'Macro DoF · 85mm' },
-  side_profile: { zh: '正侧面 · 50mm', en: 'Side Profile · 50mm' },
+  side_profile: { zh: '正侧面 · 70mm', en: 'Side Profile · 70mm' },
   top_plan: { zh: '俯视工程图', en: 'Top Plan' },
 };
 
@@ -1356,12 +1494,13 @@ function formatShotLabel(art, lang) {
   return art.shotId ? String(art.shotId) : lang === 'en' ? 'Shot' : '分镜';
 }
 
-function BlenderCompareViewer({ project, imageArtifacts, initialPair = null, lang = 'zh', t }) {
+function BlenderCompareViewer({ project, imageArtifacts, initialPair = null, aspect = 'landscape', lang = 'zh', t }) {
   const [leftId, setLeftId] = useState(() => initialPair?.leftId || imageArtifacts[1]?.id || imageArtifacts[0]?.id || '');
   const [rightId, setRightId] = useState(() => initialPair?.rightId || imageArtifacts[0]?.id || '');
   const [splitPct, setSplitPct] = useState(50);
   const stageRef = useRef(null);
   const draggingRef = useRef(false);
+  const ratioCss = aspect === 'portrait' ? '9 / 16' : aspect === 'square' ? '1 / 1' : '16 / 9';
 
   useEffect(() => {
     if (initialPair?.leftId) setLeftId(initialPair.leftId);
@@ -1471,6 +1610,8 @@ function BlenderCompareViewer({ project, imageArtifacts, initialPair = null, lan
         ref: stageRef,
         className: 'bl-compare-stage',
         'data-compare-stage': 'true',
+        'data-aspect': aspect,
+        style: { aspectRatio: ratioCss },
         onPointerDown: e => {
           if (e.target === stageRef.current || e.target.tagName === 'IMG') updateFromClientX(e.clientX);
         },
@@ -1635,6 +1776,7 @@ function BlenderStudioPanel({
   onOpenExport,
   setEditorTab,
   perform,
+  studioFocus = null,
   controlId,
   lang,
   t,
@@ -1649,8 +1791,8 @@ function BlenderStudioPanel({
   const [pipelineTier, setPipelineTier] = useState('studio');
   const [checkpointNote, setCheckpointNote] = useState('');
   const [glbShading, setGlbShading] = useState('shaded');
-  const [selectedGlbKey, setSelectedGlbKey] = useState('');
-  const [selectedShotId, setSelectedShotId] = useState('');
+  const [selectedGlbKey, setSelectedGlbKey] = useState(() => studioFocus?.glbKey || '');
+  const [selectedShotId, setSelectedShotId] = useState(() => studioFocus?.shotId || '');
   const [comparePair, setComparePair] = useState(null);
   const [glbState, setGlbState] = useState({ key: '', loading: false, error: '', mesh: null });
   const glbCacheRef = useRef(new Map());
@@ -1679,10 +1821,19 @@ function BlenderStudioPanel({
     : [];
 
   useEffect(() => {
+    if (studioFocus?.shotId) setSelectedShotId(studioFocus.shotId);
+    if (studioFocus?.glbKey) setSelectedGlbKey(studioFocus.glbKey);
+  }, [studioFocus?.nonce, studioFocus?.shotId, studioFocus?.glbKey]);
+
+  useEffect(() => {
     if (shotArtifacts.length > 0 && !shotArtifacts.some(s => s.id === selectedShotId)) {
-      setSelectedShotId(shotArtifacts[0].id);
+      const preferred =
+        studioFocus?.shotId && shotArtifacts.some(s => s.id === studioFocus.shotId)
+          ? studioFocus.shotId
+          : shotArtifacts[0].id;
+      setSelectedShotId(preferred);
     }
-  }, [shotArtifacts, selectedShotId]);
+  }, [shotArtifacts, selectedShotId, studioFocus?.shotId]);
 
   useEffect(() => {
     const preset = CAMERA_PRESET_ANGLES[fields.cameraPreset];
@@ -2110,7 +2261,7 @@ function BlenderStudioPanel({
               )
           : stageView === 'compare'
           ? imageArtifacts.length >= 2
-            ? h(BlenderCompareViewer, { project, imageArtifacts, initialPair: comparePair, lang, t })
+            ? h(BlenderCompareViewer, { project, imageArtifacts, initialPair: comparePair, aspect: fields.aspect, lang, t })
             : h(
                 'div',
                 { className: 'bl-artifact-empty' },
@@ -2470,7 +2621,7 @@ function BlenderStudioPanel({
         { className: 'bl-shortcut-bar', 'data-shortcut-bar': 'true' },
         h('span', { className: 'bl-kbd-item' }, h('kbd', null, 'Space'), ' ', t('转台', 'Turntable')),
         h('span', { className: 'bl-kbd-sep', 'aria-hidden': 'true' }, '·'),
-        h('span', { className: 'bl-kbd-item' }, h('kbd', null, '1–5'), ' ', t('切换视图', 'Views')),
+        h('span', { className: 'bl-kbd-item' }, h('kbd', null, '1–6'), ' ', t('切换视图', 'Views')),
         h('span', { className: 'bl-kbd-sep', 'aria-hidden': 'true' }, '·'),
         h('span', { className: 'bl-kbd-item' }, h('kbd', null, 'R'), ' ', t('重置视角', 'Reset Cam')),
         h('span', { className: 'bl-kbd-sep', 'aria-hidden': 'true' }, '·'),

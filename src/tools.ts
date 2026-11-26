@@ -244,6 +244,10 @@ export function registerBlenderTools(
         scriptMode: { type: 'string', enum: [...BLENDER_SCRIPT_MODES], description: 'update_script 时的脚本模式' },
         customScript: { type: 'string', description: 'update_script 时的自定义 bpy Python 脚本（≤256 KB）' },
         allowUnsafe: { type: 'boolean', description: 'inspect_scene 时若包含高危脚本调用是否显式放行' },
+        wait: {
+          type: 'boolean',
+          description: 'inspect_scene 时设为 true 同步等待场景检查结束并直接返回 QC-3D 体检报告（默认 false）',
+        },
         fields: {
           type: 'object',
           description: '工程字段（create 时至少提供 title；update 时可部分更新）',
@@ -299,7 +303,11 @@ export function registerBlenderTools(
           lines.push(value.environment?.ready ? `Blender 环境就绪（${value.environment.active?.version}）。` : '本机 Blender 尚未配置或检测到。')
         } else if (value?.state && value?.kind) {
           lines.push(`场景检查任务：${value.state}（任务 ID: ${value.id}）`, value.stage || '')
+          if (value.error) lines.push(`错误：${value.error}`)
           if (value.sceneSummary) lines.push(...formatSceneSummaryLines(value.sceneSummary))
+          if (value.state === 'failed' && Array.isArray(value.lines) && value.lines.length) {
+            lines.push('最近日志：\n' + value.lines.slice(-6).join('\n'))
+          }
         } else if (value?.title && value?.id) {
           lines.push(
             `工程：${value.title}（v${value.revision} · ${value.template} · ${value.engine} ${value.samples}spp）`,
@@ -333,10 +341,16 @@ export function registerBlenderTools(
         case 'create':
         case 'get':
         case 'update':
-        case 'inspect_scene':
         case 'archive':
         case 'restore':
           return callWorkbenchPost(workbench, args)
+        case 'inspect_scene': {
+          const res = await callWorkbenchPost(workbench, args)
+          if (args.wait === true && res?.id && res?.state === 'running') {
+            return workbench.waitForJob(res.id)
+          }
+          return res
+        }
         case 'create_from_exemplar':
           return callWorkbenchPost(workbench, {
             action: 'create_from_exemplar',
@@ -441,6 +455,11 @@ export function registerBlenderTools(
         },
         frame: { type: 'number', description: '静帧、分镜或四视角渲染的目标帧号（可选）' },
         allowUnsafe: { type: 'boolean', description: '是否显式允许执行包含高危调用的自定义脚本' },
+        wait: {
+          type: 'boolean',
+          description:
+            '设为 true 时同步等待渲染/导出/分镜/全流程任务结束并直接返回成品路径与 QC-3D 报告（默认 false，立即异步返回任务 ID）',
+        },
       },
       required: ['action'],
     },
@@ -535,7 +554,18 @@ export function registerBlenderTools(
       if (args.action === 'export_model') {
         validateExportFormat(args.format)
       }
-      const res = await callWorkbenchPost(workbench, args)
+      let res = await callWorkbenchPost(workbench, args)
+      const asyncActions = [
+        'preview_still',
+        'contact_sheet',
+        'render_shots',
+        'render_animation',
+        'export_model',
+        'pipeline',
+      ]
+      if (args.wait === true && asyncActions.includes(args.action) && res?.id && res?.state === 'running') {
+        res = await workbench.waitForJob(res.id)
+      }
       if (res?.state === 'done' && res.projectId) {
         const enriched: Record<string, any> = { ...res }
         if (res.artifactId) {
@@ -600,12 +630,27 @@ export function registerBlenderTools(
         code: { type: 'string', description: '待校验或执行的 bpy Python 代码' },
         id: { type: 'string', description: '工程 UUID（patch / run_headless 必填；validate 可选）' },
         revision: { type: 'number', description: '工程修订号（patch 建议传入乐观锁修订号；run_headless 可选）' },
-        find: { type: 'string', description: 'patch 动作：精确查找的原始脚本文本片段（非空）' },
-        replace: { type: 'string', description: 'patch 动作：替换后的新脚本文本片段' },
+        find: { type: 'string', description: 'patch 动作：精确查找的原始脚本文本片段（非空；与 edits 二选一）' },
+        replace: { type: 'string', description: 'patch 动作：替换后的新脚本文本片段（与 find 配对）' },
         replaceAll: { type: 'boolean', description: 'patch 动作：是否允许替换全部多处匹配（默认 false，匹配多处时报错防误改）' },
+        edits: {
+          type: 'array',
+          description:
+            'patch 动作：多处原子补丁列表（单次调用同时修改多个不连续片段，任一处失败整批回滚且仅保存一次快照）',
+          items: {
+            type: 'object',
+            properties: {
+              find: { type: 'string', description: '精确查找的原始脚本文本片段' },
+              replace: { type: 'string', description: '替换后的新脚本文本片段' },
+              replaceAll: { type: 'boolean', description: '是否替换全部多处匹配（默认 false）' },
+            },
+            required: ['find', 'replace'],
+          },
+        },
         note: { type: 'string', description: 'patch 动作：自动快照备注（可选）' },
         allowUnsafe: { type: 'boolean', description: '显式确认放行安全警告（默认 false）' },
         pushUndo: { type: 'boolean', description: 'run_bridge 执行后是否写入 Blender 撤销栈（默认 true）' },
+        wait: { type: 'boolean', description: 'run_headless 动作：设为 true 时等待脚本执行完成并直接返回输出与 QC-3D（默认 false）' },
       },
       required: ['action'],
     },
@@ -614,8 +659,12 @@ export function registerBlenderTools(
       render(_args: unknown, value: any) {
         const lines = ['Blender bpy 脚本工具']
         if (typeof value?.replacements === 'number' && value?.id) {
+          const hunkLabel =
+            typeof value?.appliedEdits === 'number' && value.appliedEdits > 1
+              ? `${value.appliedEdits} 组补丁 / 共替换 ${value.replacements} 处`
+              : `已替换 ${value.replacements} 处片段`
           lines.push(
-            `局部脚本补丁完成：已替换 ${value.replacements} 处片段 → 工程「${value.title}」已更新至 v${value.revision}（已自动保存先前快照）。`,
+            `局部脚本补丁完成：${hunkLabel} → 工程「${value.title}」已更新至 v${value.revision}（已自动保存先前快照）。`,
             `脚本长度：${value.customScript?.length ?? 0} 字符 · 静态安全检查：${value.safety?.safe ? '✅ 通过' : '⚠️ 已按 allowUnsafe 放行'}`,
           )
         } else if (typeof value?.safe === 'boolean' && Array.isArray(value?.findings)) {
@@ -625,8 +674,12 @@ export function registerBlenderTools(
           }
         } else if (value?.state && value?.id) {
           lines.push(`无头脚本任务：${value.state}（任务 ID: ${value.id}）`, value.stage || '')
+          if (value.error) lines.push(`错误：${value.error}`)
           if (value.scriptOutput) lines.push('输出：\n' + String(value.scriptOutput).slice(0, 1200))
           if (value.sceneSummary) lines.push(...formatSceneSummaryLines(value.sceneSummary))
+          if (value.state === 'failed' && Array.isArray(value.lines) && value.lines.length) {
+            lines.push('最近日志：\n' + value.lines.slice(-6).join('\n'))
+          }
         } else if (value?.sceneSummary || typeof value?.stdout === 'string') {
           lines.push('Live Bridge 脚本执行完成。')
           if (value.stdout) lines.push('stdout:\n' + String(value.stdout).slice(0, 1200))
@@ -655,20 +708,29 @@ export function registerBlenderTools(
             action: 'patch_script',
             id: blenderId(args.id),
             revision: args.revision,
-            find: args.find,
-            replace: args.replace,
-            replaceAll: args.replaceAll === true,
+            ...(Array.isArray(args.edits)
+              ? { edits: args.edits }
+              : {
+                  find: args.find,
+                  replace: args.replace,
+                  replaceAll: args.replaceAll === true,
+                }),
             note: typeof args.note === 'string' ? args.note : undefined,
             allowUnsafe: args.allowUnsafe === true,
           })
-        case 'run_headless':
-          return callWorkbenchPost(workbench, {
+        case 'run_headless': {
+          const res = await callWorkbenchPost(workbench, {
             action: 'run_script',
             id: blenderId(args.id),
             revision: args.revision,
             code: typeof args.code === 'string' ? args.code : undefined,
             allowUnsafe: args.allowUnsafe === true,
           })
+          if (args.wait === true && res?.id && res?.state === 'running') {
+            return workbench.waitForJob(res.id)
+          }
+          return res
+        }
         case 'run_bridge':
           return callWorkbenchPost(workbench, {
             action: 'bridge_execute',

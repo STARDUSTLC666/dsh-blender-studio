@@ -155,10 +155,18 @@ export interface BlenderSceneObjectSummary {
   name: string
   type: string
   location: [number, number, number]
+  rotationDeg?: [number, number, number]
+  scale?: [number, number, number]
   dimensions?: [number, number, number]
   materialCount?: number
   vertices?: number
   polygons?: number
+}
+
+export interface BlenderSceneMaterialDetail {
+  color?: string
+  metallic?: number
+  roughness?: number
 }
 
 export type BlenderSceneQcSeverity = 'error' | 'warn' | 'info'
@@ -188,6 +196,7 @@ export interface BlenderSceneSummary {
   totalPolygons: number
   activeCamera?: string
   materials: string[]
+  materialDetails?: Record<string, BlenderSceneMaterialDetail>
   collections: string[]
   objects: BlenderSceneObjectSummary[]
   qc?: BlenderSceneQcReport

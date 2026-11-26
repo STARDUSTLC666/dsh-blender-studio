@@ -30,16 +30,86 @@ function BlenderBridgeEnvPanel({
   const [directFstop, setDirectFstop] = useState('');
   const [directMatName, setDirectMatName] = useState('');
   const [directMatColor, setDirectMatColor] = useState('#3b82f6');
+  const [directMatMetallic, setDirectMatMetallic] = useState(0);
   const [directMatRoughness, setDirectMatRoughness] = useState(0.28);
+  const [directObjName, setDirectObjName] = useState('');
+  const [directLocX, setDirectLocX] = useState('0');
+  const [directLocY, setDirectLocY] = useState('0');
+  const [directLocZ, setDirectLocZ] = useState('0');
+  const [directRotX, setDirectRotX] = useState('0');
+  const [directRotY, setDirectRotY] = useState('0');
+  const [directRotZ, setDirectRotZ] = useState('0');
+  const [directRotActive, setDirectRotActive] = useState(false);
 
   const controlId = typeof React.useId === 'function' ? React.useId() : 'bl-be';
+  const lastSceneStampRef = useRef('');
+
+  function isFiniteCoord(v) {
+    const s = String(v ?? '').trim();
+    return s !== '' && Number.isFinite(Number(s));
+  }
+
+  function syncMaterialFields(matName, sceneObj) {
+    const det = sceneObj?.materialDetails?.[matName];
+    if (!det) return;
+    if (typeof det.color === 'string' && /^#[0-9a-f]{6}$/i.test(det.color)) {
+      setDirectMatColor(det.color.toLowerCase());
+    }
+    if (typeof det.metallic === 'number' && Number.isFinite(det.metallic)) {
+      setDirectMatMetallic(Math.max(0, Math.min(1, det.metallic)));
+    }
+    if (typeof det.roughness === 'number' && Number.isFinite(det.roughness)) {
+      setDirectMatRoughness(Math.max(0, Math.min(1, det.roughness)));
+    }
+  }
+
+  function syncObjectFields(objEntry) {
+    if (!objEntry) return;
+    if (Array.isArray(objEntry.location) && objEntry.location.length === 3) {
+      setDirectLocX(String(Number(objEntry.location[0]).toFixed(2)));
+      setDirectLocY(String(Number(objEntry.location[1]).toFixed(2)));
+      setDirectLocZ(String(Number(objEntry.location[2]).toFixed(2)));
+    }
+    if (Array.isArray(objEntry.rotationDeg) && objEntry.rotationDeg.length === 3) {
+      setDirectRotX(String(Number(objEntry.rotationDeg[0]).toFixed(1)));
+      setDirectRotY(String(Number(objEntry.rotationDeg[1]).toFixed(1)));
+      setDirectRotZ(String(Number(objEntry.rotationDeg[2]).toFixed(1)));
+      setDirectRotActive(true);
+    } else {
+      setDirectRotX('0');
+      setDirectRotY('0');
+      setDirectRotZ('0');
+      setDirectRotActive(false);
+    }
+  }
 
   useEffect(() => {
+    const stamp = liveScene?.capturedAt || '';
+    const sceneChanged = Boolean(stamp && stamp !== lastSceneStampRef.current);
+    if (sceneChanged) lastSceneStampRef.current = stamp;
+
     const mats = Array.isArray(liveScene?.materials) ? liveScene.materials : [];
-    if (mats.length > 0 && (!directMatName || !mats.includes(directMatName))) {
-      setDirectMatName(mats[0]);
+    if (mats.length > 0) {
+      if (!directMatName || !mats.includes(directMatName)) {
+        setDirectMatName(mats[0]);
+        syncMaterialFields(mats[0], liveScene);
+      } else if (sceneChanged) {
+        syncMaterialFields(directMatName, liveScene);
+      }
     }
-  }, [liveScene?.materials, directMatName]);
+
+    const objs = Array.isArray(liveScene?.objects) ? liveScene.objects : [];
+    if (objs.length > 0) {
+      const existing = directObjName ? objs.find(o => o.name === directObjName) : null;
+      if (!existing) {
+        const first = objs[0];
+        setDirectObjName(first.name);
+        syncObjectFields(first);
+      } else if (sceneChanged) {
+        syncObjectFields(existing);
+      }
+    }
+  }, [liveScene, directMatName, directObjName]);
 
   useEffect(() => {
     if (environment) {
@@ -271,8 +341,8 @@ function BlenderBridgeEnvPanel({
           'ol',
           { className: 'bl-guide-steps' },
           h('li', null, t('点击右上角「下载 dsh_blender_bridge.py」保存单文件插件（兼容 Blender 3.6 / 4.x / 5.x，零外部依赖）。', 'Download dsh_blender_bridge.py above (single file, zero dependencies, compatible with Blender 3.6–5.x).')),
-          h('li', null, t('打开桌面 Blender → Edit（编辑）→ Preferences（偏好设置）→ Add-ons（插件）→ 点击右上角下拉或 Install from Disk，选择该 .py 文件并勾选启用「DSH Blender Live Bridge」。', 'Open Blender → Edit → Preferences → Add-ons → Install from Disk → select dsh_blender_bridge.py and enable "DSH Blender Live Bridge".')),
-          h('li', null, t('在 3D 视口按快捷键 N 打开右侧栏，切换至「DSH」标签页，核对端口（默认 9876）与可选 Token 后点击「Start Bridge Server」。', 'Press N in the 3D Viewport, switch to the "DSH" tab, verify port 9876 (and optional token), then click "Start Bridge Server".')),
+          h('li', null, t('打开桌面 Blender → Edit（编辑）→ Preferences（偏好设置）→ Add-ons（插件）→ 点击右上角下拉或 Install from Disk，选择该 .py 文件并勾选启用「DSH Blender Bridge」。', 'Open Blender → Edit → Preferences → Add-ons → Install from Disk → select dsh_blender_bridge.py and enable "DSH Blender Bridge".')),
+          h('li', null, t('在 3D 视口按快捷键 N 打开右侧栏，切换至「DSH Bridge」标签页，核对端口（默认 9876）与可选 Token 后点击「Start DSH Bridge」。', 'Press N in the 3D Viewport, switch to the "DSH Bridge" tab, verify port 9876 (and optional token), then click "Start DSH Bridge".')),
           h('li', null, t('回到此处点击「测试连接」，即可实时拉取场景、抓取视口截图并同步 DSH 工程！', 'Return here and click "Test Connection" to inspect live scenes, grab viewport screenshots, and sync projects.')),
         ),
       ),
@@ -480,7 +550,11 @@ function BlenderBridgeEnvPanel({
                         id: controlId + '-dmat',
                         'data-bridge-mat-select': 'true',
                         value: directMatName,
-                        onChange: e => setDirectMatName(e.target.value),
+                        onChange: e => {
+                          const nextMat = e.target.value;
+                          setDirectMatName(nextMat);
+                          syncMaterialFields(nextMat, liveScene);
+                        },
                       },
                       liveScene.materials.map(m => h('option', { key: m, value: m }, m)),
                     )
@@ -504,6 +578,22 @@ function BlenderBridgeEnvPanel({
                   'data-bridge-mat-color': 'true',
                   value: directMatColor,
                   onChange: e => setDirectMatColor(e.target.value),
+                }),
+              ),
+              h(
+                'label',
+                { htmlFor: controlId + '-dmetal', className: 'bl-direct-lbl bl-direct-rough-field' },
+                t('金属度 ', 'Metallic ') + Number(directMatMetallic).toFixed(2),
+                h('input', {
+                  id: controlId + '-dmetal',
+                  type: 'range',
+                  min: 0,
+                  max: 1,
+                  step: 0.02,
+                  className: 'bl-tactile-slider',
+                  'data-bridge-mat-metallic': 'true',
+                  value: directMatMetallic,
+                  onChange: e => setDirectMatMetallic(Number(e.target.value)),
                 }),
               ),
               h(
@@ -536,6 +626,7 @@ function BlenderBridgeEnvPanel({
                         action: 'bridge_set_material',
                         materialName: String(directMatName).trim(),
                         color: directMatColor,
+                        metallic: Number(directMatMetallic),
                         roughness: Number(directMatRoughness),
                       });
                       if (res?.sceneSummary) setLiveScene(res.sceneSummary);
@@ -549,6 +640,171 @@ function BlenderBridgeEnvPanel({
                     }),
                 },
                 t('实时换色', 'Apply Material'),
+              ),
+            ),
+          ),
+          h(
+            'div',
+            { className: 'bl-direct-card' },
+            h('strong', { className: 'bl-direct-title' }, t('实时对象变换', 'Live Object Transform')),
+            h(
+              'div',
+              { className: 'bl-direct-row' },
+              h(
+                'label',
+                { htmlFor: controlId + '-dobj', className: 'bl-direct-lbl bl-direct-mat-field' },
+                t('目标对象', 'Object'),
+                Array.isArray(liveScene?.objects) && liveScene.objects.length > 0
+                  ? h(
+                      'select',
+                      {
+                        id: controlId + '-dobj',
+                        'data-bridge-obj-select': 'true',
+                        value: directObjName,
+                        onChange: e => {
+                          const nextName = e.target.value;
+                          setDirectObjName(nextName);
+                          const hit = liveScene.objects.find(o => o.name === nextName);
+                          if (hit) syncObjectFields(hit);
+                        },
+                      },
+                      liveScene.objects.map(o => h('option', { key: o.name, value: o.name }, o.name + ' (' + o.type + ')')),
+                    )
+                  : h('input', {
+                      id: controlId + '-dobj',
+                      type: 'text',
+                      'data-bridge-obj-select': 'true',
+                      placeholder: t('先点击「拉取实时场景」或直接输入对象名', 'Pull live scene or enter object name'),
+                      value: directObjName,
+                      onChange: e => {
+                        setDirectObjName(e.target.value);
+                        setDirectRotActive(false);
+                      },
+                    }),
+              ),
+              h(
+                'label',
+                { htmlFor: controlId + '-dlx', className: 'bl-direct-lbl bl-direct-coord-field' },
+                'X (m)',
+                h('input', {
+                  id: controlId + '-dlx',
+                  type: 'number',
+                  step: 0.1,
+                  'data-bridge-obj-x': 'true',
+                  value: directLocX,
+                  onChange: e => setDirectLocX(e.target.value),
+                }),
+              ),
+              h(
+                'label',
+                { htmlFor: controlId + '-dly', className: 'bl-direct-lbl bl-direct-coord-field' },
+                'Y (m)',
+                h('input', {
+                  id: controlId + '-dly',
+                  type: 'number',
+                  step: 0.1,
+                  'data-bridge-obj-y': 'true',
+                  value: directLocY,
+                  onChange: e => setDirectLocY(e.target.value),
+                }),
+              ),
+              h(
+                'label',
+                { htmlFor: controlId + '-dlz', className: 'bl-direct-lbl bl-direct-coord-field' },
+                'Z (m)',
+                h('input', {
+                  id: controlId + '-dlz',
+                  type: 'number',
+                  step: 0.1,
+                  'data-bridge-obj-z': 'true',
+                  value: directLocZ,
+                  onChange: e => setDirectLocZ(e.target.value),
+                }),
+              ),
+              h(
+                'label',
+                { htmlFor: controlId + '-drx', className: 'bl-direct-lbl bl-direct-coord-field' },
+                t('旋转 X°', 'Rot X°'),
+                h('input', {
+                  id: controlId + '-drx',
+                  type: 'number',
+                  step: 5,
+                  'data-bridge-obj-rx': 'true',
+                  value: directRotX,
+                  onChange: e => {
+                    setDirectRotX(e.target.value);
+                    setDirectRotActive(true);
+                  },
+                }),
+              ),
+              h(
+                'label',
+                { htmlFor: controlId + '-dry', className: 'bl-direct-lbl bl-direct-coord-field' },
+                t('旋转 Y°', 'Rot Y°'),
+                h('input', {
+                  id: controlId + '-dry',
+                  type: 'number',
+                  step: 5,
+                  'data-bridge-obj-ry': 'true',
+                  value: directRotY,
+                  onChange: e => {
+                    setDirectRotY(e.target.value);
+                    setDirectRotActive(true);
+                  },
+                }),
+              ),
+              h(
+                'label',
+                { htmlFor: controlId + '-drz', className: 'bl-direct-lbl bl-direct-coord-field' },
+                t('旋转 Z°', 'Rot Z°'),
+                h('input', {
+                  id: controlId + '-drz',
+                  type: 'number',
+                  step: 5,
+                  'data-bridge-obj-rz': 'true',
+                  value: directRotZ,
+                  onChange: e => {
+                    setDirectRotZ(e.target.value);
+                    setDirectRotActive(true);
+                  },
+                }),
+              ),
+              h(
+                W.Button,
+                {
+                  size: 'sm',
+                  variant: 'primary',
+                  icon: 'sliders',
+                  'data-action': 'bridge-transform-object',
+                  disabled:
+                    running ||
+                    bridgeWorking ||
+                    !String(directObjName || '').trim() ||
+                    !isFiniteCoord(directLocX) ||
+                    !isFiniteCoord(directLocY) ||
+                    !isFiniteCoord(directLocZ) ||
+                    (directRotActive &&
+                      (!isFiniteCoord(directRotX) ||
+                        !isFiniteCoord(directRotY) ||
+                        !isFiniteCoord(directRotZ))),
+                  onClick: () =>
+                    runBridgeAction(async () => {
+                      const payload = {
+                        action: 'bridge_transform_object',
+                        name: String(directObjName).trim(),
+                        location: [Number(directLocX), Number(directLocY), Number(directLocZ)],
+                        ...(directRotActive
+                          ? { rotationDeg: [Number(directRotX), Number(directRotY), Number(directRotZ)] }
+                          : {}),
+                      };
+                      const res = await api(payload);
+                      if (res?.sceneSummary) setLiveScene(res.sceneSummary);
+                      setNotice(
+                        t('已实时变换对象位置与朝向：', 'Transformed live object: ') + payload.name,
+                      );
+                    }),
+                },
+                t('应用变换', 'Apply Transform'),
               ),
             ),
           ),
@@ -951,6 +1207,7 @@ const BLENDER_BRIDGE_CSS = `
 .bl-direct-mat-field{flex:1 1 170px}
 .bl-direct-color-field{min-width:54px}
 .bl-direct-rough-field{flex:0 1 130px}
+.bl-direct-coord-field{min-width:68px;max-width:86px;flex:0 1 76px}
 .bl-active-env-box{display:flex;flex-direction:column;gap:8px;padding:12px 14px;border-radius:var(--dsw-radius-sm,9px);background:var(--w-bg);border:var(--dsh-control-border-width,1px) solid var(--w-border)}
 .bl-env-path{font-family:var(--dsh-font-mono,ui-monospace,monospace);font-size:12px;overflow-wrap:anywhere;color:var(--w-text)}
 .bl-cap-chips{display:flex;flex-wrap:wrap;gap:6px}

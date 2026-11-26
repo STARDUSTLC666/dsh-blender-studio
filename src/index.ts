@@ -5,8 +5,8 @@ import { installBlenderWorkbench } from './workbench.js'
 
 export { BlenderWorkbench, installBlenderWorkbench } from './workbench.js'
 export type { BlenderWorkbenchOptions, InstallBlenderWorkbenchOptions, StartJobOptions } from './workbench.js'
-export { applyScriptPatch, BlenderStore, validateAssetUpload, zipAsync } from './store.js'
-export type { PatchScriptOptions } from './store.js'
+export { applyScriptPatch, applyScriptPatches, BlenderStore, validateAssetUpload, zipAsync } from './store.js'
+export type { PatchScriptOptions, ScriptPatchEdit } from './store.js'
 export {
   BlenderEnvironment,
   buildExecutableInfo,

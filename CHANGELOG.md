@@ -2,6 +2,22 @@
 
 [返回简介](README.md) · [完整说明](docs/REFERENCE.zh.md) · [Live Bridge 指南](docs/BRIDGE.md) · [验证说明](docs/VALIDATION.md)
 
+## [0.5.0] - 2026-11-27
+
+- **Blender 3.6–5.x 引擎级画质、稳定性与导出全面升级**：
+  - **Cycles OPTIX/CUDA/CPU 安全白模覆写**：`dsh_render_clay_override()` 改用 `ShaderNodeLayerWeight + ValToRGB` 棚拍雕塑泥着色，彻底消除 `ShaderNodeAmbientOcclusion` 在部分 Cycles OPTIX GPU 驱动上的挂起风险。
+  - **EEVEE 4.2+/5.x 光追与无噪点玻璃**：自动开启 `use_raytracing` / `use_denoise` / `use_shadows` / `use_gtao` / `use_ssr`；`frosted_glass` 与 `dsh_mat_tinted_glass` 在 Cycles 下保留物理折射，在 EEVEE 下切换平滑 `BLENDED` 透明清漆玻璃，消除随机折射噪点；`dsh_setup_hero_studio` 同样支持自动接入上传 HDRI。
+  - **360° 无缝环形影棚与透明底智能去背**：`product-studio` 升级为 28 m 半径 360° 环形无缝影棚（法线向内 + 背面透明，任意 `render_shots` 焦段零遮挡）；开启 `transparentBg` 时自动隐藏背景板对象并输出 RGBA 透明 PNG。
+  - **洁净 3D 导出与 Blender 5.x 适配**：新增 RNA 属性安全过滤导出器 `_dsh_safe_export`（GLB 开启 `export_apply=True` / `export_yup=True` / `export_materials="EXPORT"`，FBX/OBJ/STL 自动烘焙修改器，`.blend` 自动 `pack_all()` + `compress=True`），导出 GLB/FBX/OBJ/STL 时自动剥离封闭式影棚背景（保留 `.blend` 完整舞台）；动画导出兼容 Blender 5.x `image_settings.media_type = "VIDEO" / "IMAGE"`；2×2 四视角拼图新增零外部依赖内置 `numpy` 高速路径（保留纯 Python 回退）；场景大纲与 `QC-3D` 改用 `evaluated_depsgraph` 统计修改器与 Geometry Nodes 真实面数，并消除 Geometry Nodes 对象的 `UNASSIGNED_MATERIAL` 误报。
+- **PBR 交互式 `.glb` 3D 网格视口 v3 与工作台体验升级**：
+  - 零外部依赖 Canvas `.glb` 查看器升级至 **v3**：支持 glTF `metallicFactor` / `roughnessFactor` / `emissiveFactor` PBR 三光源高光与自发光着色、**余子式法线矩阵（逆转置）**精确还原非均匀/镜像缩放法线、`TRIANGLE_STRIP` 与 `TRIANGLE_FAN` 图元、材质边界感知 Rossignac-Borrel 减面与 `ResizeObserver` 响应式重绘；实时 3D 舞台同步响应 `lensMm` 与 `exposure` EV。
+  - 导出 GLB 后自动聚焦并切入 3D 网格视图；「素材与成品」页新增「分镜」筛选标签、分镜缩略图与一键定位舞台跳转、以及已上传/导出 `.glb` 一键「3D 预览」；A/B 卷帘对比容器自动匹配工程画幅比例；快捷键条更新至 `1–6` 并修正 `side_profile` 焦段标注为 `70mm`。
+- **AI 代理工作流加速（原子多段补丁 + `wait: true`）与 Live Bridge (`0.5.0`)**：
+  - **原子多段 `patch_script`**：`POST patch_script`、`blender_script(action: 'patch')` 与 `BlenderStore.patchScriptEdits()` 支持 `edits: [{ find, replace, replaceAll? }]`（单次最多 50 处修改），执行写前静态安全检查、任一处失败整批回滚且仅保存 1 份快照。
+  - **同步等待 `wait: true` 与精准单调进度**：`blender_project(inspect_scene)`、`blender_render`（全部 6 个异步渲染/导出/全流程动作）与 `blender_script(run_headless)` 支持 `wait: true` 直接返回最终产物与 `QC-3D`（失败时附带错误与最近日志）；修正多机位分镜与四视角拼图逐镜/逐格单调进度映射与管道日志 `Saved:` 解析；`bridge_sync` 与源码备份 ZIP 完整应用 `dsh_apply_lookdev_overrides()`。
+  - **`dsh_blender_bridge.py` (`0.5.0`) 深度节点链材质回读/重绘与对象变换 UI**：支持跨越 `ColorRamp` / `RGB` / `Checker` / `Mix` / `HueSat` / 活跃 `Emission` / `Roughness MapRange` 节点链实时回读与重绘材质，返回 `rotationDeg` / `scale` / `materialDetails`；工作台「实时直控」新增**金属度滑块**与**3 轴实时对象变换（XYZ + 旋转）**面板（含场景刷新自动同步与空坐标防误触保护）。
+- **Engine Quality, PBR GLB Viewer v3, Atomic Patching, `wait: true` & Live Bridge `0.5.0` (`0.5.0`)**: introduces OPTIX/CUDA/CPU-safe studio clay override, EEVEE 4.2+/5.x raytracing & noise-free blended glass, 360° seamless infinity cyclorama, auto-hidden backdrops on `transparentBg`, Blender 5.x FFmpeg `media_type` support, RNA-safe `export_apply=True` backdrop-stripped 3D exports with compressed `.blend` packing, built-in `numpy` fast 2×2 contact sheet stitching, evaluated depsgraph polycounts & zero-false-positive Geometry Nodes QC; upgrades the zero-dependency `.glb` viewer to v3 (PBR metallic/roughness/emissive, cofactor normals, `TRIANGLE_STRIP`/`TRIANGLE_FAN`, material-aware decimation, auto-focus on export, live `lensMm`/`exposure` stage preview); adds atomic multi-hunk `patch_script` (`edits[]` up to 50 hunks with rollback), synchronous `wait: true` on Agent tools, monotonic multi-shot/contact-sheet progress, Lookdev-aware `bridge_sync` & source ZIP; and ships `dsh_blender_bridge.py` `0.5.0` with deep linked-shader introspection/repainting plus Workbench Metallic & 3-axis Live Object Transform direct controls.
+
 ## [0.4.0] - 2026-11-25
 
 - **单次启动多机位分镜批量渲染（`render_shots`）与分镜胶片条（Shot Filmstrip）**：

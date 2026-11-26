@@ -5,7 +5,7 @@ import { join, resolve, dirname, relative, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { unzipSync } from 'fflate'
-import { BlenderStore, applyScriptPatch, validateAssetUpload } from '../lib/store.js'
+import { BlenderStore, applyScriptPatch, applyScriptPatches, validateAssetUpload } from '../lib/store.js'
 import {
   defaultProjectFields,
   validateProjectFields,
@@ -531,4 +531,68 @@ test('BlenderStore v0.3.0: surgical patchScript() handles unique patch, replaceA
     store.patchScript(r2.project.id, r2.project.revision, 'TAG = "prod"', 'x = "' + 'A'.repeat(MAX_CUSTOM_SCRIPT_BYTES + 100) + '"'),
     (err) => err.status === 400,
   )
+})
+
+test('BlenderStore atomic multi-hunk applyScriptPatches(), patchScriptEdits(), and Lookdev-aware buildSourceZip()', async (t) => {
+  const { store } = await makeStore(t)
+
+  // Direct pure helper checks & edge cases
+  assert.throws(() => applyScriptPatches('a = 1\n', []), (err) => err.code === 'BAD_REQUEST' && err.status === 400)
+  const tooMany = Array.from({ length: 51 }, () => ({ find: 'a', replace: 'b' }))
+  assert.throws(() => applyScriptPatches('a = 1\n', tooMany), (err) => err.code === 'BAD_REQUEST' && err.status === 400)
+
+  const multi = applyScriptPatches('A = 1\nB = 2\nC = 2\n', [
+    { find: 'A = 1', replace: 'A = 10' },
+    { find: '= 2', replace: '= 20', replaceAll: true },
+  ])
+  assert.equal(multi.appliedEdits, 2)
+  assert.equal(multi.replacements, 3)
+  assert.equal(multi.patched, 'A = 10\nB = 20\nC = 20\n')
+
+  // Partial failure in hunk 2 rolls back without modifying persisted script or bumping revision
+  const proj = await store.create({
+    ...baseFields,
+    title: 'Atomic Multi-Hunk Test',
+    lensMm: 85,
+    exposure: 0.5,
+    clayMode: true,
+    scriptMode: 'custom',
+    customScript: 'import bpy\nLENS = 50\nSAMPLES = 32\n',
+  })
+  const revBefore = proj.revision
+  await assert.rejects(
+    store.patchScriptEdits(proj.id, proj.revision, [
+      { find: 'LENS = 50', replace: 'LENS = 85' },
+      { find: 'MISSING_ANCHOR', replace: 'NOOP' },
+    ]),
+    (err) => err.code === 'SCRIPT_PATCH_NOT_FOUND' && err.status === 400,
+  )
+  const unchanged = await store.get(proj.id)
+  assert.equal(unchanged.revision, revBefore, 'failed 2nd hunk must not bump revision')
+  assert.match(unchanged.customScript, /LENS = 50/, 'failed 2nd hunk must leave script untouched on disk')
+
+  // Succeeding 2-hunk edit bumps revision once and records one checkpoint
+  const applied = await store.patchScriptEdits(
+    proj.id,
+    proj.revision,
+    [
+      { find: 'LENS = 50', replace: 'LENS = 85' },
+      { find: 'SAMPLES = 32', replace: 'SAMPLES = 64' },
+    ],
+    'Batch camera + samples update',
+  )
+  assert.equal(applied.appliedEdits, 2)
+  assert.equal(applied.replacements, 2)
+  assert.equal(applied.project.revision, revBefore + 1)
+  assert.match(applied.project.customScript, /LENS = 85\nSAMPLES = 64/)
+  assert.equal(applied.project.checkpoints.length, 1)
+  assert.equal(applied.project.checkpoints[0].note, 'Batch camera + samples update')
+
+  // Source ZIP includes dsh_apply_lookdev_overrides() so lensMm/exposure/clayMode reproduce standalone
+  const zipBytes = await store.buildSourceZip(applied.project.id)
+  const unzipped = unzipSync(zipBytes)
+  const scenePy = Buffer.from(unzipped['scene.py']).toString('utf8')
+  assert.match(scenePy, /dsh_apply_lookdev_overrides\(\)/)
+  assert.match(scenePy, /\\"lensMm\\":85/)
+  assert.match(scenePy, /\\"clayMode\\":true/)
 })

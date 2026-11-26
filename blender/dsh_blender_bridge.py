@@ -1,7 +1,7 @@
 bl_info = {
     "name": "DSH Blender Bridge",
     "author": "stardustlc / DeepSeek Harness",
-    "version": (0, 4, 0),
+    "version": (0, 5, 0),
     "blender": (3, 6, 0),
     "location": "View3D > Sidebar (N) > DSH Bridge",
     "description": "Loopback-only JSON-RPC live bridge for DeepSeek Harness (dsh-blender-studio)",
@@ -102,6 +102,8 @@ _STAGE_NAME_PREFIXES = (
     "GP_Paper_Card",
     "Pavilion_Ground",
     "Pavilion_Water",
+    "Abstract_Floor",
+    "Ground_Plane",
 )
 
 
@@ -214,6 +216,11 @@ def _evaluate_scene_qc(scene, all_objs, light_count, camera_count, total_polygon
     for obj in hero_objs:
         if str(obj.type) not in ("MESH", "FONT", "CURVE"):
             continue
+        has_gn = False
+        try:
+            has_gn = any(getattr(m, "type", "") == "NODES" for m in getattr(obj, "modifiers", ()))
+        except Exception:
+            has_gn = False
         has_mat = False
         try:
             for slot in obj.material_slots:
@@ -222,7 +229,7 @@ def _evaluate_scene_qc(scene, all_objs, light_count, camera_count, total_polygon
                     break
         except Exception:
             has_mat = True
-        if not has_mat:
+        if not has_mat and not has_gn:
             if unassigned_reported < 5:
                 issues.append({
                     "code": "UNASSIGNED_MATERIAL",
@@ -286,6 +293,13 @@ def _collect_scene_summary():
     total_polygons = 0
 
     all_objs = list(scene.objects)
+    depsgraph = None
+    if any(str(o.type) == "MESH" and len(getattr(o, "modifiers", ())) > 0 for o in all_objs):
+        try:
+            depsgraph = bpy.context.evaluated_depsgraph_get()
+        except Exception:
+            depsgraph = None
+
     for obj in all_objs:
         obj_type = str(obj.type)
         if obj_type == "MESH":
@@ -301,6 +315,22 @@ def _collect_scene_summary():
             try:
                 verts = int(len(obj.data.vertices))
                 polys = int(len(obj.data.polygons))
+                if depsgraph is not None and len(getattr(obj, "modifiers", ())) > 0:
+                    eval_obj = None
+                    try:
+                        eval_obj = obj.evaluated_get(depsgraph)
+                        eval_mesh = eval_obj.to_mesh()
+                        if eval_mesh is not None:
+                            verts = int(len(eval_mesh.vertices))
+                            polys = int(len(eval_mesh.polygons))
+                    except Exception:
+                        pass
+                    finally:
+                        if eval_obj is not None:
+                            try:
+                                eval_obj.to_mesh_clear()
+                            except Exception:
+                                pass
                 total_polygons += polys
             except Exception:
                 pass
@@ -311,6 +341,14 @@ def _collect_scene_summary():
                 "type": obj_type,
                 "location": _round_vec(obj.location),
             }
+            try:
+                entry["rotationDeg"] = [round(math.degrees(float(a)), 2) for a in obj.rotation_euler]
+            except Exception:
+                pass
+            try:
+                entry["scale"] = _round_vec(obj.scale)
+            except Exception:
+                pass
             try:
                 entry["dimensions"] = _round_vec(obj.dimensions)
             except Exception:
@@ -336,6 +374,93 @@ def _collect_scene_summary():
             seen_collections.add(col.name)
 
     materials = [mat.name for mat in bpy.data.materials]
+    material_details = {}
+
+    def _read_linked_color(sock, depth=0, visited=None):
+        if visited is None:
+            visited = set()
+        if sock is None:
+            return None
+        if depth > 4 or not getattr(sock, "is_linked", False) or not sock.links:
+            return getattr(sock, "default_value", None)
+        try:
+            sn = sock.links[0].from_node
+            nid = id(sn)
+            if nid in visited:
+                return getattr(sock, "default_value", None)
+            visited.add(nid)
+            if sn.type == "VALTORGB" and hasattr(sn, "color_ramp") and len(sn.color_ramp.elements) > 0:
+                return sn.color_ramp.elements[0].color
+            if sn.type == "RGB" and sn.outputs:
+                return sn.outputs[0].default_value
+            if sn.type == "TEX_CHECKER" and "Color2" in sn.inputs:
+                c2 = sn.inputs["Color2"]
+                return _read_linked_color(c2, depth + 1, visited) if c2.is_linked else c2.default_value
+            if (sn.type == "MIX" and getattr(sn, "data_type", "") == "RGBA") or sn.type == "MIX_RGB":
+                rgba_inputs = [s for s in sn.inputs if getattr(s, "type", "") == "RGBA"]
+                if rgba_inputs:
+                    return _read_linked_color(rgba_inputs[0], depth + 1, visited) if rgba_inputs[0].is_linked else rgba_inputs[0].default_value
+            if sn.type in ("HUE_SAT", "BRIGHTCONTRAST", "GAMMA", "INVERT"):
+                col_in = sn.inputs.get("Color")
+                if col_in is not None:
+                    return _read_linked_color(col_in, depth + 1, visited) if col_in.is_linked else col_in.default_value
+        except Exception:
+            pass
+        return getattr(sock, "default_value", None)
+
+    def _read_linked_roughness(sock):
+        if sock is None:
+            return None
+        if getattr(sock, "is_linked", False) and sock.links:
+            try:
+                rn = sock.links[0].from_node
+                if rn.type == "MAP_RANGE" and "To Min" in rn.inputs and "To Max" in rn.inputs:
+                    lo = float(rn.inputs["To Min"].default_value)
+                    hi = float(rn.inputs["To Max"].default_value)
+                    return max(0.0, min(1.0, (lo + hi) * 0.5))
+                if rn.type == "VALTORGB" and hasattr(rn, "color_ramp") and len(rn.color_ramp.elements) > 0:
+                    elems = rn.color_ramp.elements
+                    lo = float(elems[0].color[0])
+                    hi = float(elems[-1].color[0])
+                    return max(0.0, min(1.0, (lo + hi) * 0.5))
+            except Exception:
+                pass
+        return max(0.0, min(1.0, float(sock.default_value)))
+
+    for mat in list(bpy.data.materials)[:120]:
+        try:
+            detail = {}
+            rgba_src = getattr(mat, "diffuse_color", None)
+            nt = getattr(mat, "node_tree", None)
+            bsdf = next((n for n in nt.nodes if n.type == "BSDF_PRINCIPLED"), None) if nt is not None else None
+            if bsdf is not None:
+                bc = bsdf.inputs.get("Base Color")
+                if bc is not None:
+                    resolved = _read_linked_color(bc)
+                    if resolved is not None:
+                        rgba_src = resolved
+                ms = bsdf.inputs.get("Metallic")
+                if ms is not None:
+                    detail["metallic"] = round(max(0.0, min(1.0, float(ms.default_value))), 4)
+                rs = bsdf.inputs.get("Roughness")
+                if rs is not None:
+                    rv = _read_linked_roughness(rs)
+                    if rv is not None:
+                        detail["roughness"] = round(rv, 4)
+            if rgba_src is not None and len(rgba_src) >= 3:
+                def _lin_to_srgb_byte(v):
+                    c = max(0.0, min(1.0, float(v)))
+                    s = c * 12.92 if c <= 0.0031308 else 1.055 * (c ** (1.0 / 2.4)) - 0.055
+                    return max(0, min(255, int(round(s * 255.0))))
+                detail["color"] = "#{:02X}{:02X}{:02X}".format(
+                    _lin_to_srgb_byte(rgba_src[0]),
+                    _lin_to_srgb_byte(rgba_src[1]),
+                    _lin_to_srgb_byte(rgba_src[2]),
+                )
+            if detail:
+                material_details[mat.name] = detail
+        except Exception:
+            pass
 
     summary = {
         "capturedAt": _iso_now(),
@@ -347,6 +472,7 @@ def _collect_scene_summary():
         "cameraCount": int(camera_count),
         "totalPolygons": int(total_polygons),
         "materials": materials,
+        "materialDetails": material_details,
         "collections": collections,
         "objects": objects,
         "qc": _evaluate_scene_qc(scene, all_objs, light_count, camera_count, total_polygons),
@@ -894,9 +1020,85 @@ def _cmd_set_material_color(params):
             except Exception:
                 pass
 
+        def _repaint_linked_color(sock, target_rgba, depth=0, visited=None):
+            if visited is None:
+                visited = set()
+            if depth > 4 or sock is None or not getattr(sock, "is_linked", False) or not sock.links:
+                return
+            try:
+                src_node = sock.links[0].from_node
+                node_id = id(src_node)
+                if node_id in visited:
+                    return
+                visited.add(node_id)
+                if src_node.type == "VALTORGB" and hasattr(src_node, "color_ramp"):
+                    elems = src_node.color_ramp.elements
+                    if len(elems) >= 2:
+                        elems[0].color = target_rgba
+                        elems[-1].color = (target_rgba[0] * 0.34, target_rgba[1] * 0.34, target_rgba[2] * 0.40, 1.0)
+                        for mid_idx in range(1, len(elems) - 1):
+                            frac = float(mid_idx) / float(len(elems) - 1)
+                            shade = 1.0 - frac * 0.62
+                            elems[mid_idx].color = (
+                                target_rgba[0] * shade,
+                                target_rgba[1] * shade,
+                                min(1.0, target_rgba[2] * (shade + 0.04)),
+                                1.0,
+                            )
+                    elif len(elems) == 1:
+                        elems[0].color = target_rgba
+                elif src_node.type == "RGB" and src_node.outputs:
+                    src_node.outputs[0].default_value = target_rgba
+                elif src_node.type == "TEX_CHECKER":
+                    c1 = src_node.inputs.get("Color1")
+                    c2 = src_node.inputs.get("Color2")
+                    if c1 is not None and not c1.is_linked:
+                        c1.default_value = (target_rgba[0] * 0.42, target_rgba[1] * 0.42, target_rgba[2] * 0.46, 1.0)
+                    elif c1 is not None and c1.is_linked:
+                        _repaint_linked_color(c1, target_rgba, depth + 1, visited)
+                    if c2 is not None and not c2.is_linked:
+                        c2.default_value = target_rgba
+                    elif c2 is not None and c2.is_linked:
+                        _repaint_linked_color(c2, target_rgba, depth + 1, visited)
+                elif (src_node.type == "MIX" and getattr(src_node, "data_type", "") == "RGBA") or src_node.type == "MIX_RGB":
+                    rgba_inputs = [s for s in src_node.inputs if getattr(s, "type", "") == "RGBA"]
+                    if len(rgba_inputs) >= 1:
+                        if rgba_inputs[0].is_linked:
+                            _repaint_linked_color(rgba_inputs[0], target_rgba, depth + 1, visited)
+                        else:
+                            rgba_inputs[0].default_value = target_rgba
+                    if len(rgba_inputs) >= 2:
+                        dark_rgba = (target_rgba[0] * 0.45, target_rgba[1] * 0.45, target_rgba[2] * 0.50, 1.0)
+                        if rgba_inputs[1].is_linked:
+                            _repaint_linked_color(rgba_inputs[1], dark_rgba, depth + 1, visited)
+                        else:
+                            rgba_inputs[1].default_value = dark_rgba
+                elif src_node.type in ("HUE_SAT", "BRIGHTCONTRAST", "GAMMA", "INVERT"):
+                    col_in = src_node.inputs.get("Color")
+                    if col_in is not None:
+                        if col_in.is_linked:
+                            _repaint_linked_color(col_in, target_rgba, depth + 1, visited)
+                        else:
+                            col_in.default_value = target_rgba
+            except Exception:
+                pass
+
         base_sock = bsdf.inputs.get("Base Color")
         if base_sock is not None:
             base_sock.default_value = rgba
+            _repaint_linked_color(base_sock, rgba)
+
+        # Also update active Emission Color / Emission so glowing LEDs & accent halos repaint cleanly
+        em_str_sock = bsdf.inputs.get("Emission Strength")
+        em_col_sock = bsdf.inputs.get("Emission Color") or bsdf.inputs.get("Emission")
+        if em_col_sock is not None and em_str_sock is not None:
+            try:
+                if float(em_str_sock.default_value) > 0.01 or getattr(em_str_sock, "is_linked", False):
+                    em_col_sock.default_value = rgba
+                    _repaint_linked_color(em_col_sock, rgba)
+            except Exception:
+                pass
+
         met_sock = bsdf.inputs.get("Metallic")
         if met_sock is not None:
             if metallic is not None:
@@ -906,6 +1108,25 @@ def _cmd_set_material_color(params):
         if rough_sock is not None:
             if roughness is not None:
                 rough_sock.default_value = roughness
+                if getattr(rough_sock, "is_linked", False) and rough_sock.links:
+                    try:
+                        r_src = rough_sock.links[0].from_node
+                        lo = max(0.02, roughness - 0.06)
+                        hi = min(1.0, roughness + 0.06)
+                        if r_src.type == "MAP_RANGE":
+                            if "To Min" in r_src.inputs and not r_src.inputs["To Min"].is_linked:
+                                r_src.inputs["To Min"].default_value = lo
+                            if "To Max" in r_src.inputs and not r_src.inputs["To Max"].is_linked:
+                                r_src.inputs["To Max"].default_value = hi
+                        elif r_src.type == "VALTORGB" and hasattr(r_src, "color_ramp"):
+                            relems = r_src.color_ramp.elements
+                            if len(relems) >= 2:
+                                relems[0].color = (lo, lo, lo, 1.0)
+                                relems[-1].color = (hi, hi, hi, 1.0)
+                            elif len(relems) == 1:
+                                relems[0].color = (roughness, roughness, roughness, 1.0)
+                    except Exception:
+                        pass
             final_roughness = float(rough_sock.default_value)
     else:
         if metallic is not None:

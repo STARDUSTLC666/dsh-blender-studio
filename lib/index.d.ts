@@ -1,8 +1,8 @@
 import { type SkillsPluginContext } from './skill-bundle.js';
 export { BlenderWorkbench, installBlenderWorkbench } from './workbench.js';
 export type { BlenderWorkbenchOptions, InstallBlenderWorkbenchOptions, StartJobOptions } from './workbench.js';
-export { applyScriptPatch, BlenderStore, validateAssetUpload, zipAsync } from './store.js';
-export type { PatchScriptOptions } from './store.js';
+export { applyScriptPatch, applyScriptPatches, BlenderStore, validateAssetUpload, zipAsync } from './store.js';
+export type { PatchScriptOptions, ScriptPatchEdit } from './store.js';
 export { BlenderEnvironment, buildExecutableInfo, defaultBlenderSettings, defaultProbeCyclesGpu, parseBlenderVersionOutput, parseCyclesGpuProbeOutput, } from './environment.js';
 export type { BlenderCandidate, BlenderEnvironmentOptions, BlenderGpuProber, BlenderVersionProber, } from './environment.js';
 export { BlenderRunner, DEFAULT_CYCLES_TIMEOUT_MS, DEFAULT_EEVEE_TIMEOUT_MS, parseBlenderProgressLine, parseSceneSummaryFromOutput, parseShotDoneFromLine, } from './runner.js';

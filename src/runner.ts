@@ -107,7 +107,7 @@ export function parseBlenderProgressLine(
 ): ParsedBlenderProgress {
   const result: ParsedBlenderProgress = {}
 
-  const savedMatch = /^Saved:\s*'([^']+)'/i.exec(line.trim())
+  const savedMatch = /(?:^|\|\s*)Saved:\s*'([^']+)'/i.exec(line.trim())
   if (savedMatch) {
     result.savedFile = savedMatch[1]
     result.stage = '已写入渲染文件'
@@ -324,7 +324,7 @@ export class BlenderRunner {
           completedShots.push(shot)
           if (shot.path) savedFiles.push(shot.path)
           request.onShotDone?.(shot)
-          if (shot.index && shot.total) {
+          if (!request.onShotDone && shot.index && shot.total) {
             const pct = Math.max(10, Math.min(96, Math.round((shot.index / shot.total) * 95)))
             request.onProgress?.(pct, `已完成分镜 ${shot.index}/${shot.total} · ${shot.labelZh || shot.shotId}`)
           }

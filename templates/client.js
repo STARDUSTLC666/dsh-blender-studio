@@ -557,6 +557,7 @@ window.__ModuleLoader__.load({
       const [editorTab, setEditorTab] = useState('studio');
       const [editorMode, setEditorMode] = useState('studio');
       const [stageView, setStageView] = useState('stage');
+      const [studioFocus, setStudioFocus] = useState(null);
 
       const [projects, setProjects] = useState([]);
       const [archived, setArchived] = useState([]);
@@ -724,7 +725,16 @@ window.__ModuleLoader__.load({
                 if (next.kind === 'preview_still') setStageView('still');
                 else if (next.kind === 'contact_sheet') setStageView('contact_sheet');
                 else if (next.kind === 'render_animation') setStageView('animation');
-                else if (next.kind === 'render_shots') {
+                else if (next.kind === 'export_model') {
+                  if (next.artifactKind === 'glb' && next.artifactId && next.projectId) {
+                    setStudioFocus({ glbKey: 'art:' + next.projectId + ':' + next.artifactId, nonce: Date.now() });
+                    setStageView('mesh');
+                    setNotice(t('GLB 3D 模型导出完成，已切换至交互式 3D 网格视图。', 'GLB 3D model exported. Switched to interactive 3D Mesh view.'));
+                  }
+                } else if (next.kind === 'render_shots') {
+                  if (next.shots?.[0]?.artifactId) {
+                    setStudioFocus({ shotId: next.shots[0].artifactId, nonce: Date.now() });
+                  }
                   setStageView('shot');
                   const shotCount = Array.isArray(next.shots) ? next.shots.length : 0;
                   setNotice(
@@ -743,8 +753,11 @@ window.__ModuleLoader__.load({
                       t('全流程在 QC-3D 体检阶段提前中止：', 'Pipeline stopped during QC-3D audit: ') + reasonText,
                     );
                   } else {
-                    if (next.pipeline?.primaryRenderId) setStageView('still');
-                    else if (next.pipeline?.contactSheetId) setStageView('contact_sheet');
+                    if (next.pipeline?.primaryRenderId) {
+                      setStageView(next.artifactKind === 'animation' ? 'animation' : 'still');
+                    } else if (next.pipeline?.contactSheetId) {
+                      setStageView('contact_sheet');
+                    }
                     const count = Array.isArray(next.pipeline?.artifactIds) ? next.pipeline.artifactIds.length : 0;
                     const qcTag = next.pipeline?.qc ? ' · QC-3D ' + next.pipeline.qc.score + '/' + next.pipeline.qc.grade : '';
                     setNotice(
@@ -804,6 +817,7 @@ window.__ModuleLoader__.load({
           setConflict(false);
           setPending(null);
           setArchiveReview(false);
+          setStudioFocus(null);
           setStageView('stage');
         } catch (e) {
           if (e?.status === 404 || e?.code === 'PROJECT_NOT_FOUND') {
@@ -845,6 +859,7 @@ window.__ModuleLoader__.load({
           syncFields(next);
           setCreating(true);
           setEditorTab('studio');
+          setStudioFocus(null);
           setStageView('stage');
         } else if (target === 'list') {
           setProject(null);
@@ -937,6 +952,7 @@ window.__ModuleLoader__.load({
             setDirty(false);
             setConflict(false);
             setEditorTab('studio');
+            setStudioFocus(null);
             setStageView('stage');
           }
           setNotice(t('已复制 3D 工程：', 'Duplicated 3D project: ') + (cloned?.title || item.title));
@@ -955,6 +971,7 @@ window.__ModuleLoader__.load({
             setDirty(false);
             setConflict(false);
             setEditorTab('studio');
+            setStudioFocus(null);
             setStageView('stage');
           }
           setNotice(
@@ -1696,6 +1713,26 @@ window.__ModuleLoader__.load({
                 setNotice,
                 setEditorTab,
                 setStageView,
+                onInspectArtifact: art => {
+                  if (art.kind === 'shot') {
+                    setStudioFocus({ shotId: art.id, nonce: Date.now() });
+                    setStageView('shot');
+                  } else {
+                    setStageView(
+                      art.kind === 'contact_sheet'
+                        ? 'contact_sheet'
+                        : art.kind === 'animation'
+                        ? 'animation'
+                        : 'still',
+                    );
+                  }
+                  setEditorTab('studio');
+                },
+                onInspectGlb: glbKey => {
+                  setStudioFocus({ glbKey, nonce: Date.now() });
+                  setStageView('mesh');
+                  setEditorTab('studio');
+                },
                 setArchiveReview,
                 onTrashRequest: (item, isArchived) => setTrashTarget({ project: item, archived: Boolean(isArchived) }),
                 onExportFormat: fmt => {
@@ -1744,6 +1781,7 @@ window.__ModuleLoader__.load({
                 onOpenExport: () => setExportOpen(true),
                 setEditorTab,
                 perform,
+                studioFocus,
                 controlId,
                 lang,
                 t,

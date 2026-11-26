@@ -3,7 +3,7 @@ import { BlenderEnvironment, type BlenderCandidate, type BlenderGpuProber, type 
 import { PolyHavenClient } from './polyhaven.js';
 import { BlenderRunner, type BlenderRunExecutor } from './runner.js';
 import type { SkillBundleHealthReport, SkillsPluginContext } from './skill-bundle.js';
-import { BlenderStore, type TrashPathFn, type TrashPathsFn } from './store.js';
+import { BlenderStore, type ScriptPatchEdit, type TrashPathFn, type TrashPathsFn } from './store.js';
 import { type BlenderBridgeStatus, type BlenderEnvironmentStatus, type BlenderExportFormat, type BlenderJob, type BlenderJobKind, type BlenderPipelineOptions, type BlenderProject, type BlenderQualityTier, type BlenderSceneSummary, type BlenderSettings, type BlenderShotPresetId } from './types.js';
 export interface StartJobOptions {
     format?: BlenderExportFormat;
@@ -71,14 +71,16 @@ export declare class BlenderWorkbench {
     installAddon(): Promise<InstallBridgeAddonResult>;
     createFromExemplar(exemplarId: string, titleOverride?: string): Promise<BlenderProject>;
     patchProjectScript(id: string, revision: unknown, opts: {
-        find: string;
-        replace: string;
+        find?: string;
+        replace?: string;
         replaceAll?: boolean;
+        edits?: ScriptPatchEdit[];
         note?: string;
         allowUnsafe?: boolean;
     }): Promise<BlenderProject & {
         project: BlenderProject;
         replacements: number;
+        appliedEdits: number;
         safety: ReturnType<typeof checkScriptSafety>;
     }>;
     environmentStatus(options?: {

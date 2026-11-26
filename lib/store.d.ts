@@ -19,9 +19,19 @@ export interface PatchScriptOptions {
     replaceAll?: boolean;
     note?: string;
 }
+export interface ScriptPatchEdit {
+    find: string;
+    replace: string;
+    replaceAll?: boolean;
+}
 export declare function applyScriptPatch(source: string, find: string, replace: string, replaceAll?: boolean): {
     patched: string;
     replacements: number;
+};
+export declare function applyScriptPatches(source: string, edits: readonly ScriptPatchEdit[]): {
+    patched: string;
+    replacements: number;
+    appliedEdits: number;
 };
 export declare class BlenderStore {
     readonly root: string;
@@ -53,6 +63,11 @@ export declare class BlenderStore {
     patchScript(id: string, revision: unknown, find: string, replace: string, noteOrOptions?: string | PatchScriptOptions): Promise<{
         project: BlenderProject;
         replacements: number;
+    }>;
+    patchScriptEdits(id: string, revision: unknown, edits: readonly ScriptPatchEdit[], note?: string): Promise<{
+        project: BlenderProject;
+        replacements: number;
+        appliedEdits: number;
     }>;
     saveCheckpoint(id: string, revision: unknown, note?: string): Promise<BlenderProject>;
     restoreCheckpoint(id: string, revision: unknown, checkpointId: string): Promise<BlenderProject>;

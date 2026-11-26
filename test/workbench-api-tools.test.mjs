@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { join, resolve, dirname, relative, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -279,7 +279,7 @@ async function createWorkbenchFixture(t, extra = {}) {
     gpuProber: extra.gpuProber,
     probeGpu: extra.probeGpu,
     addonInstallExecutor: extra.addonInstallExecutor,
-    executor,
+    executor: extra.executor ?? executor,
     fetchImpl,
     bridge: extra.bridge,
     trashPath: extra.trashPath,
@@ -1369,4 +1369,210 @@ test('v0.4.0 HTTP API & Agent tools: single-launch render_shots, Live Lookdev fi
   assert.equal(toolCreatedLookdev.lensMm, 35)
   assert.equal(toolCreatedLookdev.exposure, -0.4)
   assert.equal(toolCreatedLookdev.clayMode, true)
+})
+
+test('Boost workflow upgrades: atomic multi-hunk patch_script (with safety rollback), monotonic render_shots progress, bridge_sync lookdev, and wait: true in tools', async (t) => {
+  const mockBridge = await startMockBridgeServer(t)
+  const bridgeClient = new BlenderBridgeClient({ host: '127.0.0.1', port: mockBridge.port })
+  const observedShotProgress = []
+  const { workbench, post } = await createWorkbenchFixture(t, {
+    bridge: bridgeClient,
+    executor: async (req) => {
+      const content = req.scriptContent || ''
+      if (content.includes('_dsh_render_multi_shots(')) {
+        // Simulate real Cycles sample progress reaching 95% on EACH of 4 shots before SHOT_DONE
+        const outDirMatch = /_dsh_render_multi_shots\(("(?:[^"\\]|\\.)*")/.exec(content)
+        const outDir = outDirMatch ? JSON.parse(outDirMatch[1]) : req.cwd
+        await mkdir(outDir, { recursive: true })
+        const shots = ['hero_3q', 'low_dramatic', 'macro_dof', 'top_plan']
+        const parsedShots = []
+        for (let i = 0; i < shots.length; i++) {
+          const shotId = shots[i]
+          const file = `shot_${shotId}.png`
+          await writeFile(join(outDir, file), MOCK_PNG)
+          req.onProgress?.(50, `渲染分镜 (${i + 1}/4): ${shotId}`)
+          req.onProgress?.(95, `渲染分镜 (${i + 1}/4): ${shotId}`)
+          const doneObj = { shotId, file, path: join(outDir, file), lensMm: 58, width: 640, height: 360, index: i + 1, total: 4 }
+          req.onShotDone?.(doneObj)
+          parsedShots.push(doneObj)
+        }
+        return { exitCode: 0, lines: ['shots ok'], stdout: 'shots ok', stderr: '', sceneSummary: MOCK_SCENE_SUMMARY, shots: parsedShots, savedFiles: [], durationMs: 25 }
+      }
+      if (content.includes('_dsh_render_contact_sheet(')) {
+        const outMatch = /_dsh_render_contact_sheet\(("(?:[^"\\]|\\.)*")/.exec(content)
+        const outPath = outMatch ? JSON.parse(outMatch[1]) : undefined
+        if (outPath) {
+          await mkdir(dirname(outPath), { recursive: true })
+          await writeFile(outPath, MOCK_PNG)
+        }
+        for (let tIdx = 1; tIdx <= 4; tIdx++) {
+          req.onProgress?.(0, `渲染四视角 (${tIdx}/4): tile_${tIdx}`)
+          req.onProgress?.(50, `渲染第 1 帧 · 采样 8/16`)
+          req.onProgress?.(95, `渲染第 1 帧 · 采样 16/16`)
+        }
+        return { exitCode: 0, lines: ['cs ok'], stdout: 'cs ok', stderr: '', sceneSummary: MOCK_SCENE_SUMMARY, savedFiles: outPath ? [outPath] : [], durationMs: 20 }
+      }
+      const outMatch = /_dsh_out\s*=\s*("(?:[^"\\]|\\.)*")/.exec(content)
+      const outPath = outMatch ? JSON.parse(outMatch[1]) : undefined
+      if (outPath) {
+        await mkdir(dirname(outPath), { recursive: true })
+        await writeFile(outPath, MOCK_PNG)
+      }
+      return { exitCode: 0, lines: ['ok'], stdout: 'ok', stderr: '', sceneSummary: MOCK_SCENE_SUMMARY, savedFiles: outPath ? [outPath] : [], durationMs: 12 }
+    },
+  })
+
+  // 1. Create project with Lookdev overrides and custom script
+  const proj = (
+    await (
+      await post({
+        action: 'create',
+        fields: defaultProjectFields({
+          title: 'Boost Atomic Patch',
+          lensMm: 70,
+          exposure: 0.3,
+          clayMode: true,
+          scriptMode: 'custom',
+          customScript: 'import bpy\nA = 1\nB = 2\n',
+        }),
+      })
+    ).json()
+  ).value
+
+  // 2. Atomic multi-hunk patch_script rejects unsafe 2nd hunk cleanly with ZERO disk mutation
+  const unsafePatch = await post({
+    action: 'patch_script',
+    id: proj.id,
+    revision: proj.revision,
+    edits: [
+      { find: 'A = 1', replace: 'A = 99' },
+      { find: 'B = 2', replace: 'import subprocess\nsubprocess.run(["whoami"])' },
+    ],
+  })
+  assert.equal(unsafePatch.status, 400)
+  assert.equal((await unsafePatch.json()).code, 'SCRIPT_UNSAFE')
+  const stillOriginal = await workbench.store.get(proj.id)
+  assert.equal(stillOriginal.revision, proj.revision)
+  assert.match(stillOriginal.customScript, /A = 1\nB = 2/)
+
+  // 3. Valid multi-hunk patch via Agent tool blender_script(action: 'patch', edits: [...])
+  const tools = new Map()
+  const ctx = {
+    skills: { register: () => () => {} },
+    tools: {
+      register(def) {
+        tools.set(def.name, def)
+        return () => tools.delete(def.name)
+      },
+    },
+    connection: { fetch: { register: () => () => {} } },
+    inject(_deps, fn) {
+      fn(ctx)
+    },
+    on() {},
+  }
+  installBlenderWorkbench(ctx, { workbench })
+
+  const scriptTool = tools.get('blender_script')
+  const multiPatched = await scriptTool.execute({
+    action: 'patch',
+    id: proj.id,
+    revision: proj.revision,
+    edits: [
+      { find: 'A = 1', replace: 'A = 10' },
+      { find: 'B = 2', replace: 'B = 20' },
+    ],
+    note: 'Multi-hunk atomic tweak',
+  })
+  assert.equal(multiPatched.appliedEdits, 2)
+  assert.equal(multiPatched.replacements, 2)
+  assert.match(multiPatched.customScript, /A = 10\nB = 20/)
+  assert.match(scriptTool.output.render({ action: 'patch' }, multiPatched)[0].text, /2 组补丁/)
+
+  // 4. bridge_sync includes dsh_apply_lookdev_overrides()
+  await post({ action: 'bridge_sync', id: proj.id })
+  const lastLoad = mockBridge.calls.filter((r) => r.command === 'load_script').at(-1)
+  assert.ok(lastLoad && /dsh_apply_lookdev_overrides\(\)/.test(lastLoad.params.code), 'bridge_sync must invoke dsh_apply_lookdev_overrides()')
+
+  // 5. Monotonic progress tracking on render_shots & contact_sheet (never jumps backwards between shots/tiles!)
+  const observedContactProgress = []
+  const origSetStage = workbench.setStage.bind(workbench)
+  workbench.setStage = (job, code, stage, progress) => {
+    if (job.view.kind === 'render_shots' && typeof progress === 'number') {
+      observedShotProgress.push(progress)
+    }
+    if (job.view.kind === 'contact_sheet' && typeof progress === 'number') {
+      observedContactProgress.push(progress)
+    }
+    return origSetStage(job, code, stage, progress)
+  }
+  const renderTool = tools.get('blender_render')
+  const waitedShots = await renderTool.execute({
+    action: 'render_shots',
+    id: proj.id,
+    revision: multiPatched.revision,
+    wait: true,
+  })
+  assert.equal(waitedShots.state, 'done', 'blender_render(wait: true) must await completion')
+  assert.equal(waitedShots.shots?.length, 4)
+  assert.ok(waitedShots.shots.every((s) => typeof s.path === 'string' && s.path.endsWith('.png')), 'wait: true enriches shot paths immediately')
+  assert.ok(observedShotProgress.length >= 8, 'captured per-shot sample & completion progress ticks')
+  for (let i = 1; i < observedShotProgress.length; i++) {
+    assert.ok(
+      observedShotProgress[i] >= observedShotProgress[i - 1],
+      `render_shots progress jumped backwards: ${observedShotProgress[i - 1]} -> ${observedShotProgress[i]} (${JSON.stringify(observedShotProgress)})`,
+    )
+  }
+
+  // 5b. Monotonic per-tile progress tracking on contact_sheet
+  const waitedCs = await renderTool.execute({
+    action: 'contact_sheet',
+    id: proj.id,
+    revision: multiPatched.revision,
+    wait: true,
+  })
+  assert.equal(waitedCs.state, 'done')
+  assert.ok(observedContactProgress.length >= 8, 'captured per-tile contact_sheet progress ticks')
+  for (let i = 1; i < observedContactProgress.length; i++) {
+    assert.ok(
+      observedContactProgress[i] >= observedContactProgress[i - 1],
+      `contact_sheet progress jumped backwards: ${observedContactProgress[i - 1]} -> ${observedContactProgress[i]}`,
+    )
+  }
+  // Confirm tile 1 doesn't prematurely saturate progress to >= 90%
+  assert.ok(observedContactProgress.some((p) => p >= 20 && p <= 45), `expected mid-tile progress in [20, 45], got ${JSON.stringify(observedContactProgress)}`)
+
+  // 6. blender_script(run_headless, wait: true) and blender_project(inspect_scene, wait: true) await completion cleanly
+  const waitedRun = await scriptTool.execute({
+    action: 'run_headless',
+    id: proj.id,
+    revision: multiPatched.revision,
+    wait: true,
+  })
+  assert.equal(waitedRun.state, 'done')
+
+  const projectTool = tools.get('blender_project')
+  const waitedInspect = await projectTool.execute({
+    action: 'inspect_scene',
+    id: proj.id,
+    revision: multiPatched.revision,
+    wait: true,
+  })
+  assert.equal(waitedInspect.state, 'done')
+  assert.equal(waitedInspect.sceneSummary?.qc?.grade, 'A')
+
+  // 7. Failed wait: true job outputs surface error & recent log lines in both inspect_scene & run_headless renderers
+  const failedInspectText = projectTool.output.render(
+    { action: 'inspect_scene', wait: true },
+    { id: 'job-1', kind: 'inspect_scene', state: 'failed', stage: '执行失败', error: 'SyntaxError at line 12', lines: ['Traceback...', 'SyntaxError: invalid syntax'] },
+  )[0].text
+  assert.match(failedInspectText, /SyntaxError at line 12/)
+  assert.match(failedInspectText, /最近日志/)
+
+  const failedScriptText = scriptTool.output.render(
+    { action: 'run_headless', wait: true },
+    { id: 'job-2', kind: 'run_script', state: 'failed', stage: '执行失败', error: 'NameError: foo', lines: ['NameError: name foo is not defined'] },
+  )[0].text
+  assert.match(failedScriptText, /NameError: foo/)
+  assert.match(failedScriptText, /最近日志/)
 })

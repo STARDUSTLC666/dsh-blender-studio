@@ -343,12 +343,14 @@ test('checkScriptSafety allows clean bpy scripts and catches dangerous patterns 
   }
 })
 
-test('installBridgeAddon v0.3.0 invokes headless Blender installer safely, handles failures, and addon declares 0.4.0 + opt-in auto_start + GPU ping + direct controls', async (t) => {
+test('installBridgeAddon v0.3.0 invokes headless Blender installer safely, handles failures, and addon declares 0.5.0 + opt-in auto_start + GPU ping + direct controls + linked material introspection', async (t) => {
   const addonPath = join(fileURLToPath(new URL('..', import.meta.url)), 'blender', 'dsh_blender_bridge.py')
   const addonSource = readFileSync(addonPath, 'utf8')
-  assert.match(addonSource, /"version"\s*:\s*\(\s*0\s*,\s*4\s*,\s*0\s*\)/, 'addon bl_info must be (0, 4, 0)')
+  assert.match(addonSource, /"version"\s*:\s*\(\s*0\s*,\s*5\s*,\s*0\s*\)/, 'addon bl_info must be (0, 5, 0)')
   assert.match(addonSource, /auto_start:\s*bpy\.props\.BoolProperty\([\s\S]{0,360}default\s*=\s*False/, 'addon auto_start must default to False')
   assert.match(addonSource, /"gpu"/, 'addon _cmd_ping must report Cycles GPU info')
+  assert.match(addonSource, /def _read_linked_color\(/, 'addon must inspect linked procedural Base Color nodes')
+  assert.match(addonSource, /def _read_linked_roughness\(/, 'addon must inspect linked MAP_RANGE/VALTORGB Roughness nodes')
   for (const fn of ['def _cmd_set_camera(', 'def _cmd_transform_object(', 'def _cmd_set_material_color(']) {
     assert.ok(addonSource.includes(fn), `addon missing v0.4.0 direct control handler ${fn}`)
   }

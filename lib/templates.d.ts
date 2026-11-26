@@ -3,6 +3,7 @@ export declare const BLENDER_TEMPLATES: readonly BlenderTemplateMeta[];
 export declare function getTemplateMeta(id: BlenderTemplateId): BlenderTemplateMeta;
 export interface GenerateSceneOptions {
     computeDevice?: BlenderComputeDevice;
+    applyLookdevOverrides?: boolean;
 }
 export interface RunnerHarnessOptions {
     project: BlenderProject;

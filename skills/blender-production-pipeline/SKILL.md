@@ -1,9 +1,9 @@
 ---
 name: "blender-production-pipeline"
-description: "Orchestrate the 5-phase AAA 3D production workflow in dsh-blender-studio v0.4.0: 5 live-repaintable Pro Exemplars, 24-helper DSH_KIT v2, live lookdev overrides (lens/exposure/clay), single-launch multi-shot batch rendering, surgical patching, and Live Bridge v2 direct controls."
+description: "Orchestrate the 5-phase AAA 3D production workflow in dsh-blender-studio v0.5.0: 5 live-repaintable Pro Exemplars, 24-helper DSH_KIT v2, OPTIX-safe clay & live lookdev overrides, single-launch multi-shot rendering, atomic multi-hunk patching, synchronous wait: true, and Live Bridge 0.5.0 deep PBR controls."
 ---
 
-# High-Quality 3D Production Pipeline (`dsh-blender-studio` v0.4.0)
+# High-Quality 3D Production Pipeline (`dsh-blender-studio` v0.5.0)
 
 Use this skill whenever building complex, portfolio-grade 3D vehicles, industrial machinery, robotics, horology, architectural hero pieces, or detailed product assemblies inside `dsh-blender-studio`. Rather than writing one blind monolithic script and hoping the final Cycles render looks good, follow this deterministic **5-Phase AAA Production Loop**.
 
@@ -101,19 +101,22 @@ Replace flat clay placeholders with physically layered **`DSH_KIT` v2** shaders,
 - `dsh_setup_compositor(glare=True, glare_threshold=1.15)` — Blender 4.x & 5.x safe `FOG_GLOW` glare bloom for LED light-bars, exhaust cores, and specular metallic catchlights.
 - `dsh_add_dof(cam, target_obj, fstop=4.0)` — subtle photographic depth of field locked onto the hero focal target.
 
-### Surgical Script Patching & Fearless Checkpoints
-- **Never resend a 50 KB script to tweak one camera angle or material parameter!** Use surgical patching via `blender_script(action: 'patch')`:
+### Surgical & Atomic Multi-Hunk Script Patching + Fearless Checkpoints
+- **Never resend a 50 KB script to tweak camera angles or material parameters!** Use surgical single or **atomic multi-hunk** patching via `blender_script(action: 'patch')`:
   ```json
   {
     "action": "patch",
     "id": "<project-uuid>",
     "revision": 4,
-    "find": "lens_mm=58, margin=1.18",
-    "replace": "lens_mm=65, margin=1.24",
-    "note": "Tighter 65mm telephoto compression"
+    "edits": [
+      { "find": "lens_mm=58, margin=1.18", "replace": "lens_mm=65, margin=1.24" },
+      { "find": "roughness=0.28", "replace": "roughness=0.14" }
+    ],
+    "note": "Tighter 65mm telephoto compression + sharper metallic polish"
   }
   ```
-  `patch` validates safety (`checkScriptSafety`) before writing, rejects missing (`SCRIPT_PATCH_NOT_FOUND`) or ambiguous (`SCRIPT_PATCH_AMBIGUOUS`, unless `replaceAll: true`) targets, increments `revision`, and **automatically captures a checkpoint** of the prior script!
+  `patch` supports either single `{ find, replace, replaceAll? }` or batched `edits[]` (up to 50 hunks applied atomically—if any hunk or `checkScriptSafety` fails, nothing is written), increments `revision`, and **automatically captures a single checkpoint** of the prior script!
+- **Pass `wait: true` on `blender_project(inspect_scene)`, `blender_render`, and `blender_script(run_headless)`** to await job completion in one turn and immediately receive artifact paths and `QC-3D` diagnostics without manual polling loops.
 - Explicit checkpoints remain available anytime:
   - `blender_project(action: 'save_checkpoint', id, revision, note: 'Pre-Cycles metallic pass')`
   - `blender_project(action: 'restore_checkpoint', id, revision, checkpointId)`
@@ -150,7 +153,7 @@ Replace flat clay placeholders with physically layered **`DSH_KIT` v2** shaders,
      "abortOnQcError": true
    }
    ```
-   `qualityTier: 'beauty'` runs **Cycles** with GPU auto-acceleration (`computeDevice`), **OpenImageDenoise (`RGB_ALBEDO_NORMAL`)**, adaptive sampling, and **`AgX - Medium High Contrast`**, verifies `QC-3D`, produces the 2×2 QC sheet + denoised hero still, and exports a clean `.glb` (inspectable directly in the workbench **3D Mesh** viewer v2 with 3-light Phong shading, `Shaded + Wire`, pan, and PNG snapshot!).
+   `qualityTier: 'beauty'` runs **Cycles** with GPU auto-acceleration (`computeDevice`), **OpenImageDenoise (`RGB_ALBEDO_NORMAL`)**, adaptive sampling, and **`AgX - Medium High Contrast`**, verifies `QC-3D`, produces the 2×2 QC sheet + denoised hero still, and exports a clean backdrop-stripped `.glb` (inspectable directly in the workbench **3D Mesh** viewer v3 with PBR metallic/roughness/emissive shading, `Shaded + Wire`, pan, and PNG snapshot!).
 5. **Live Bridge v2 Direct Controls & 1-Click Setup**:
    - Install the Bridge add-on into local Blender in one step: `blender_bridge(action: 'install_addon', confirmed: true)` after explicit user confirmation.
    - Manipulate an open Blender scene directly without writing Python (each command pushes a clean Blender Undo step):

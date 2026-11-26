@@ -15,6 +15,8 @@ function BlenderAssetsExportsPanel({
   setNotice,
   setEditorTab,
   setStageView,
+  onInspectArtifact,
+  onInspectGlb,
   setArchiveReview,
   onTrashRequest,
   onExportFormat,
@@ -110,6 +112,7 @@ function BlenderAssetsExportsPanel({
   function artifactKindLabel(kind) {
     const map = {
       still: t('静帧 PNG', 'Still PNG'),
+      shot: t('多机位分镜', 'Multi-Shot'),
       contact_sheet: t('四视角质检', '4-View QC'),
       animation: t('动画 MP4', 'Animation MP4'),
       glb: 'GLB',
@@ -247,7 +250,9 @@ function BlenderAssetsExportsPanel({
             'ul',
             { className: 'bl-ae-list' },
             assets.map(asset => {
-              const isImg = ['png', 'jpg', 'jpeg', 'webp'].includes(String(asset.ext || '').toLowerCase());
+              const extLower = String(asset.ext || '').replace(/^\./, '').toLowerCase();
+              const isImg = ['png', 'jpg', 'jpeg', 'webp'].includes(extLower);
+              const isGlbAsset = extLower === 'glb' || String(asset.file || '').toLowerCase().endsWith('.glb');
               return h(
                 'li',
                 { key: asset.id, className: 'bl-ae-row dsh-row', 'data-dsh-row': '' },
@@ -280,6 +285,26 @@ function BlenderAssetsExportsPanel({
                 h(
                   'div',
                   { className: 'dsh-row-actions', 'data-always-visible': 'true', 'data-window-drag-exclude': '' },
+                  isGlbAsset
+                    ? h(
+                        W.Button,
+                        {
+                          size: 'sm',
+                          variant: 'ghost',
+                          icon: 'cube',
+                          'data-action': 'inspect-glb-asset',
+                          onClick: () => {
+                            if (typeof onInspectGlb === 'function') {
+                              onInspectGlb('asset:' + project.id + ':' + asset.id);
+                            } else {
+                              setStageView('mesh');
+                              setEditorTab('studio');
+                            }
+                          },
+                        },
+                        t('3D 预览', 'Inspect 3D'),
+                      )
+                    : null,
                   h(
                     'a',
                     {
@@ -511,6 +536,7 @@ function BlenderAssetsExportsPanel({
         [
           { id: 'all', label: t('全部', 'All') },
           { id: 'still', label: t('静帧', 'Stills') },
+          { id: 'shot', label: t('分镜', 'Shots') },
           { id: 'contact_sheet', label: t('四视角', '4-View QC') },
           { id: 'animation', label: t('动画', 'Animation') },
           { id: 'models', label: t('3D 模型 / .blend', '3D Models') },
@@ -533,9 +559,14 @@ function BlenderAssetsExportsPanel({
             'ul',
             { className: 'bl-ae-list' },
             filteredArtifacts.map(art => {
-              const isImage = art.kind === 'still' || art.kind === 'contact_sheet';
+              const isImage = art.kind === 'still' || art.kind === 'contact_sheet' || art.kind === 'shot';
               const isVideo = art.kind === 'animation' && String(art.mime || '').startsWith('video/');
+              const isGlb = art.kind === 'glb';
               const isLatestRev = art.revision === project.revision && !dirty;
+              const titleSuffix =
+                art.kind === 'shot' && typeof formatShotLabel === 'function'
+                  ? formatShotLabel(art, lang)
+                  : art.file;
               return h(
                 'li',
                 { key: art.id, className: 'bl-ae-row dsh-row', 'data-dsh-row': '' },
@@ -559,7 +590,7 @@ function BlenderAssetsExportsPanel({
                   h(
                     'div',
                     { className: 'bl-ae-title-line' },
-                    h('strong', { 'data-dsh-serif': '' }, artifactKindLabel(art.kind) + ' · ' + art.file),
+                    h('strong', { 'data-dsh-serif': '' }, artifactKindLabel(art.kind) + ' · ' + titleSuffix),
                     isLatestRev
                       ? h('span', { className: 'w-tag bl-tag-fresh' }, t('当前修订', 'Current'))
                       : h('span', { className: 'w-tag' }, 'R' + art.revision),
@@ -589,12 +620,44 @@ function BlenderAssetsExportsPanel({
                           size: 'sm',
                           variant: 'ghost',
                           icon: 'eye',
+                          'data-action': 'inspect-artifact',
                           onClick: () => {
-                            setStageView(art.kind === 'contact_sheet' ? 'contact_sheet' : art.kind === 'animation' ? 'animation' : 'still');
-                            setEditorTab('studio');
+                            if (typeof onInspectArtifact === 'function') {
+                              onInspectArtifact(art);
+                            } else {
+                              setStageView(
+                                art.kind === 'contact_sheet'
+                                  ? 'contact_sheet'
+                                  : art.kind === 'animation'
+                                  ? 'animation'
+                                  : art.kind === 'shot'
+                                  ? 'shot'
+                                  : 'still',
+                              );
+                              setEditorTab('studio');
+                            }
                           },
                         },
                         t('在舞台查看', 'Inspect'),
+                      )
+                    : isGlb
+                    ? h(
+                        W.Button,
+                        {
+                          size: 'sm',
+                          variant: 'ghost',
+                          icon: 'cube',
+                          'data-action': 'inspect-glb-artifact',
+                          onClick: () => {
+                            if (typeof onInspectGlb === 'function') {
+                              onInspectGlb('art:' + project.id + ':' + art.id);
+                            } else {
+                              setStageView('mesh');
+                              setEditorTab('studio');
+                            }
+                          },
+                        },
+                        t('3D 预览', 'Inspect 3D'),
                       )
                     : null,
                   h(

@@ -40,7 +40,13 @@ import {
   type BlenderRunExecutor,
 } from './runner.js'
 import type { SkillBundleHealthReport, SkillsPluginContext } from './skill-bundle.js'
-import { applyScriptPatch, BlenderStore, type TrashPathFn, type TrashPathsFn } from './store.js'
+import {
+  applyScriptPatches,
+  BlenderStore,
+  type ScriptPatchEdit,
+  type TrashPathFn,
+  type TrashPathsFn,
+} from './store.js'
 import { BLENDER_TEMPLATES, generateRunnerHarness, generateSceneScript } from './templates.js'
 import { registerBlenderTools } from './tools.js'
 import {
@@ -362,6 +368,7 @@ export class BlenderWorkbench {
     const settings = await this.environment.getSettings()
     const script = generateSceneScript(project, assetsDir, {
       computeDevice: settings.computeDevice ?? 'auto',
+      applyLookdevOverrides: true,
     })
     const client = await this.syncBridgeFromSettings()
     const res = await client.loadScript(script, {
@@ -402,9 +409,10 @@ export class BlenderWorkbench {
     id: string,
     revision: unknown,
     opts: {
-      find: string
-      replace: string
+      find?: string
+      replace?: string
       replaceAll?: boolean
+      edits?: ScriptPatchEdit[]
       note?: string
       allowUnsafe?: boolean
     },
@@ -412,35 +420,31 @@ export class BlenderWorkbench {
     BlenderProject & {
       project: BlenderProject
       replacements: number
+      appliedEdits: number
       safety: ReturnType<typeof checkScriptSafety>
     }
   > {
     const validId = blenderId(id)
+    const edits: ScriptPatchEdit[] = Array.isArray(opts.edits)
+      ? opts.edits
+      : [{ find: opts.find ?? '', replace: opts.replace ?? '', replaceAll: Boolean(opts.replaceAll) }]
     const current = await this.store.get(validId)
     if (revision !== undefined && revision !== current.revision) {
       throw new BlenderConflict('工程已在另一窗口更新；你的修改已保留，请刷新最新版本后重试。')
     }
-    const preview = applyScriptPatch(
-      current.customScript,
-      opts.find,
-      opts.replace,
-      Boolean(opts.replaceAll),
-    )
+    const preview = applyScriptPatches(current.customScript, edits)
     assertScriptSafeOrAllowed(preview.patched, opts.allowUnsafe)
-    const { project, replacements } = await this.store.patchScript(
+    const { project, replacements, appliedEdits } = await this.store.patchScriptEdits(
       validId,
       revision,
-      opts.find,
-      opts.replace,
-      {
-        replaceAll: Boolean(opts.replaceAll),
-        note: opts.note,
-      },
+      edits,
+      opts.note,
     )
     return {
       ...project,
       project,
       replacements,
+      appliedEdits,
       safety: checkScriptSafety(project.customScript),
     }
   }
@@ -694,6 +698,8 @@ export class BlenderWorkbench {
       this.setStage(job, stageOptions.stageCode, stageOptions.stageLabel, stageOptions.progressStart)
       const startedAt = Date.now()
       const span = Math.max(1, stageOptions.progressEnd - stageOptions.progressStart)
+      let tileIndex = 0
+      let tileTotal = 0
 
       const result = await this.runner.run({
         executablePath,
@@ -706,10 +712,25 @@ export class BlenderWorkbench {
         signal: job.controller.signal,
         onLine: line => this.pushJobLine(job, line),
         onProgress: (progress, stage) => {
-          const mapped =
-            progress > 0
-              ? stageOptions.progressStart + Math.round((Math.min(100, progress) / 100) * span)
-              : job.view.progress
+          if (stageKind === 'contact_sheet' && typeof stage === 'string') {
+            const tileMatch = /\((\d+)\/(\d+)\)/.exec(stage)
+            if (tileMatch) {
+              const cur = Math.max(1, Number(tileMatch[1]))
+              const tot = Math.max(1, Number(tileMatch[2]))
+              if (tot > 1 && cur <= tot) {
+                tileIndex = cur - 1
+                tileTotal = tot
+              }
+            }
+          }
+          let mapped = job.view.progress
+          if (stageKind === 'contact_sheet' && tileTotal > 1) {
+            const tileFraction = progress > 0 ? Math.min(100, progress) / 100 : 0.05
+            const overallFraction = Math.min(1, (tileIndex + tileFraction) / tileTotal)
+            mapped = stageOptions.progressStart + Math.round(overallFraction * span)
+          } else if (progress > 0) {
+            mapped = stageOptions.progressStart + Math.round((Math.min(100, progress) / 100) * span)
+          }
           const nextPct = Math.max(job.view.progress, Math.min(stageOptions.progressEnd, mapped))
           this.setStage(job, stageOptions.stageCode, stage || job.view.stage, nextPct)
         },
@@ -1016,6 +1037,9 @@ export class BlenderWorkbench {
             8,
           )
           const startedAt = Date.now()
+          const totalShots = Math.max(1, shotIds.length)
+          const shotSliceStart = (idx: number) => 8 + (Math.min(idx, totalShots) / totalShots) * 86
+          const shotSliceEnd = (idx: number) => 8 + (Math.min(idx + 1, totalShots) / totalShots) * 86
           let doneCount = 0
 
           const result = await this.runner.run({
@@ -1029,19 +1053,25 @@ export class BlenderWorkbench {
             signal: job.controller.signal,
             onLine: line => this.pushJobLine(job, line),
             onShotDone: shot => {
-              doneCount = Math.min(shotIds.length, Math.max(doneCount + 1, shot.index ?? doneCount + 1))
-              const pct = Math.max(12, Math.min(92, Math.round((doneCount / shotIds.length) * 90)))
+              doneCount = Math.min(totalShots, Math.max(doneCount + 1, shot.index ?? doneCount + 1))
+              const pct = Math.max(job.view.progress, Math.min(94, Math.round(shotSliceStart(doneCount))))
               const label = shot.labelZh || shot.shotId
               this.setStage(
                 job,
                 'render-shots',
-                `多机位分镜已完成 ${doneCount}/${shotIds.length}：${label} (${shot.lensMm}mm)`,
+                `多机位分镜已完成 ${doneCount}/${totalShots}：${label} (${shot.lensMm}mm)`,
                 pct,
               )
             },
             onProgress: (progress, stage) => {
-              if (progress > 0 && doneCount === 0) {
-                const mapped = Math.max(job.view.progress, Math.min(88, Math.round(progress * 0.85)))
+              if (doneCount < totalShots) {
+                const startPct = shotSliceStart(doneCount)
+                const endPct = Math.max(startPct + 1, shotSliceEnd(doneCount) - 1)
+                const rawMapped =
+                  progress > 0
+                    ? Math.round(startPct + (Math.min(100, progress) / 100) * (endPct - startPct))
+                    : job.view.progress
+                const mapped = Math.max(job.view.progress, Math.min(94, rawMapped))
                 this.setStage(job, 'render-shots', stage || job.view.stage, mapped)
               }
             },
@@ -1545,16 +1575,38 @@ export class BlenderWorkbench {
             )
             break
           case 'patch_script': {
-            if (typeof v.find !== 'string' || typeof v.replace !== 'string') {
-              throw new BlenderError('patch_script 需要字符串类型的 find 与 replace 参数。', 'BAD_REQUEST', 400)
+            if (Array.isArray(v.edits)) {
+              const edits: ScriptPatchEdit[] = v.edits.map((item: any, idx: number) => {
+                if (!item || typeof item !== 'object' || typeof item.find !== 'string' || typeof item.replace !== 'string') {
+                  throw new BlenderError(
+                    `patch_script 的 edits[${idx}] 需要字符串类型的 find 与 replace 参数。`,
+                    'BAD_REQUEST',
+                    400,
+                  )
+                }
+                return {
+                  find: item.find,
+                  replace: item.replace,
+                  replaceAll: item.replaceAll === true,
+                }
+              })
+              value = await this.patchProjectScript(blenderId(v.id), v.revision, {
+                edits,
+                note: typeof v.note === 'string' ? v.note : undefined,
+                allowUnsafe: v.allowUnsafe === true,
+              })
+            } else {
+              if (typeof v.find !== 'string' || typeof v.replace !== 'string') {
+                throw new BlenderError('patch_script 需要字符串类型的 find 与 replace 参数，或提供 edits 数组。', 'BAD_REQUEST', 400)
+              }
+              value = await this.patchProjectScript(blenderId(v.id), v.revision, {
+                find: v.find,
+                replace: v.replace,
+                replaceAll: v.replaceAll === true,
+                note: typeof v.note === 'string' ? v.note : undefined,
+                allowUnsafe: v.allowUnsafe === true,
+              })
             }
-            value = await this.patchProjectScript(blenderId(v.id), v.revision, {
-              find: v.find,
-              replace: v.replace,
-              replaceAll: v.replaceAll === true,
-              note: typeof v.note === 'string' ? v.note : undefined,
-              allowUnsafe: v.allowUnsafe === true,
-            })
             break
           }
           case 'removeAsset':

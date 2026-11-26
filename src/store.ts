@@ -190,6 +190,12 @@ export interface PatchScriptOptions {
   note?: string
 }
 
+export interface ScriptPatchEdit {
+  find: string
+  replace: string
+  replaceAll?: boolean
+}
+
 export function applyScriptPatch(
   source: string,
   find: string,
@@ -228,6 +234,37 @@ export function applyScriptPatch(
     throw new BlenderError('补丁后的自定义 bpy 脚本超过 256 KB 上限。', 'SCRIPT_TOO_LARGE', 400)
   }
   return { patched, replacements: replaceAll ? count : 1 }
+}
+
+export function applyScriptPatches(
+  source: string,
+  edits: readonly ScriptPatchEdit[],
+): { patched: string; replacements: number; appliedEdits: number } {
+  if (!Array.isArray(edits) || edits.length === 0) {
+    throw new BlenderError('edits 必须为至少包含 1 项修改的非空数组。', 'BAD_REQUEST', 400)
+  }
+  if (edits.length > 50) {
+    throw new BlenderError('单次原子补丁最多包含 50 处修改。', 'BAD_REQUEST', 400)
+  }
+  let current = String(source ?? '')
+  let totalReplacements = 0
+  for (let i = 0; i < edits.length; i++) {
+    const edit = edits[i]
+    if (!edit || typeof edit !== 'object') {
+      throw new BlenderError(`第 ${i + 1} 项脚本补丁格式无效。`, 'BAD_REQUEST', 400)
+    }
+    try {
+      const step = applyScriptPatch(current, edit.find, edit.replace, Boolean(edit.replaceAll))
+      current = step.patched
+      totalReplacements += step.replacements
+    } catch (error) {
+      if (error instanceof BlenderError && edits.length > 1) {
+        throw new BlenderError(`第 ${i + 1}/${edits.length} 处补丁失败：${error.message}`, error.code, error.status)
+      }
+      throw error
+    }
+  }
+  return { patched: current, replacements: totalReplacements, appliedEdits: edits.length }
 }
 
 export class BlenderStore {
@@ -569,10 +606,27 @@ export class BlenderStore {
   ): Promise<{ project: BlenderProject; replacements: number }> {
     const opts: PatchScriptOptions =
       typeof noteOrOptions === 'string' ? { note: noteOrOptions } : (noteOrOptions ?? {})
+    const res = await this.patchScriptEdits(
+      id,
+      revision,
+      [{ find, replace, replaceAll: Boolean(opts.replaceAll) }],
+      opts.note,
+    )
+    return { project: res.project, replacements: res.replacements }
+  }
+
+  async patchScriptEdits(
+    id: string,
+    revision: unknown,
+    edits: readonly ScriptPatchEdit[],
+    note?: string,
+  ): Promise<{ project: BlenderProject; replacements: number; appliedEdits: number }> {
     let replacements = 0
+    let appliedEdits = 0
     const project = await this.edit(id, revision, p => {
-      const result = applyScriptPatch(p.customScript, find, replace, Boolean(opts.replaceAll))
+      const result = applyScriptPatches(p.customScript, edits)
       replacements = result.replacements
+      appliedEdits = result.appliedEdits
       if (p.customScript.trim().length > 0) {
         const latest = p.checkpoints?.[0]
         const isDuplicate =
@@ -580,14 +634,14 @@ export class BlenderStore {
         if (!isDuplicate) {
           this.pushCheckpoint(
             p,
-            this.makeCheckpoint(p, opts.note || `Auto snapshot before patch (R${p.revision})`),
+            this.makeCheckpoint(p, note || `Auto snapshot before patch (R${p.revision})`),
           )
         }
       }
       p.customScript = result.patched
       p.scriptMode = 'custom'
     })
-    return { project, replacements }
+    return { project, replacements, appliedEdits }
   }
 
   async saveCheckpoint(id: string, revision: unknown, note?: string): Promise<BlenderProject> {
@@ -1168,7 +1222,9 @@ export class BlenderStore {
   ): Promise<Uint8Array> {
     const current = await this.get(id)
     const { project, assets } = await this.snapshot(id, current.revision)
-    const scenePy = generateSceneFn ? generateSceneFn(project) : generateSceneScript(project, './assets')
+    const scenePy = generateSceneFn
+      ? generateSceneFn(project)
+      : generateSceneScript(project, './assets', { applyLookdevOverrides: true })
     const readmeLines = [
       `# ${project.title.replace(/[\r\n]+/g, ' ')}`,
       '',

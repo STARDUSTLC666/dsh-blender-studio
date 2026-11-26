@@ -113,7 +113,7 @@ Health probe returning active Blender metadata and detected Cycles GPU backend s
   ```
 
 #### 2. `scene_info`
-Returns a structured `BlenderSceneSummary` (capped at `250` detailed object records to keep payloads compact), including a live deterministic **`qc` (`QC-3D`) audit** (`score` 0–100, `grade` `A–D`, and `issues[]` checking `EMPTY_SCENE`, `NO_CAMERA`, `NO_LIGHTS`, `UNASSIGNED_MATERIAL`, `HIGH_POLYCOUNT`, and `OFF_FRAME_HERO`) surfaced directly in the Workbench Outliner and Agent tool output.
+Returns a structured `BlenderSceneSummary` (capped at `250` detailed object records to keep payloads compact), using the evaluated depsgraph for accurate modifier & Geometry Nodes polycounts, exposing `rotationDeg`, `scale`, and `materialDetails` (introspected across linked `ColorRamp` / `RGB` / `Checker` / `Mix` / `HueSat` & `Roughness MapRange` nodes), plus a live deterministic **`qc` (`QC-3D`) audit** (`score` 0–100, `grade` `A–D`, and `issues[]` checking `EMPTY_SCENE`, `NO_CAMERA`, `NO_LIGHTS`, `UNASSIGNED_MATERIAL` with Geometry Nodes awareness, `HIGH_POLYCOUNT`, and `OFF_FRAME_HERO`) surfaced directly in the Workbench Outliner and Agent tool output.
 - **Params**: `{}`
 - **Result**:
   ```json
@@ -191,8 +191,8 @@ Applies precise transform adjustments to any named object in `bpy.data.objects` 
   - `scale` (`[sx, sy, sz]`, optional)
 - **Result**: `{ "object": { "name": "...", "location": [...], "rotationDeg": [...], "scale": [...] }, "sceneSummary": { ... } }`
 
-#### 8. `set_material_color` *(Live Bridge v2 — `0.4.0`)*
-Repaints a named Principled BSDF material live in Blender (compatible across Blender `3.6–5.x`) with automatic Undo.
+#### 8. `set_material_color` *(Live Bridge v2 — upgraded in `0.5.0`)*
+Repaints a named Principled BSDF material live in Blender (compatible across Blender `3.6–5.x`) with automatic Undo. In `0.5.0`, recursively repaints linked procedural shader nodes (`VALTORGB` ColorRamp, `RGB`, `TEX_CHECKER`, `MIX`/`MIX_RGB`, `HUE_SAT`/`BRIGHTCONTRAST`/`GAMMA`), active `Emission Color`, and linked `Roughness` `MAP_RANGE` / `VALTORGB` ranges so `DSH_KIT` procedural materials repaint cleanly live.
 - **Params**:
   - `materialName` (`string`, required): Material name in `bpy.data.materials`
   - `color` (`string`, required): `#RRGGBB` hex color (converted cleanly to linear sRGB)

@@ -499,3 +499,88 @@ test('BLENDER_EXEMPLARS v0.4.0: 5 pro engineering exemplars pass summary/lookup/
   assert.equal(res.status, 0, `Exemplar Python ast.parse failed:\n${res.stderr}\n${res.stdout}`)
   assert.equal(res.stdout.trim(), `OK:${scriptsToParse.length}`)
 })
+
+test('Blender 3.6–5.x engine upgrades: OPTIX-safe clay override, export_apply=True GLB baking, EEVEE raytracing, evaluated polycounts, numpy contact sheet, and Bridge linked material repaint', () => {
+  const project = makeProject({
+    template: 'product-studio',
+    engine: 'EEVEE',
+    lensMm: 85,
+    exposure: 0.4,
+    clayMode: true,
+  })
+
+  // 1. Default generateSceneScript does NOT invoke dsh_apply_lookdev_overrides (keeps export_model PBR intact);
+  //    passing { applyLookdevOverrides: true } appends it for Live Bridge sync & Source ZIP.
+  const baseScene = generateSceneScript(project, '/tmp/assets')
+  assert.doesNotMatch(baseScene, /\ndsh_apply_lookdev_overrides\(\)\s*$/)
+  const lookdevScene = generateSceneScript(project, '/tmp/assets', { applyLookdevOverrides: true })
+  assert.match(lookdevScene, /\ndsh_apply_lookdev_overrides\(\)\s*$/)
+
+  // 2. dsh_render_clay_override never instantiates ShaderNodeAmbientOcclusion (prevents Cycles OPTIX GPU hangs)
+  const clayFnMatch = /def dsh_render_clay_override\([\s\S]*?\ndef dsh_apply_lookdev_overrides\(/.exec(baseScene)
+  assert.ok(clayFnMatch, 'dsh_render_clay_override definition found')
+  assert.doesNotMatch(clayFnMatch[0], /nodes\.new\(\s*["']ShaderNodeAmbientOcclusion["']\s*\)/, 'clay override must not instantiate OPTIX-hanging ShaderNodeAmbientOcclusion')
+  assert.match(clayFnMatch[0], /ShaderNodeLayerWeight/)
+  assert.match(clayFnMatch[0], /ShaderNodeValToRGB/)
+
+  // 3. EEVEE 4.2+/5.x raytracing & refraction guards, HDRI in hero studio, no orphan SeparateXYZ in heat-blued titanium
+  assert.match(baseScene, /scene\.eevee\.use_raytracing = True/)
+  assert.match(baseScene, /use_raytrace_refraction/)
+  assert.match(baseScene, /def _dsh_wire_world_hdri\(/)
+  const tiFnMatch = /def dsh_mat_heat_blued_titanium\([\s\S]*?\ndef dsh_mat_copper_gold\(/.exec(baseScene)
+  assert.ok(tiFnMatch)
+  assert.doesNotMatch(tiFnMatch[0], /ShaderNodeSeparateXYZ/, 'no unused SeparateXYZ node in heat-blued titanium')
+
+  // 4. Evaluated polygon count via evaluated_depsgraph_get + to_mesh_clear
+  const summaryFnMatch = /def dsh_collect_scene_summary\([\s\S]*?\ndef dsh_emit_scene_summary\(/.exec(baseScene)
+  assert.ok(summaryFnMatch)
+  assert.match(summaryFnMatch[0], /evaluated_depsgraph_get/)
+  assert.match(summaryFnMatch[0], /to_mesh_clear/)
+
+  // 5. Seamless 360-degree circular cyclorama in product-studio (28m radius + backfacing transparency so render_shots never clip)
+  assert.match(baseScene, /Studio_Backdrop_Mesh/)
+  assert.match(baseScene, /use_backface_culling = True/)
+  assert.match(baseScene, /ShaderNodeBsdfTransparent/)
+  assert.doesNotMatch(baseScene, /DSH_Cyc_Thickness/, 'cyclorama must not add opaque solidify shell that blocks render_shots cameras')
+
+  // 5b. Noise-free blended glass for EEVEE + transparentBg backdrop hiding + object rotationDeg in scene summary
+  assert.match(baseScene, /surface_render_method = "BLENDED"/)
+  assert.match(baseScene, /_obj\.hide_render = True/)
+  assert.match(summaryFnMatch[0], /"rotationDeg"/)
+
+  // 5c. Blender 5.x render_animation media_type="VIDEO" + Blender 5.x timestamp-prefixed Saved: log parsing
+  const animHarness = generateRunnerHarness('render_animation', { project, assetsDir: '/tmp/assets', outputPath: '/tmp/a.mp4' })
+  assert.match(animHarness, /media_type = "VIDEO"/)
+  assert.match(animHarness, /media_type = "IMAGE"/)
+  const saved5 = parseBlenderProgressLine("00:05.359  render           | Saved: 'C:\\tmp\\still.png'", 1, 1)
+  assert.equal(saved5.savedFile, 'C:\\tmp\\still.png')
+
+  // 6. Fast built-in numpy stitching path (with pure-Python fallback) in contact_sheet
+  const contact = generateRunnerHarness('contact_sheet', { project, assetsDir: '/tmp/assets', outputPath: '/tmp/c.png' })
+  assert.match(contact, /import numpy as _np/)
+  assert.match(contact, /foreach_get/)
+
+  // 7. export_model bakes modifiers, strips enclosing studio backdrops on mesh interchange formats (not .blend), and emits summary first
+  const glbExp = generateRunnerHarness('export_model', { project, assetsDir: '/tmp/assets', outputPath: '/tmp/m.glb', format: 'glb' })
+  assert.match(glbExp, /_dsh_safe_export/)
+  assert.match(glbExp, /export_apply=True/)
+  assert.match(glbExp, /export_materials="EXPORT"/)
+  assert.match(glbExp, /_dsh_export_heroes/)
+  assert.doesNotMatch(glbExp, /\ndsh_apply_lookdev_overrides\(\)/, 'export_model must not overwrite PBR materials with clay override')
+
+  const blendExp = generateRunnerHarness('export_model', { project, assetsDir: '/tmp/assets', outputPath: '/tmp/m.blend', format: 'blend' })
+  assert.match(blendExp, /pack_all\(\)/)
+  assert.match(blendExp, /compress=True/)
+  assert.doesNotMatch(blendExp, /_dsh_export_heroes/, '.blend export must preserve full studio stage')
+
+  // 8. Live Bridge add-on: recursive color/checker/emissive/roughness repaint, rotationDeg & materialDetails, and evaluated polycounts
+  const addonSrc = readFileSync(ADDON_PATH, 'utf8')
+  assert.match(addonSrc, /"Abstract_Floor"/)
+  assert.match(addonSrc, /"Ground_Plane"/)
+  assert.match(addonSrc, /src_node\.type == "VALTORGB"/)
+  assert.match(addonSrc, /src_node\.type == "TEX_CHECKER"/)
+  assert.match(addonSrc, /Emission Strength/)
+  assert.match(addonSrc, /"materialDetails"/)
+  assert.match(addonSrc, /"rotationDeg"/)
+  assert.match(addonSrc, /evaluated_depsgraph_get/)
+})
