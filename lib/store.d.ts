@@ -2,7 +2,7 @@ import { type AsyncZippable } from 'fflate';
 import { movePathToTrash, movePathsToTrash } from './trash.js';
 export type TrashPathFn = typeof movePathToTrash;
 export type TrashPathsFn = typeof movePathsToTrash;
-import { BlenderConflict, BlenderError, blenderId, type BlenderArtifact, type BlenderAsset, type BlenderAssetKind, type BlenderProject, type BlenderSceneSummary } from './types.js';
+import { BlenderConflict, BlenderError, blenderId, type BlenderArtifact, type BlenderAsset, type BlenderAssetKind, type BlenderProject, type BlenderSceneSummary, type BlenderWorkflowEvent } from './types.js';
 export { BlenderConflict, BlenderError, blenderId };
 export declare function zipAsync(files: AsyncZippable): Promise<Uint8Array>;
 export declare function validateAssetUpload(fileName: string, bytes: Buffer, preferredKind?: BlenderAssetKind): {
@@ -101,6 +101,11 @@ export declare class BlenderStore {
     pruneRunWorkdir(runDirPath: string, keepFiles?: string[]): Promise<void>;
     pruneOldRuns(projectDir: string, keepIds?: Iterable<string>, maxRetained?: number): Promise<string[]>;
     registerArtifact(id: string, artifact: BlenderArtifact): Promise<BlenderProject>;
+    appendWorkflowEvent(id: string, input: Omit<BlenderWorkflowEvent, 'id' | 'seq' | 'timestamp'> & {
+        id?: string;
+        timestamp?: string;
+    }): Promise<BlenderWorkflowEvent>;
+    clearWorkflowHistory(id: string, revision: unknown): Promise<BlenderProject>;
     artifactPath(id: string, artifactId: string): Promise<{
         file: string;
         artifact: BlenderArtifact;

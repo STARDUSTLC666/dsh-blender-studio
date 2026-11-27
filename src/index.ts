@@ -25,6 +25,8 @@ export {
   BlenderRunner,
   DEFAULT_CYCLES_TIMEOUT_MS,
   DEFAULT_EEVEE_TIMEOUT_MS,
+  formatBlenderFailureDiagnostic,
+  isCyclesGpuCrashError,
   parseBlenderProgressLine,
   parseSceneSummaryFromOutput,
   parseShotDoneFromLine,
@@ -75,8 +77,22 @@ export {
 } from './templates.js'
 export type { GenerateSceneOptions, RunnerHarnessOptions } from './templates.js'
 export { BLENDER_EXEMPLARS, getExemplar, listExemplarSummaries } from './exemplars.js'
-export { registerBlenderTools } from './tools.js'
+export { registerBlenderTools, toLosslessJson } from './tools.js'
 export type { RegisterBlenderToolsOptions } from './tools.js'
+export {
+  BlenderWorkflowStore,
+  buildRecipeFromHistory,
+  BUILTIN_WORKFLOW_RECIPES,
+  defaultStepLabel,
+  extractLookdevDiff,
+  isReplayableWorkflowKind,
+  isWorkflowEventReplayable,
+  summarizeWorkflowRecipe,
+  validateWorkflowRecipeInput,
+  validateWorkflowReplayOverrides,
+  validateWorkflowStep,
+} from './workflow.js'
+export type { BuildRecipeFromHistoryOptions } from './workflow.js'
 export { createSkillBundle, parseSkillFile } from './skill-bundle.js'
 export type {
   ParsedSkillFile,
@@ -94,12 +110,16 @@ export {
   BLENDER_COMPUTE_DEVICES,
   BLENDER_QUALITY_TIERS,
   BLENDER_SHOT_PRESETS,
+  BLENDER_WORKFLOW_REPLAYABLE_KINDS,
   BlenderConflict,
   BlenderError,
   blenderId,
   DEFAULT_MULTI_SHOT_IDS,
   defaultProjectFields,
   MAX_SCRIPT_CHECKPOINTS,
+  MAX_WORKFLOW_EVENTS,
+  MAX_WORKFLOW_RECIPES,
+  MAX_WORKFLOW_STEPS,
   resolveRenderResolution,
   sanitizeFileName,
   scrubLogText,
@@ -150,6 +170,16 @@ export type {
   BlenderShotResult,
   BlenderTemplateId,
   BlenderTemplateMeta,
+  BlenderWorkflowEvent,
+  BlenderWorkflowRecipe,
+  BlenderWorkflowRecipeSummary,
+  BlenderWorkflowReplayableKind,
+  BlenderWorkflowReplayOverrides,
+  BlenderWorkflowReplayStepResult,
+  BlenderWorkflowReplaySummary,
+  BlenderWorkflowSource,
+  BlenderWorkflowStep,
+  BlenderWorkflowStepKind,
   PolyHavenAssetItem,
   PolyHavenAssetType,
   ScriptSafetyFinding,
@@ -194,7 +224,7 @@ export function checkBundledSkills() {
   return bundle.checkFiles()
 }
 
-/** Register dsh-blender-studio updates, bundled skills, HTTP workbench routes, and all 6 Agent tools. */
+/** Register dsh-blender-studio updates, bundled skills, HTTP workbench routes, and all 7 Agent tools. */
 export function apply(ctx: SkillsPluginContext): void {
   registerUpdates(ctx as any, { name: 'dsh-blender-studio' })
   const skillHandle = bundle.apply(ctx)

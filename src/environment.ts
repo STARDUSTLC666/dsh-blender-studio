@@ -79,6 +79,7 @@ export function defaultBlenderSettings(): BlenderSettings {
     bridgeToken: '',
     polyHavenEnabled: false,
     computeDevice: 'auto',
+    workflowRecordingEnabled: true,
   }
 }
 
@@ -384,6 +385,10 @@ export class BlenderEnvironment {
         bridgeToken: typeof raw.bridgeToken === 'string' ? raw.bridgeToken.slice(0, 256) : defaults.bridgeToken,
         polyHavenEnabled: typeof raw.polyHavenEnabled === 'boolean' ? raw.polyHavenEnabled : defaults.polyHavenEnabled,
         computeDevice,
+        workflowRecordingEnabled:
+          typeof raw.workflowRecordingEnabled === 'boolean'
+            ? raw.workflowRecordingEnabled
+            : defaults.workflowRecordingEnabled,
       }
     } catch {
       return defaults
@@ -481,6 +486,13 @@ export class BlenderEnvironment {
         throw new BlenderError('Cycles 计算设备必须为 auto、gpu 或 cpu。', 'BAD_REQUEST', 400)
       }
       next.computeDevice = patch.computeDevice as BlenderComputeDevice
+    }
+
+    if (patch.workflowRecordingEnabled !== undefined) {
+      if (typeof patch.workflowRecordingEnabled !== 'boolean') {
+        throw new BlenderError('workflowRecordingEnabled 必须为布尔值。', 'BAD_REQUEST', 400)
+      }
+      next.workflowRecordingEnabled = patch.workflowRecordingEnabled
     }
 
     if (patch.blenderPath !== undefined) {

@@ -596,7 +596,7 @@ test('BlenderWorkbench HTTP API: mock Blender CLI jobs, Range artifact streaming
   assert.equal(phImport.value.asset.source, 'polyhaven')
 })
 
-test('all 6 Agent tools register cleanly, execute end-to-end, render human-readable outputs, and dispose cleanly', async (t) => {
+test('all 7 Agent tools register cleanly, execute end-to-end, render human-readable outputs, and dispose cleanly', async (t) => {
   const mockBridge = await startMockBridgeServer(t)
   const bridgeClient = new BlenderBridgeClient({ host: '127.0.0.1', port: mockBridge.port })
   const { workbench } = await createWorkbenchFixture(t, { bridge: bridgeClient })
@@ -641,7 +641,7 @@ test('all 6 Agent tools register cleanly, execute end-to-end, render human-reada
 
   assert.deepEqual(
     [...tools.keys()],
-    ['blender_health', 'blender_project', 'blender_render', 'blender_script', 'blender_bridge', 'blender_assets'],
+    ['blender_health', 'blender_project', 'blender_render', 'blender_script', 'blender_bridge', 'blender_assets', 'blender_workflow'],
   )
   assert.equal(routes.length, 2)
 
@@ -754,7 +754,7 @@ test('all 6 Agent tools register cleanly, execute end-to-end, render human-reada
   })
   assert.equal(afterRemove.assets.length, 0)
 
-  // Disposal removes all 6 tools and both HTTP routes
+  // Disposal removes all 7 tools and both HTTP routes
   for (const fn of disposers) fn()
   assert.equal(tools.size, 0)
   assert.equal(routes.length, 0)

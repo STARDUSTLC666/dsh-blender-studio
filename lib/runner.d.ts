@@ -48,6 +48,8 @@ export interface ParsedBlenderProgress {
 }
 export declare const DEFAULT_EEVEE_TIMEOUT_MS = 180000;
 export declare const DEFAULT_CYCLES_TIMEOUT_MS = 300000;
+export declare function isCyclesGpuCrashError(errorOrText: unknown): boolean;
+export declare function formatBlenderFailureDiagnostic(lines: readonly string[], scriptContent?: string): string;
 export declare function buildBlenderChildEnv(root: string): NodeJS.ProcessEnv;
 export declare function parseBlenderProgressLine(line: string, frameStart?: number, frameEnd?: number): ParsedBlenderProgress;
 export declare function parseSceneSummaryFromLine(line: string): BlenderSceneSummary | undefined;

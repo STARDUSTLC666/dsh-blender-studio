@@ -34,6 +34,7 @@ import {
   MAX_PROJECT_ASSETS_BYTES,
   MAX_PROJECT_JSON_BYTES,
   MAX_SCRIPT_CHECKPOINTS,
+  MAX_WORKFLOW_EVENTS,
   sanitizeFileName,
   validateProjectFields,
   type BlenderArtifact,
@@ -42,6 +43,7 @@ import {
   type BlenderProject,
   type BlenderSceneSummary,
   type BlenderScriptCheckpoint,
+  type BlenderWorkflowEvent,
 } from './types.js'
 
 export { BlenderConflict, BlenderError, blenderId }
@@ -437,6 +439,20 @@ export class BlenderStore {
       }
     }
 
+    let workflowHistory: BlenderWorkflowEvent[] = []
+    if (Array.isArray(p.workflowHistory)) {
+      workflowHistory = p.workflowHistory
+        .filter(
+          ev =>
+            ev &&
+            typeof ev === 'object' &&
+            typeof ev.id === 'string' &&
+            typeof ev.kind === 'string' &&
+            typeof ev.timestamp === 'string',
+        )
+        .slice(-MAX_WORKFLOW_EVENTS)
+    }
+
     return {
       ...validatedFields,
       id: p.id,
@@ -448,6 +464,7 @@ export class BlenderStore {
       artifacts: p.artifacts,
       sceneSummary: p.sceneSummary,
       checkpoints: checkpoints ?? [],
+      workflowHistory,
     }
   }
 
@@ -518,6 +535,7 @@ export class BlenderStore {
         assets: [],
         artifacts: [],
         checkpoints: [],
+        workflowHistory: [],
       }
       const dir = join(this.root, 'projects', project.id)
       await mkdir(dir, { mode: 0o700 })
@@ -903,6 +921,7 @@ export class BlenderStore {
         assets: copiedAssets,
         artifacts: [],
         checkpoints: [],
+        workflowHistory: [],
       }
       await this.writeProjectFile(cloned)
       createdDir = undefined
@@ -1151,6 +1170,52 @@ export class BlenderStore {
     const projectDir = await this.path(id)
     await this.pruneOldRuns(projectDir, keptIds, MAX_PROJECT_ARTIFACTS)
     return project
+  }
+
+  async appendWorkflowEvent(
+    id: string,
+    input: Omit<BlenderWorkflowEvent, 'id' | 'seq' | 'timestamp'> & { id?: string; timestamp?: string },
+  ): Promise<BlenderWorkflowEvent> {
+    let created!: BlenderWorkflowEvent
+    await this.edit(
+      id,
+      undefined,
+      p => {
+        const existing = Array.isArray(p.workflowHistory) ? p.workflowHistory : []
+        const lastSeq = existing.reduce((max, item) => Math.max(max, Number(item.seq) || 0), 0)
+        created = {
+          id: input.id && UUID_RE.test(input.id) ? input.id : randomUUID(),
+          seq: lastSeq + 1,
+          timestamp: input.timestamp || new Date().toISOString(),
+          kind: input.kind,
+          source: input.source,
+          status: input.status,
+          label: String(input.label || input.kind).slice(0, 120),
+          ...(typeof input.revision === 'number' ? { revision: input.revision } : {}),
+          ...(typeof input.durationMs === 'number' && Number.isFinite(input.durationMs)
+            ? { durationMs: Math.max(0, Math.round(input.durationMs)) }
+            : {}),
+          ...(input.params && typeof input.params === 'object' ? { params: input.params } : {}),
+          ...(typeof input.summary === 'string' && input.summary ? { summary: input.summary.slice(0, 240) } : {}),
+          ...(typeof input.artifactId === 'string' && input.artifactId ? { artifactId: input.artifactId } : {}),
+          ...(typeof input.error === 'string' && input.error ? { error: input.error.slice(0, 240) } : {}),
+        }
+        p.workflowHistory = [...existing, created].slice(-MAX_WORKFLOW_EVENTS)
+      },
+      false,
+    )
+    return created
+  }
+
+  async clearWorkflowHistory(id: string, revision: unknown): Promise<BlenderProject> {
+    return this.edit(
+      id,
+      revision,
+      p => {
+        p.workflowHistory = []
+      },
+      true,
+    )
   }
 
   async artifactPath(id: string, artifactId: string): Promise<{ file: string; artifact: BlenderArtifact; mime: string }> {

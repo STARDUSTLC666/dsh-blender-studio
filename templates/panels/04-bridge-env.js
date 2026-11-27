@@ -518,13 +518,18 @@ function BlenderBridgeEnvPanel({
                   disabled: running || bridgeWorking || !Number.isFinite(Number(directLens)) || Number(directLens) < 18 || Number(directLens) > 135,
                   onClick: () =>
                     runBridgeAction(async () => {
-                      const payload = { action: 'bridge_set_camera', lensMm: Number(directLens) };
+                      const payload = {
+                        action: 'bridge_set_camera',
+                        ...(project?.id ? { projectId: project.id } : {}),
+                        lensMm: Number(directLens),
+                      };
                       const fNum = Number(directFstop);
                       if (String(directFstop).trim() !== '' && Number.isFinite(fNum) && fNum > 0) {
                         payload.dofFstop = fNum;
                       }
                       const res = await api(payload);
                       if (res?.sceneSummary) setLiveScene(res.sceneSummary);
+                      if (project?.id && !dirty) refresh().catch(() => {});
                       setNotice(t('已实时更新 Blender 相机焦距：', 'Updated live Blender camera lens: ') + payload.lensMm + 'mm');
                     }),
                 },
@@ -624,12 +629,14 @@ function BlenderBridgeEnvPanel({
                     runBridgeAction(async () => {
                       const res = await api({
                         action: 'bridge_set_material',
+                        ...(project?.id ? { projectId: project.id } : {}),
                         materialName: String(directMatName).trim(),
                         color: directMatColor,
                         metallic: Number(directMatMetallic),
                         roughness: Number(directMatRoughness),
                       });
                       if (res?.sceneSummary) setLiveScene(res.sceneSummary);
+                      if (project?.id && !dirty) refresh().catch(() => {});
                       setNotice(
                         t('已实时更新材质颜色：', 'Updated live material color: ') +
                           String(directMatName).trim() +
@@ -791,6 +798,7 @@ function BlenderBridgeEnvPanel({
                     runBridgeAction(async () => {
                       const payload = {
                         action: 'bridge_transform_object',
+                        ...(project?.id ? { projectId: project.id } : {}),
                         name: String(directObjName).trim(),
                         location: [Number(directLocX), Number(directLocY), Number(directLocZ)],
                         ...(directRotActive
@@ -799,6 +807,7 @@ function BlenderBridgeEnvPanel({
                       };
                       const res = await api(payload);
                       if (res?.sceneSummary) setLiveScene(res.sceneSummary);
+                      if (project?.id && !dirty) refresh().catch(() => {});
                       setNotice(
                         t('已实时变换对象位置与朝向：', 'Transformed live object: ') + payload.name,
                       );

@@ -57,7 +57,97 @@ export interface BlenderExemplarDefinition extends BlenderExemplarSummary {
     fields: Partial<BlenderProjectFields>;
     script: string;
 }
-export type BlenderJobKind = 'preview_still' | 'contact_sheet' | 'render_shots' | 'render_animation' | 'export_model' | 'inspect_scene' | 'run_script' | 'build_blend' | 'pipeline';
+export type BlenderJobKind = 'preview_still' | 'contact_sheet' | 'render_shots' | 'render_animation' | 'export_model' | 'inspect_scene' | 'run_script' | 'build_blend' | 'pipeline' | 'workflow_replay';
+export type BlenderWorkflowReplayableKind = 'lookdev_update' | 'script_patch' | 'checkpoint_save' | 'inspect_scene' | 'preview_still' | 'contact_sheet' | 'render_shots' | 'render_animation' | 'export_model' | 'pipeline' | 'bridge_sync' | 'bridge_set_camera' | 'bridge_transform_object' | 'bridge_set_material';
+export type BlenderWorkflowStepKind = BlenderWorkflowReplayableKind | 'project_init' | 'script_update' | 'checkpoint_restore' | 'workflow_replay';
+export type BlenderWorkflowSource = 'ui' | 'agent' | 'replay' | 'system';
+export interface BlenderWorkflowEvent {
+    id: string;
+    seq: number;
+    timestamp: string;
+    kind: BlenderWorkflowStepKind;
+    source: BlenderWorkflowSource;
+    status: 'ok' | 'failed' | 'skipped';
+    label: string;
+    revision?: number;
+    durationMs?: number;
+    params?: Record<string, unknown>;
+    summary?: string;
+    artifactId?: string;
+    error?: string;
+}
+export interface BlenderWorkflowStep {
+    id: string;
+    kind: BlenderWorkflowReplayableKind;
+    label?: string;
+    labelEn?: string;
+    enabled?: boolean;
+    params: Record<string, unknown>;
+}
+export interface BlenderWorkflowRecipeSummary {
+    id: string;
+    name: string;
+    nameEn?: string;
+    description: string;
+    descriptionEn?: string;
+    tags: string[];
+    builtin?: boolean;
+    stepCount: number;
+    stepKinds: BlenderWorkflowReplayableKind[];
+    sourceProjectId?: string;
+    sourceProjectTitle?: string;
+    created: string;
+    updated: string;
+}
+export interface BlenderWorkflowRecipe {
+    id: string;
+    schemaVersion: 1;
+    name: string;
+    nameEn?: string;
+    description: string;
+    descriptionEn?: string;
+    tags: string[];
+    builtin?: boolean;
+    sourceProjectId?: string;
+    sourceProjectTitle?: string;
+    created: string;
+    updated: string;
+    steps: BlenderWorkflowStep[];
+}
+export interface BlenderWorkflowReplayOverrides {
+    accentColor?: string;
+    lensMm?: number;
+    exposure?: number;
+    clayMode?: boolean;
+    qualityTier?: BlenderQualityTier;
+    exportFormat?: BlenderExportFormat;
+}
+export interface BlenderWorkflowReplayStepResult {
+    stepId: string;
+    index: number;
+    kind: BlenderWorkflowReplayableKind;
+    label: string;
+    status: 'done' | 'failed' | 'skipped';
+    durationMs: number;
+    summary?: string;
+    artifactId?: string;
+    artifactPath?: string;
+    artifactPaths?: string[];
+    qc?: BlenderSceneQcReport;
+    error?: string;
+}
+export interface BlenderWorkflowReplaySummary {
+    workflowId: string;
+    workflowName: string;
+    dryRun: boolean;
+    totalSteps: number;
+    completedSteps: number;
+    failedSteps: number;
+    skippedSteps: number;
+    stoppedEarly?: boolean;
+    artifactIds: string[];
+    steps: BlenderWorkflowReplayStepResult[];
+}
 export interface BlenderPipelineOptions {
     includeContactSheet?: boolean;
     renderKind?: 'still' | 'animation';
@@ -191,6 +281,7 @@ export interface BlenderProject extends BlenderProjectFields {
     artifacts: BlenderArtifact[];
     sceneSummary?: BlenderSceneSummary;
     checkpoints?: BlenderScriptCheckpoint[];
+    workflowHistory?: BlenderWorkflowEvent[];
 }
 export interface BlenderExecutableInfo {
     path: string;
@@ -232,6 +323,7 @@ export interface BlenderSettings {
     bridgeToken: string;
     polyHavenEnabled: boolean;
     computeDevice?: BlenderComputeDevice;
+    workflowRecordingEnabled?: boolean;
 }
 export interface BlenderJob {
     id: string;
@@ -249,6 +341,7 @@ export interface BlenderJob {
     scriptOutput?: string;
     pipeline?: BlenderPipelineSummary;
     shots?: BlenderShotResult[];
+    workflowReplay?: BlenderWorkflowReplaySummary;
     startedAt: string;
     finishedAt?: string;
 }
@@ -284,7 +377,7 @@ export interface PolyHavenAssetItem {
     thumbnailUrl: string;
     maxResolution?: [number, number];
 }
-export type BlenderErrorCode = 'ID_INVALID' | 'BAD_REQUEST' | 'BAD_ACTION' | 'TITLE_INVALID' | 'DESCRIPTION_TOO_LONG' | 'HEADLINE_TOO_LONG' | 'SAMPLES_INVALID' | 'FRAMES_INVALID' | 'COLOR_INVALID' | 'LENS_INVALID' | 'EXPOSURE_INVALID' | 'SCRIPT_TOO_LARGE' | 'SCRIPT_UNSAFE' | 'SCRIPT_PATCH_NOT_FOUND' | 'SCRIPT_PATCH_AMBIGUOUS' | 'EXEMPLAR_NOT_FOUND' | 'ADDON_INSTALL_FAILED' | 'TEMPLATE_INVALID' | 'EXPORT_FORMAT_INVALID' | 'CONFLICT' | 'JOB_CONFLICT' | 'PROJECT_LIMIT' | 'PROJECT_EXISTS' | 'PROJECT_NOT_FOUND' | 'ASSET_NOT_FOUND' | 'ASSET_CHANGED' | 'ARTIFACT_NOT_FOUND' | 'CHECKPOINT_NOT_FOUND' | 'JOB_NOT_FOUND' | 'JOB_LIMIT' | 'JOB_CANCELLED' | 'ENV_NOT_READY' | 'BLENDER_PATH_INVALID' | 'BLENDER_PROBE_FAILED' | 'BRIDGE_UNREACHABLE' | 'BRIDGE_AUTH_FAILED' | 'BRIDGE_TIMEOUT' | 'BRIDGE_PROTOCOL_ERROR' | 'BRIDGE_HOST_FORBIDDEN' | 'ASSET_REQUIRED' | 'ASSET_SIZE' | 'ASSET_FORMAT' | 'ASSET_LIMIT' | 'POLYHAVEN_DISABLED' | 'POLYHAVEN_FAILED' | 'POLYHAVEN_NOT_FOUND' | 'STORAGE_UNSAFE' | 'PROJECT_CORRUPT' | 'CONFIRM_REQUIRED' | 'JOB_TIMEOUT' | 'LOCK_LOST' | 'CLI_FAILED' | 'OUTPUT_INVALID' | 'OUTPUT_TOO_LARGE' | 'ORIGIN_FORBIDDEN' | 'DOWNLOAD_INVALID' | 'PLUGIN_DISPOSED';
+export type BlenderErrorCode = 'ID_INVALID' | 'BAD_REQUEST' | 'BAD_ACTION' | 'TITLE_INVALID' | 'DESCRIPTION_TOO_LONG' | 'HEADLINE_TOO_LONG' | 'SAMPLES_INVALID' | 'FRAMES_INVALID' | 'COLOR_INVALID' | 'LENS_INVALID' | 'EXPOSURE_INVALID' | 'SCRIPT_TOO_LARGE' | 'SCRIPT_UNSAFE' | 'SCRIPT_PATCH_NOT_FOUND' | 'SCRIPT_PATCH_AMBIGUOUS' | 'EXEMPLAR_NOT_FOUND' | 'ADDON_INSTALL_FAILED' | 'TEMPLATE_INVALID' | 'EXPORT_FORMAT_INVALID' | 'CONFLICT' | 'JOB_CONFLICT' | 'PROJECT_LIMIT' | 'PROJECT_EXISTS' | 'PROJECT_NOT_FOUND' | 'ASSET_NOT_FOUND' | 'ASSET_CHANGED' | 'ARTIFACT_NOT_FOUND' | 'CHECKPOINT_NOT_FOUND' | 'JOB_NOT_FOUND' | 'JOB_LIMIT' | 'JOB_CANCELLED' | 'ENV_NOT_READY' | 'BLENDER_PATH_INVALID' | 'BLENDER_PROBE_FAILED' | 'BRIDGE_UNREACHABLE' | 'BRIDGE_AUTH_FAILED' | 'BRIDGE_TIMEOUT' | 'BRIDGE_PROTOCOL_ERROR' | 'BRIDGE_HOST_FORBIDDEN' | 'ASSET_REQUIRED' | 'ASSET_SIZE' | 'ASSET_FORMAT' | 'ASSET_LIMIT' | 'POLYHAVEN_DISABLED' | 'POLYHAVEN_FAILED' | 'POLYHAVEN_NOT_FOUND' | 'STORAGE_UNSAFE' | 'PROJECT_CORRUPT' | 'CONFIRM_REQUIRED' | 'JOB_TIMEOUT' | 'LOCK_LOST' | 'CLI_FAILED' | 'OUTPUT_INVALID' | 'OUTPUT_TOO_LARGE' | 'ORIGIN_FORBIDDEN' | 'DOWNLOAD_INVALID' | 'WORKFLOW_NOT_FOUND' | 'WORKFLOW_INVALID' | 'WORKFLOW_LIMIT' | 'WORKFLOW_BUILTIN_READONLY' | 'PLUGIN_DISPOSED';
 export declare const BLENDER_TEMPLATE_IDS: readonly BlenderTemplateId[];
 export declare const BLENDER_ENGINES: readonly BlenderRenderEngine[];
 export declare const BLENDER_ASPECTS: readonly BlenderAspect[];
@@ -311,7 +404,12 @@ export declare const MAX_ARTIFACT_DOWNLOAD_BYTES: number;
 export declare const MAX_CUSTOM_SCRIPT_BYTES: number;
 export declare const MAX_PROJECT_JSON_BYTES: number;
 export declare const MAX_SCRIPT_CHECKPOINTS = 10;
+export declare const MAX_WORKFLOW_EVENTS = 120;
+export declare const MAX_WORKFLOW_RECIPES = 40;
+export declare const MAX_WORKFLOW_STEPS = 50;
+export declare const MAX_WORKFLOW_JSON_BYTES: number;
 export declare const MAX_JOB_LOG_LINES = 80;
+export declare const BLENDER_WORKFLOW_REPLAYABLE_KINDS: readonly BlenderWorkflowReplayableKind[];
 export declare const SCENE_JSON_MARKER = "__DSH_SCENE_JSON__=";
 export declare const SHOT_DONE_MARKER = "__DSH_SHOT_DONE__=";
 export declare const DEFAULT_BRIDGE_HOST = "127.0.0.1";

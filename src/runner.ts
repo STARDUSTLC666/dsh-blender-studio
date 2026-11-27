@@ -70,7 +70,64 @@ export const DEFAULT_EEVEE_TIMEOUT_MS = 180_000
 export const DEFAULT_CYCLES_TIMEOUT_MS = 300_000
 
 const SCRUBBED_ENV_ALLOWLIST =
-  /^(path|pathext|systemroot|windir|comspec|display|wayland_display|xdg_runtime_dir|cuda_visible_devices|hip_visible_devices|metal_device_wrapper_type)$/i
+  /^(path|pathext|systemroot|systemdrive|windir|comspec|programdata|allusersprofile|os|number_of_processors|processor_architecture|display|wayland_display|xdg_runtime_dir|cuda_visible_devices|cuda_cache_path|optix_cache_path|hip_visible_devices|metal_device_wrapper_type)$/i
+
+const CYCLES_GPU_CRASH_RE =
+  /Illegal address in CUDA|CUDA_ERROR_|OPTIX_ERROR_|HIP_ERROR_|ONEAPI.*error|Metal.*command buffer.*error|CUDA queue copy_from_device|integrator_(?:shade|intersect|queued)_/i
+
+export function isCyclesGpuCrashError(errorOrText: unknown): boolean {
+  const text = errorOrText instanceof Error ? errorOrText.message : String(errorOrText ?? '')
+  return CYCLES_GPU_CRASH_RE.test(text)
+}
+
+export function formatBlenderFailureDiagnostic(lines: readonly string[], scriptContent?: string): string {
+  const all = Array.isArray(lines) ? lines : []
+  let tbIdx = -1
+  for (let i = all.length - 1; i >= 0; i--) {
+    if (/Traceback \(most recent call last\):/i.test(all[i])) {
+      tbIdx = i
+      break
+    }
+  }
+
+  let selected: string[]
+  if (tbIdx !== -1) {
+    selected = all.slice(tbIdx, Math.min(all.length, tbIdx + 14))
+  } else {
+    const highlights = all.filter(l =>
+      /(?:Traceback|Error:|Exception:|SyntaxError|AttributeError|TypeError|RuntimeError|PermissionError|KeyError|ValueError|NameError|IndexError|File ")/i.test(
+        l,
+      ),
+    )
+    selected = highlights.length ? highlights.slice(-8) : all.slice(-8)
+  }
+
+  // Map run.py line numbers back to customScript line numbers when preamble marker is present
+  const mappedAnnotations: string[] = []
+  if (typeof scriptContent === 'string' && scriptContent.includes('# --- Custom bpy Script ---')) {
+    const scriptLines = scriptContent.split(/\r?\n/)
+    const markerIdx = scriptLines.findIndex(l => l.trim() === '# --- Custom bpy Script ---')
+    if (markerIdx >= 0) {
+      const markerLine1Based = markerIdx + 1
+      const seenLines = new Set<number>()
+      for (const l of selected) {
+        const m = /File\s+"[^"]*run\.py",\s+line\s+(\d+)/i.exec(l)
+        if (!m) continue
+        const runLine = Number(m[1])
+        if (runLine > markerLine1Based && runLine <= scriptLines.length && !seenLines.has(runLine)) {
+          seenLines.add(runLine)
+          const customLine = runLine - markerLine1Based
+          const sourceText = (scriptLines[runLine - 1] ?? '').trim()
+          mappedAnnotations.push(
+            `→ customScript 第 ${customLine} 行（run.py L${runLine}）${sourceText ? `: ${sourceText.slice(0, 140)}` : ''}`,
+          )
+        }
+      }
+    }
+  }
+
+  return [...selected, ...mappedAnnotations].join('\n')
+}
 
 export function buildBlenderChildEnv(root: string): NodeJS.ProcessEnv {
   const result: NodeJS.ProcessEnv = {}
@@ -416,10 +473,7 @@ export class BlenderRunner {
         }
         const exitCode = code ?? 1
         if (exitCode !== 0) {
-          const highlights = lines.filter(l =>
-            /(?:Traceback|Error:|Exception:|SyntaxError|AttributeError|TypeError|RuntimeError|PermissionError)/i.test(l),
-          )
-          const tail = (highlights.length ? highlights.slice(-4) : lines.slice(-6)).join('\n')
+          const tail = formatBlenderFailureDiagnostic(lines, request.scriptContent)
           rejectRun(
             new BlenderError(
               `Blender 渲染或脚本执行失败（退出码 ${exitCode}）。${tail ? '\n' + tail : ''}`,

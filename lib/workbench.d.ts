@@ -4,7 +4,8 @@ import { PolyHavenClient } from './polyhaven.js';
 import { BlenderRunner, type BlenderRunExecutor } from './runner.js';
 import type { SkillBundleHealthReport, SkillsPluginContext } from './skill-bundle.js';
 import { BlenderStore, type ScriptPatchEdit, type TrashPathFn, type TrashPathsFn } from './store.js';
-import { type BlenderBridgeStatus, type BlenderEnvironmentStatus, type BlenderExportFormat, type BlenderJob, type BlenderJobKind, type BlenderPipelineOptions, type BlenderProject, type BlenderQualityTier, type BlenderSceneSummary, type BlenderSettings, type BlenderShotPresetId } from './types.js';
+import { BlenderWorkflowStore } from './workflow.js';
+import { type BlenderBridgeStatus, type BlenderEnvironmentStatus, type BlenderExportFormat, type BlenderJob, type BlenderJobKind, type BlenderPipelineOptions, type BlenderProject, type BlenderQualityTier, type BlenderSceneSummary, type BlenderSettings, type BlenderShotPresetId, type BlenderWorkflowEvent, type BlenderWorkflowReplayOverrides, type BlenderWorkflowReplaySummary, type BlenderWorkflowSource } from './types.js';
 export interface StartJobOptions {
     format?: BlenderExportFormat;
     frame?: number;
@@ -14,6 +15,18 @@ export interface StartJobOptions {
     pipeline?: BlenderPipelineOptions;
     shots?: BlenderShotPresetId[];
     qualityTier?: BlenderQualityTier;
+    source?: BlenderWorkflowSource;
+    skipWorkflowRecord?: boolean;
+}
+export interface ReplayWorkflowOptions {
+    revision?: unknown;
+    dryRun?: boolean;
+    stopOnError?: boolean;
+    skipIfBridgeOffline?: boolean;
+    overrides?: BlenderWorkflowReplayOverrides;
+    allowUnsafe?: boolean;
+    source?: BlenderWorkflowSource;
+    timeoutMs?: number;
 }
 export interface BlenderWorkbenchOptions {
     root?: string;
@@ -42,6 +55,7 @@ export declare class BlenderWorkbench {
     readonly runner: BlenderRunner;
     readonly bridge: BlenderBridgeClient;
     readonly polyHaven: PolyHavenClient;
+    readonly workflows: BlenderWorkflowStore;
     readonly route = "/api/dsh-blender-studio/workbench";
     readonly addonPath: string;
     private readonly hasCustomBridge;
@@ -64,12 +78,37 @@ export declare class BlenderWorkbench {
     bridgeSetMaterialColor(opts: BridgeSetMaterialColorOptions): Promise<BridgeSetMaterialColorResult>;
     bridgeSyncProject(id: string, opts?: BridgeLoadScriptOptions & {
         allowUnsafe?: boolean;
+        lookdevOverrides?: BlenderWorkflowReplayOverrides;
     }): Promise<BridgeLoadScriptResult & {
         projectId: string;
         revision: number;
     }>;
     installAddon(): Promise<InstallBridgeAddonResult>;
-    createFromExemplar(exemplarId: string, titleOverride?: string): Promise<BlenderProject>;
+    isWorkflowRecordingEnabled(): Promise<boolean>;
+    recordWorkflowEvent(projectId: string, event: Omit<BlenderWorkflowEvent, 'id' | 'seq' | 'timestamp'>, options?: {
+        force?: boolean;
+    }): Promise<BlenderWorkflowEvent | null>;
+    readProjectScript(id: string, opts?: {
+        startLine?: number;
+        endLine?: number;
+        pattern?: string;
+        maxMatches?: number;
+    }): Promise<{
+        id: string;
+        title: string;
+        revision: number;
+        scriptMode: BlenderProject['scriptMode'];
+        totalLines: number;
+        byteLength: number;
+        startLine: number;
+        endLine: number;
+        content: string;
+        matches?: Array<{
+            line: number;
+            text: string;
+        }>;
+    }>;
+    createFromExemplar(exemplarId: string, titleOverride?: string, source?: BlenderWorkflowSource): Promise<BlenderProject>;
     patchProjectScript(id: string, revision: unknown, opts: {
         find?: string;
         replace?: string;
@@ -77,6 +116,8 @@ export declare class BlenderWorkbench {
         edits?: ScriptPatchEdit[];
         note?: string;
         allowUnsafe?: boolean;
+        source?: BlenderWorkflowSource;
+        skipWorkflowRecord?: boolean;
     }): Promise<BlenderProject & {
         project: BlenderProject;
         replacements: number;
@@ -99,6 +140,13 @@ export declare class BlenderWorkbench {
     startJob(kind: BlenderJobKind, id: string, revision?: unknown, options?: StartJobOptions): Promise<BlenderJob>;
     private runHarnessStage;
     private executeJob;
+    replayWorkflow(workflowId: string, projectId: string, options?: ReplayWorkflowOptions): Promise<BlenderJob | {
+        dryRun: true;
+        workflowReplay: BlenderWorkflowReplaySummary;
+        projectId: string;
+        revision: number;
+    }>;
+    private executeWorkflowReplay;
     openGui(id: string, revision?: unknown): Promise<{
         launched: boolean;
         executable: string;

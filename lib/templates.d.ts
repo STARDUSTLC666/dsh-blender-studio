@@ -4,6 +4,7 @@ export declare function getTemplateMeta(id: BlenderTemplateId): BlenderTemplateM
 export interface GenerateSceneOptions {
     computeDevice?: BlenderComputeDevice;
     applyLookdevOverrides?: boolean;
+    enforceRenderProfile?: boolean;
 }
 export interface RunnerHarnessOptions {
     project: BlenderProject;
@@ -17,6 +18,7 @@ export interface RunnerHarnessOptions {
     contactSheetHeight?: number;
     shots?: BlenderShotPresetId[];
     computeDevice?: BlenderComputeDevice;
+    enforceRenderProfile?: boolean;
 }
 export declare function generateSceneScript(project: BlenderProject | BlenderProjectFields, assetsDir?: string, options?: GenerateSceneOptions): string;
 export declare function generateRunnerHarness(mode: BlenderJobKind, options: RunnerHarnessOptions): string;

@@ -1,6 +1,6 @@
 import { type BlenderExemplarDefinition, type BlenderExemplarSummary } from './types.js';
 /**
- * Built-in Pro Engineering Exemplars for dsh-blender-studio (v0.5.1).
+ * Built-in Pro Engineering Exemplars for dsh-blender-studio (v0.6.0).
  * Every exemplar script is visually verified on Blender 5.3.0 (Cycles + AgX + OIDN),
  * scores QC-3D 100/A, passes checkScriptSafety(), supports live DSH_PROJECT["accentColor"]
  * repainting and Lookdev overrides, and serves both as 1-click starter scenes and

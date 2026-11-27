@@ -1,9 +1,9 @@
 ---
 name: "blender-production-pipeline"
-description: "Orchestrate the 5-phase AAA 3D production workflow in dsh-blender-studio v0.5.1: 5 live-repaintable Pro Exemplars, 24-helper DSH_KIT v2, OPTIX-safe clay & live lookdev overrides, single-launch multi-shot rendering, atomic multi-hunk patching, synchronous wait: true, and Live Bridge 0.5.1 deep PBR controls."
+description: "Orchestrate the 5-phase AAA 3D production workflow in dsh-blender-studio v0.6.0: 5 live-repaintable Pro Exemplars (get_exemplar), 24-helper DSH_KIT v2, OPTIX-safe clay & live lookdev overrides, single-launch multi-shot rendering, script read + atomic multi-hunk patching, workflow recording/replay (blender_workflow), synchronous wait: true, and Live Bridge 0.5.1 deep PBR controls."
 ---
 
-# High-Quality 3D Production Pipeline (`dsh-blender-studio` v0.5.1)
+# High-Quality 3D Production Pipeline (`dsh-blender-studio` v0.6.0)
 
 Use this skill whenever building complex, portfolio-grade 3D vehicles, industrial machinery, robotics, horology, architectural hero pieces, or detailed product assemblies inside `dsh-blender-studio`. Rather than writing one blind monolithic script and hoping the final Cycles render looks good, follow this deterministic **5-Phase AAA Production Loop**.
 
@@ -20,14 +20,14 @@ Before writing geometry code:
      - `kuka-6axis-robot-arm` (6-Axis Industrial Robot Arm Workstation · default `#ea580c`)
      - `chronograph-tourbillon-watch` (Mechanical Tourbillon Chronograph · openworked titanium & rose-gold horology movement)
    - Every exemplar wires `DSH_PROJECT.get("accentColor")` directly into its hero clearcoat / livery / anodized / dial shader — changing `accentColor` in the Inspector or via `blender_project(action: 'update')` repaints the masterpiece with **zero code edits**!
-   - Clone any exemplar directly via `blender_project(action: 'create_from_exemplar', exemplarId)` (auto-saves `'Exemplar baseline'` checkpoint) or inspect its `customScript` via `get` as a proven few-shot reference.
+   - Inspect any exemplar's complete `bpy` code read-only without cluttering active projects via `blender_project(action: 'get_exemplar', exemplarId)`, or clone it directly via `blender_project(action: 'create_from_exemplar', exemplarId)` (auto-saves `'Exemplar baseline'` checkpoint).
 2. **Lock real-world metric dimensions** (`1 BU = 1 m`): e.g. GT racecar (`4.8 m × 2.0 m × 1.15 m`), twin-turbine helicopter (`11 m` rotor span, `3.2 m` height), high-bypass turbofan (`2.4 m` fan diameter, `3.6 m` length), 6-axis industrial robot (`2.1 m` reach). Real-world meters keep Cycles inverse-square lighting, bevel radii, depth-of-field f-stops, and auto-framing physically accurate.
 3. **Partition into logical sub-assembly collections**:
    - `00_Studio`: cyclorama / wet asphalt / helipad / engineering bay, overhead strip softboxes, key/fill/rim rigs
    - `01_Primary`: main monocoque fuselage, engine core, robot arm castings, or architectural shell
    - `02_Mechanical`: rotors, fan blades, brake discs, calipers, servo joint housings, hydraulic manifolds, bolt rings
    - `03_Details`: glass canopy, cockpit interior, louver grilles, umbilical cables, LED strips, decals, fasteners
-4. **Create a clean workspace**: Start from `blank-stage` (or any of the 8 starter templates / 4 pro exemplars), set `scriptMode: 'custom'` (`customScript` accepts up to **`256 KB`** of pure `bpy`/`bmesh` code), and use `blender_project(action: 'duplicate')` whenever branching a risky lookdev experiment.
+4. **Create a clean workspace**: Start from `blank-stage` (or any of the 8 starter templates / 5 pro exemplars), set `scriptMode: 'custom'` (`customScript` accepts up to **`256 KB`** of pure `bpy`/`bmesh` code), and use `blender_project(action: 'duplicate')` whenever branching a risky lookdev experiment.
 5. **Auto-wired assets**: Upload `.hdr`/`.exr` to automatically light the World node tree, or drop `.glb`/`.gltf`/`.obj`/`.fbx`/`.stl` parts to auto-import and ground onto the stage.
 
 ---
@@ -52,7 +52,7 @@ Validate silhouette, scale, and proportions **before** adding 200 bolts or runni
    }
    ```
 4. Check the returned **`QC-3D` report** (`EMPTY_SCENE`, `NO_CAMERA`, `NO_LIGHTS`, `UNASSIGNED_MATERIAL`, `FLAT_UNBEVELED_PRIMITIVE`, `FLOATING_HERO`, `OFF_FRAME_HERO`, `HIGH_POLYCOUNT`). `abortOnQcError: true` halts immediately if a critical error (`EMPTY_SCENE`, `NO_CAMERA`, `OFF_FRAME_HERO`) is detected so zero render time is wasted.
-5. Visually inspect the 2×2 `contact_sheet` PNG at the exact local path reported by `blender_render` to confirm silhouette proportions, wheelbase/stance, and camera clearance across Front, 3/4, Top, and Active Camera views.
+5. Visually inspect the 2×2 `contact_sheet` PNG (using `read_image`) at the exact local path reported by `blender_render` to confirm silhouette proportions, wheelbase/stance, and camera clearance across Front, 3/4, Top, and Active Camera views. Both `contact_sheet` and `preview_still` accept `qualityTier: 'draft' | 'studio' | 'beauty'` and scale framing smoothly from 4cm horology/product pieces to 10m vehicles.
 
 ---
 
@@ -96,7 +96,7 @@ Replace flat clay placeholders with physically layered **`DSH_KIT` v2** shaders,
 - `dsh_mat_matte_armor(name, color=(0.24, 0.28, 0.26))` — tactical satin composite/ceramic finish with subtle micro-grain
 
 ### Hero Studio Environments, Clay Override & Post (`DSH_KIT` v2 — 4 Helpers)
-- `dsh_setup_hero_studio(style='dark_cyclorama', accent_color='#4176e6')` — one-call studio backdrop + calibrated strip softboxes & rim lighting supporting `'dark_cyclorama'`, `'wet_asphalt'`, `'engineering_bay'`, and `'helipad'`.
+- `dsh_setup_hero_studio(style='dark_cyclorama', accent_color='#4176e6', scale=1.0)` — one-call studio backdrop + calibrated strip softboxes & rim lighting supporting `'dark_cyclorama'`, `'wet_asphalt'`, `'engineering_bay'`, and `'helipad'`. Pass `scale=0.1` for 10–25 cm product photography (cameras, watches, headphones) so floor, softboxes, and inverse-square wattage stay physically calibrated.
 - `dsh_render_clay_override(enable=True, color=(0.76, 0.77, 0.79, 1.0))` — applies a neutral matte clay override across hero geometry for pure silhouette, proportion, and edge-bevel QC audits without shader distractions.
 - `dsh_setup_compositor(glare=True, glare_threshold=1.15)` — Blender 4.x & 5.x safe `FOG_GLOW` glare bloom for LED light-bars, exhaust cores, and specular metallic catchlights.
 - `dsh_add_dof(cam, target_obj, fstop=4.0)` — subtle photographic depth of field locked onto the hero focal target.
@@ -157,6 +157,22 @@ Replace flat clay placeholders with physically layered **`DSH_KIT` v2** shaders,
 5. **Live Bridge v2 Direct Controls & 1-Click Setup**:
    - Install the Bridge add-on into local Blender in one step: `blender_bridge(action: 'install_addon', confirmed: true)` after explicit user confirmation.
    - Manipulate an open Blender scene directly without writing Python (each command pushes a clean Blender Undo step):
-     - `blender_bridge(action: 'set_camera', location?, target?, lensMm?, dofFstop?)`
-     - `blender_bridge(action: 'transform_object', name, location?, rotationDeg?, scale?)`
-     - `blender_bridge(action: 'set_material', materialName, color, metallic?, roughness?)`
+     - `blender_bridge(action: 'set_camera', id?, location?, target?, lensMm?, dofFstop?)`
+     - `blender_bridge(action: 'transform_object', id?, name, location?, rotationDeg?, scale?)`
+     - `blender_bridge(action: 'set_material', id?, materialName, color, metallic?, roughness?)`
+     - Pass `id` (active project UUID) on direct controls so they are recorded into the project's workflow timeline.
+6. **Record, Save & Replay Reusable 3D Workflows (`blender_workflow`)**:
+   - Every Lookdev change, surgical script patch, checkpoint, QC audit, render, multi-shot pack, export, and Live Bridge direct control is automatically recorded into the project's timeline (`blender_workflow(action: 'history', id)`).
+   - Distill proven iteration loops into portable reusable recipes via `blender_workflow(action: 'save_from_history', id, name, includeScriptPatches?: false, coalesceLookdev?: true)`, or compose recipes directly via `blender_workflow(action: 'create', name, description?, tags?, steps[])`, or export/import portable JSON via `export` / `import`.
+   - **Replayable step `kind` & `params` schema**:
+     - `lookdev_update`: `{ fields: { accentColor?, lensMm?, exposure?, clayMode?, transparentBg?, lightingPreset?, materialPreset? } }`
+     - `script_patch`: `{ find, replace, replaceAll? }` or `{ edits: [{ find, replace, replaceAll? }], note? }`
+     - `checkpoint_save`: `{ note? }`
+     - `inspect_scene`: `{ abortOnQcError?: boolean }`
+     - `contact_sheet` / `preview_still`: `{ qualityTier?: 'draft' | 'studio' | 'beauty', frame?: number, clayMode?: boolean }`
+     - `render_shots`: `{ shots?: ('hero_3q'|'low_dramatic'|'macro_dof'|'side_profile'|'top_plan')[], qualityTier?: 'draft'|'studio'|'beauty', frame?: number, clayMode?: boolean }`
+     - `render_animation`: `{ clayMode?: boolean }`
+     - `export_model`: `{ format?: 'glb' | 'fbx' | 'obj' | 'stl' | 'blend' }`
+     - `pipeline`: `{ includeContactSheet?, renderKind?, exportFormat?, qualityTier?, abortOnQcError?, frame?, clayMode?: boolean }`
+     - `bridge_sync` / `bridge_set_camera` / `bridge_transform_object` / `bridge_set_material` (auto-skipped gracefully when `skipIfBridgeOffline: true`)
+   - Replay any built-in (`aaa-product-lookdev-pack`, `clay-silhouette-audit`, `rapid-eevee-delivery`, `cycles-hero-delivery`) or saved recipe onto any project via `blender_workflow(action: 'replay', workflowId, id, dryRun?: boolean, stopOnError?: true, overrides?: { accentColor?, lensMm?, exposure?, clayMode?, qualityTier?, exportFormat? }, wait: true)`. Quality tier & Lookdev overrides are strictly enforced even on custom scripts (and `clay-silhouette-audit` runs non-destructively without mutating saved project materials).

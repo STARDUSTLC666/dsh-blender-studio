@@ -2,6 +2,19 @@
 
 [返回简介](README.md) · [完整说明](docs/REFERENCE.zh.md) · [Live Bridge 指南](docs/BRIDGE.md) · [验证说明](docs/VALIDATION.md)
 
+## [0.6.0] - 2026-11-28
+
+- **全新 3D 生产工作流录制、配方库与跨工程一键回放（第 7 个工具 `blender_workflow` + 第 5 工作台页签「工作流」）**：
+  - **自动录制操作时间线（`workflowHistory`）**：自动记录模板/范本创建、Lookdev 参数覆写、脚本局部补丁（`patch_script`）、`inspect_scene` / `preview_still` / `contact_sheet` / `render_shots` / `render_animation` / `export_model` / `pipeline` 与 Live Bridge 相机/对象/材质直控步骤（含每步耗时、`QC-3D` 得分与成品关联），支持开关录制与清空历史。
+  - **4 套内置双语 AAA 生产配方与便携 JSON 配方库**：内置 `aaa-product-lookdev-pack`、`clay-silhouette-audit`（**100% 非破坏式白模体检**，绝不污染原工程 `clayMode` 与 `revision`）、`rapid-eevee-delivery` 与 `live-bridge-lookdev-loop`；支持从工程历史一键提炼命名配方（`save_from_history`）、自定义创建/更新/两步确认删除、便携 JSON 复制/下载导入导出与 `proper-lockfile` 并发安全写入。
+  - **跨工程一键重放（`workflow_replay`）与安全防线**：支持 `dryRun` 预演计划、临时非破坏 `overrides`（`accentColor`/`lensMm`/`exposure`/`clayMode`/`qualityTier`/`exportFormat`）、Bridge 断连策略（`skipIfBridgeOffline`/`stopOnError`）与 `wait: true` 同步等待；在重放入口与全部 7 类 CLI 步骤前强制执行 `assertScriptSafeOrAllowed()` 静态安全校验；工作台新增「工作流」面板（`templates/panels/05-workflow.js`），完整覆盖中英文零 CJK 泄漏、浅深色主题与 `760px` 窄屏验收。
+- **真实 DeepSeek Harness + Blender 5.3 实跑驱动的引擎与 Agent 体验升级**：
+  - **DSH 宿主无损 JSON 保障（`toLosslessJson`）**：为全部 7 个工具输出统一清理 `undefined` 自有属性、`-0`、`NaN`/`Infinity`、稀疏数组与循环引用，彻底消除 DSH 宿主 `INVALID_TOOL_OUTPUT` 拒收错误。
+  - **产品级小尺度自适应构图与影棚缩放**：移除 `contact_sheet` / `render_shots` 过大的固定相机距离下限（`3.8m / 0.95m / 0.5m`），让 `15–30 cm` 米制精密产品（耳机、相机、腕表等）自然充满画面；`dsh_setup_hero_studio` 支持 `scale` 自适应缩放；边界摘要自动过滤影棚背景板，反馈真实主体包围盒尺寸。
+  - **Cycles GPU 异常自动回退 CPU + 源码行号映射诊断**：`computeDevice: 'auto'` 下若遇 OPTIX/CUDA 异常自动无缝回退 Cycles CPU 重试；`formatBlenderFailureDiagnostic()` 保留完整 Python Traceback 并把 `run.py` 行号精准映射回 `customScript` 行号。
+  - **Agent 提效工具扩展**：新增 `blender_project(action: 'get_exemplar')`（支持传范本 slug 直接只读源码及总行数）与 `blender_script(action: 'read', startLine?, endLine?, pattern?)`（无需退回 shell 即可带行号阅读/正则检索）；`blender_project` 明确打印 `当前修订号 revision` 与 `Lookdev` 参数防 `409 Conflict`；`preview_still`/`contact_sheet` 支持 `qualityTier`；全仓视觉审片指引与工具描述统一升级为 `read_image`。
+- **Workflow Recording, Reusable Recipe Library & Cross-Project Replay (`blender_workflow`, 7th Tool) + Live DeepSeek Harness Optimizations (`0.6.0`)**: adds automatic project workflow timeline recording (`workflowHistory`), 4 bilingual built-in AAA recipes (including 100% non-destructive `clay-silhouette-audit`), save-from-history, portable JSON export/import, cross-project `workflow_replay` with `dryRun`, non-destructive `overrides`, Bridge offline handling, `wait: true`, and mandatory `assertScriptSafeOrAllowed()` security enforcement across all 7 CLI replay step kinds, plus the new 5th Workbench **Workflow** tab (`templates/panels/05-workflow.js`) with zero-CJK `en-US` localization; adds `toLosslessJson()` across all 7 tools to eliminate DSH `INVALID_TOOL_OUTPUT` rejections, product-scale framing & scale-aware `dsh_setup_hero_studio`, backdrop-filtered bounds summaries, automatic Cycles GPU→CPU crash fallback under `computeDevice: 'auto'`, Python traceback line-number remapping (`formatBlenderFailureDiagnostic`), `blender_project(get_exemplar)`, `blender_script(read)`, `qualityTier` on `preview_still`/`contact_sheet`, and `read_image` visual QC alignment.
+
 ## [0.5.1] - 2026-11-27
 
 - **PBR `.glb` 3D 网格视口 v3 视觉修复与画质升级（实机 Chromium Canvas 2D 实测验证）**：

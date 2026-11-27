@@ -178,7 +178,7 @@ Updates the active scene camera live on Blender's main thread without writing Py
 - **Params**:
   - `location` (`[x, y, z]`, optional): World-space camera coordinates
   - `target` (`[x, y, z]`, optional): World-space look-at target (orients camera via direction tracking)
-  - `lensMm` (`number`, optional): Focal length in mm (`18–135`)
+  - `lensMm` (`number`, optional): Focal length in mm (`10–300`)
   - `dofFstop` (`number`, optional): Aperture f-stop for Depth of Field
 - **Result**: `{ "camera": { "name": "...", "location": [...], "lensMm": 58 }, "sceneSummary": { ... } }`
 

@@ -290,6 +290,10 @@ window.__ModuleLoader__.load({
         SCRIPT_PATCH_AMBIGUOUS: 'Target snippet matched multiple locations in the script; narrow the search text or pass replaceAll.',
         EXEMPLAR_NOT_FOUND: 'Requested Pro Exemplar was not found.',
         ADDON_INSTALL_FAILED: 'Failed to install or enable dsh_blender_bridge.py in local Blender. Check Blender permissions and logs.',
+        WORKFLOW_NOT_FOUND: 'Requested workflow recipe was not found.',
+        WORKFLOW_INVALID: 'Workflow recipe payload or step parameters are invalid.',
+        WORKFLOW_LIMIT: 'Maximum of 40 custom workflow recipes reached. Delete an older recipe first.',
+        WORKFLOW_BUILTIN_READONLY: 'Built-in AAA workflow recipes are read-only and cannot be deleted.',
         PLUGIN_DISPOSED: 'Plugin is unloading. Wait for reload and retry.',
       };
       if (code && byCode[code]) return byCode[code];
@@ -427,6 +431,7 @@ window.__ModuleLoader__.load({
         build_blend: t('生成 .blend 工程', 'Build .blend'),
         pipeline: t('一键全流程', 'Production Pipeline'),
         render_shots: t('多机位分镜', 'Multi-Shot Pack'),
+        workflow_replay: t('工作流重放', 'Workflow Replay'),
       };
       return map[kind] || kind || t('Blender 任务', 'Blender Job');
     }
@@ -482,6 +487,24 @@ window.__ModuleLoader__.load({
           if (job.state === 'failed') return 'Failed — expand job log for details';
           if (job.state === 'cancelled') return 'Cancelled';
           return doneCount > 0 ? `Rendering multi-shot pack (${doneCount} done)…` : 'Rendering multi-shot lookdev pack…';
+        }
+      }
+      if (job.kind === 'workflow_replay') {
+        const rep = job.workflowReplay;
+        const doneSteps = Number(rep?.completedSteps) || 0;
+        const totalSteps = Number(rep?.totalSteps) || 0;
+        if (job.state === 'done') {
+          return t(
+            `重放完成（${doneSteps}/${totalSteps} 步成功）`,
+            `Completed (${doneSteps}/${totalSteps} ${totalSteps === 1 ? 'step' : 'steps'})`,
+          );
+        }
+        if (lang === 'en' && /[\u3400-\u9fff]/.test(String(job.stage || ''))) {
+          if (job.state === 'failed') return 'Failed — expand job log for details';
+          if (job.state === 'cancelled') return 'Cancelled';
+          return totalSteps > 0
+            ? `Replaying workflow (${doneSteps}/${totalSteps} done)…`
+            : 'Replaying workflow…';
         }
       }
       const raw = String(job.stage || job.state || '');
@@ -568,6 +591,8 @@ window.__ModuleLoader__.load({
       const [environment, setEnvironment] = useState(null);
       const [templates, setTemplates] = useState(FALLBACK_TEMPLATES);
       const [exemplars, setExemplars] = useState(FALLBACK_EXEMPLARS);
+      const [workflows, setWorkflows] = useState([]);
+      const [recordingEnabled, setRecordingEnabled] = useState(true);
 
       const initialFields = cache.fields || emptyFields();
       const [project, setProject] = useState(cache.project);
@@ -652,6 +677,12 @@ window.__ModuleLoader__.load({
         if (Array.isArray(data?.exemplars) && data.exemplars.length) {
           setExemplars(data.exemplars);
         }
+        if (Array.isArray(data?.workflows)) {
+          setWorkflows(data.workflows);
+        }
+        if (typeof data?.workflowRecordingEnabled === 'boolean') {
+          setRecordingEnabled(data.workflowRecordingEnabled);
+        }
         const current = latest.current;
         if (!current.dirty && current.project?.id) {
           const updated = activeList.find(row => row.id === current.project.id);
@@ -669,6 +700,12 @@ window.__ModuleLoader__.load({
             null,
           );
         }
+      }
+
+      async function refreshWorkflows() {
+        const res = await api({ action: 'workflow_list' });
+        if (Array.isArray(res?.workflows)) setWorkflows(res.workflows);
+        if (typeof res?.recordingEnabled === 'boolean') setRecordingEnabled(res.recordingEnabled);
       }
 
       useEffect(() => {
@@ -741,6 +778,19 @@ window.__ModuleLoader__.load({
                     t(
                       `多机位分镜渲染完成（共 ${shotCount} 张），可在下方胶片条点击切换或对比。`,
                       `Multi-shot lookdev pack finished (${shotCount} shots). Click thumbnails in the filmstrip below to inspect or compare.`,
+                    ),
+                  );
+                } else if (next.kind === 'workflow_replay') {
+                  const rep = next.workflowReplay;
+                  const wfDisplayName =
+                    lang === 'en'
+                      ? (typeof BUILTIN_WORKFLOW_EN === 'object' && BUILTIN_WORKFLOW_EN[rep?.workflowId]?.name) ||
+                        (/[\u3400-\u9fff]/.test(String(rep?.workflowName || '')) ? rep?.workflowId || 'Workflow' : rep?.workflowName || '')
+                      : rep?.workflowName || '';
+                  setNotice(
+                    t(
+                      `工作流「${wfDisplayName}」重放完成（${rep?.completedSteps ?? 0}/${rep?.totalSteps ?? 0} 步成功）。`,
+                      `Workflow "${wfDisplayName}" replay finished (${rep?.completedSteps ?? 0}/${rep?.totalSteps ?? 0} steps).`,
                     ),
                   );
                 } else if (next.kind === 'pipeline') {
@@ -1274,6 +1324,7 @@ window.__ModuleLoader__.load({
 
       const activeViewTab = project || creating ? editorTab : libraryTab;
       const assetArtifactCount = (project?.assets?.length || 0) + (project?.artifacts?.length || 0);
+      const workflowEventCount = Array.isArray(project?.workflowHistory) ? project.workflowHistory.length : workflows.length;
       const headerTabsConfig = {
         label: t('Blender 3D 工作台视图', 'Blender 3D workbench views'),
         value: activeViewTab,
@@ -1282,11 +1333,13 @@ window.__ModuleLoader__.load({
           ? [
               { id: 'studio', icon: 'cube', 'data-tour': 'blender-tab-studio', label: t('3D 工作室', 'Studio') },
               { id: 'assets-exports', icon: 'box', label: t('素材与成品', 'Assets'), count: assetArtifactCount },
+              { id: 'workflow', icon: 'play', label: t('工作流', 'Workflow'), count: workflowEventCount },
               { id: 'bridge-env', icon: 'plug', label: t('桥接与环境', 'Bridge & Env') },
             ]
           : [
               { id: 'projects', icon: 'cube', 'data-tour': 'blender-tab-projects', label: t('3D 工程', 'Projects'), count: projects.length },
               { id: 'archives', icon: 'folder', label: t('已归档', 'Archived'), count: archived.length },
+              { id: 'workflow', icon: 'play', label: t('工作流', 'Workflows'), count: workflows.length },
               { id: 'bridge-env', icon: 'plug', label: t('桥接与环境', 'Bridge & Env') },
             ],
       };
@@ -1307,6 +1360,7 @@ window.__ModuleLoader__.load({
         typeof BLENDER_STUDIO_CSS === 'string' ? BLENDER_STUDIO_CSS : '',
         typeof BLENDER_ASSETS_CSS === 'string' ? BLENDER_ASSETS_CSS : '',
         typeof BLENDER_BRIDGE_CSS === 'string' ? BLENDER_BRIDGE_CSS : '',
+        typeof BLENDER_WORKFLOW_CSS === 'string' ? BLENDER_WORKFLOW_CSS : '',
       ].join('\n');
 
       if (!environment) {
@@ -1557,7 +1611,13 @@ window.__ModuleLoader__.load({
                       variant: 'primary',
                       icon: 'refresh',
                       disabled: running,
-                      onClick: () => startJob(job.kind === 'export_model' ? 'export_model' : job.kind, job.kind === 'export_model' ? { format: exportFormat } : {}),
+                      onClick: () =>
+                        job.kind === 'workflow_replay' && job.workflowReplay?.workflowId
+                          ? startJob('workflow_replay', { workflowId: job.workflowReplay.workflowId })
+                          : startJob(
+                              job.kind === 'export_model' ? 'export_model' : job.kind,
+                              job.kind === 'export_model' ? { format: exportFormat } : {},
+                            ),
                     },
                     t('重试任务', 'Retry job'),
                   )
@@ -1628,7 +1688,27 @@ window.__ModuleLoader__.load({
             role: 'tabpanel',
           },
           !project && !creating
-            ? libraryTab === 'bridge-env'
+            ? libraryTab === 'workflow'
+              ? h(BlenderWorkflowPanel, {
+                  project: null,
+                  workflows,
+                  recordingEnabled,
+                  job,
+                  running,
+                  busy,
+                  dirty: false,
+                  environment,
+                  setProject,
+                  setJob,
+                  setNotice,
+                  setError,
+                  perform,
+                  refresh,
+                  refreshWorkflows,
+                  lang,
+                  t,
+                })
+              : libraryTab === 'bridge-env'
               ? h(BlenderBridgeEnvPanel, {
                   project: null,
                   dirty: false,
@@ -1683,6 +1763,26 @@ window.__ModuleLoader__.load({
                       setNotice(t('3D 工程已恢复至活跃列表。', '3D project restored to active list.'));
                     }),
                 })
+            : editorTab === 'workflow'
+            ? h(BlenderWorkflowPanel, {
+                project,
+                workflows,
+                recordingEnabled,
+                job,
+                running,
+                busy,
+                dirty,
+                environment,
+                setProject,
+                setJob,
+                setNotice,
+                setError,
+                perform,
+                refresh,
+                refreshWorkflows,
+                lang,
+                t,
+              })
             : editorTab === 'bridge-env'
             ? h(BlenderBridgeEnvPanel, {
                 project,

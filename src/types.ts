@@ -83,6 +83,126 @@ export type BlenderJobKind =
   | 'run_script'
   | 'build_blend'
   | 'pipeline'
+  | 'workflow_replay'
+
+export type BlenderWorkflowReplayableKind =
+  | 'lookdev_update'
+  | 'script_patch'
+  | 'checkpoint_save'
+  | 'inspect_scene'
+  | 'preview_still'
+  | 'contact_sheet'
+  | 'render_shots'
+  | 'render_animation'
+  | 'export_model'
+  | 'pipeline'
+  | 'bridge_sync'
+  | 'bridge_set_camera'
+  | 'bridge_transform_object'
+  | 'bridge_set_material'
+
+export type BlenderWorkflowStepKind =
+  | BlenderWorkflowReplayableKind
+  | 'project_init'
+  | 'script_update'
+  | 'checkpoint_restore'
+  | 'workflow_replay'
+
+export type BlenderWorkflowSource = 'ui' | 'agent' | 'replay' | 'system'
+
+export interface BlenderWorkflowEvent {
+  id: string
+  seq: number
+  timestamp: string
+  kind: BlenderWorkflowStepKind
+  source: BlenderWorkflowSource
+  status: 'ok' | 'failed' | 'skipped'
+  label: string
+  revision?: number
+  durationMs?: number
+  params?: Record<string, unknown>
+  summary?: string
+  artifactId?: string
+  error?: string
+}
+
+export interface BlenderWorkflowStep {
+  id: string
+  kind: BlenderWorkflowReplayableKind
+  label?: string
+  labelEn?: string
+  enabled?: boolean
+  params: Record<string, unknown>
+}
+
+export interface BlenderWorkflowRecipeSummary {
+  id: string
+  name: string
+  nameEn?: string
+  description: string
+  descriptionEn?: string
+  tags: string[]
+  builtin?: boolean
+  stepCount: number
+  stepKinds: BlenderWorkflowReplayableKind[]
+  sourceProjectId?: string
+  sourceProjectTitle?: string
+  created: string
+  updated: string
+}
+
+export interface BlenderWorkflowRecipe {
+  id: string
+  schemaVersion: 1
+  name: string
+  nameEn?: string
+  description: string
+  descriptionEn?: string
+  tags: string[]
+  builtin?: boolean
+  sourceProjectId?: string
+  sourceProjectTitle?: string
+  created: string
+  updated: string
+  steps: BlenderWorkflowStep[]
+}
+
+export interface BlenderWorkflowReplayOverrides {
+  accentColor?: string
+  lensMm?: number
+  exposure?: number
+  clayMode?: boolean
+  qualityTier?: BlenderQualityTier
+  exportFormat?: BlenderExportFormat
+}
+
+export interface BlenderWorkflowReplayStepResult {
+  stepId: string
+  index: number
+  kind: BlenderWorkflowReplayableKind
+  label: string
+  status: 'done' | 'failed' | 'skipped'
+  durationMs: number
+  summary?: string
+  artifactId?: string
+  artifactPath?: string
+  artifactPaths?: string[]
+  qc?: BlenderSceneQcReport
+  error?: string
+}
+
+export interface BlenderWorkflowReplaySummary {
+  workflowId: string
+  workflowName: string
+  dryRun: boolean
+  totalSteps: number
+  completedSteps: number
+  failedSteps: number
+  skippedSteps: number
+  stoppedEarly?: boolean
+  artifactIds: string[]
+  steps: BlenderWorkflowReplayStepResult[]
+}
 
 export interface BlenderPipelineOptions {
   includeContactSheet?: boolean
@@ -229,6 +349,7 @@ export interface BlenderProject extends BlenderProjectFields {
   artifacts: BlenderArtifact[]
   sceneSummary?: BlenderSceneSummary
   checkpoints?: BlenderScriptCheckpoint[]
+  workflowHistory?: BlenderWorkflowEvent[]
 }
 
 export interface BlenderExecutableInfo {
@@ -274,6 +395,7 @@ export interface BlenderSettings {
   bridgeToken: string
   polyHavenEnabled: boolean
   computeDevice?: BlenderComputeDevice
+  workflowRecordingEnabled?: boolean
 }
 
 export interface BlenderJob {
@@ -292,6 +414,7 @@ export interface BlenderJob {
   scriptOutput?: string
   pipeline?: BlenderPipelineSummary
   shots?: BlenderShotResult[]
+  workflowReplay?: BlenderWorkflowReplaySummary
   startedAt: string
   finishedAt?: string
 }
@@ -389,6 +512,10 @@ export type BlenderErrorCode =
   | 'OUTPUT_TOO_LARGE'
   | 'ORIGIN_FORBIDDEN'
   | 'DOWNLOAD_INVALID'
+  | 'WORKFLOW_NOT_FOUND'
+  | 'WORKFLOW_INVALID'
+  | 'WORKFLOW_LIMIT'
+  | 'WORKFLOW_BUILTIN_READONLY'
   | 'PLUGIN_DISPOSED'
 
 export const BLENDER_TEMPLATE_IDS: readonly BlenderTemplateId[] = [
@@ -531,7 +658,28 @@ export const MAX_ARTIFACT_DOWNLOAD_BYTES = 200 * 1024 * 1024
 export const MAX_CUSTOM_SCRIPT_BYTES = 256 * 1024
 export const MAX_PROJECT_JSON_BYTES = 4 * 1024 * 1024
 export const MAX_SCRIPT_CHECKPOINTS = 10
+export const MAX_WORKFLOW_EVENTS = 120
+export const MAX_WORKFLOW_RECIPES = 40
+export const MAX_WORKFLOW_STEPS = 50
+export const MAX_WORKFLOW_JSON_BYTES = 256 * 1024
 export const MAX_JOB_LOG_LINES = 80
+
+export const BLENDER_WORKFLOW_REPLAYABLE_KINDS: readonly BlenderWorkflowReplayableKind[] = [
+  'lookdev_update',
+  'script_patch',
+  'checkpoint_save',
+  'inspect_scene',
+  'preview_still',
+  'contact_sheet',
+  'render_shots',
+  'render_animation',
+  'export_model',
+  'pipeline',
+  'bridge_sync',
+  'bridge_set_camera',
+  'bridge_transform_object',
+  'bridge_set_material',
+] as const
 export const SCENE_JSON_MARKER = '__DSH_SCENE_JSON__='
 export const SHOT_DONE_MARKER = '__DSH_SHOT_DONE__='
 export const DEFAULT_BRIDGE_HOST = '127.0.0.1'

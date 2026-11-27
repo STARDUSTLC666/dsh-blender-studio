@@ -2,7 +2,7 @@
 
 # Blender 3D Studio
 
-> **把 DeepSeek Harness 变成完整的 Blender 3D 生产工作台：零窗口 Headless Cycles GPU 渲染、单启多机位摄影包、PBR 交互式 GLB 网格视口 v3、原子多段脚本补丁与可选本地回环 Live Bridge 直控。**
+> **把 DeepSeek Harness 变成完整的 Blender 3D 生产工作台：零窗口 Headless Cycles GPU 渲染、工作流录制与配方一键复现、单启多机位摄影包、PBR 交互式 GLB 网格视口 v3、原子多段脚本补丁与可选本地回环 Live Bridge 直控。**
 
 [![npm](https://img.shields.io/npm/v/dsh-blender-studio?color=2563eb)](https://www.npmjs.com/package/dsh-blender-studio)
 [![CI](https://github.com/STARDUSTLC666/dsh-blender-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/STARDUSTLC666/dsh-blender-studio/actions/workflows/ci.yml)
@@ -11,25 +11,25 @@
 [![downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-blender-studio-downloads.svg)](https://www.npmjs.com/package/dsh-blender-studio)
 [![total downloads](https://raw.githubusercontent.com/STARDUSTLC666/dsh-suite/npm-downloads/assets/dsh-blender-studio-total-downloads.svg)](https://www.npmjs.com/package/dsh-blender-studio)
 
-**[v0.5.1 亮点](#v051-核心升级) · [三轨架构](#三轨工作流架构) · [范本画廊](#内置高阶范本画廊) · [核心能力](#核心能力) · [工具与技能](#6-个智能体工具与-9-个开放技能) · [安装与上手](#安装) · [安全边界](#开始前要知道) · [完整参考](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/docs/REFERENCE.zh.md)**
+**[v0.6.0 亮点](#v060-核心升级) · [三轨架构](#三轨工作流架构) · [范本画廊](#内置高阶范本画廊) · [核心能力](#核心能力) · [工具与技能](#7-个智能体工具与-9-个开放技能) · [安装与上手](#安装) · [安全边界](#开始前要知道) · [完整参考](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/docs/REFERENCE.zh.md)**
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/workflow-zh-dark.svg">
-  <img src="https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/workflow-zh-light.svg" alt="dsh-blender-studio v0.5.1 高质量 3D 生产四步流程示意" width="100%">
+  <img src="https://raw.githubusercontent.com/STARDUSTLC666/dsh-blender-studio/main/docs/assets/intro/workflow-zh-light.svg" alt="dsh-blender-studio v0.6.0 高质量 3D 生产四步流程示意" width="100%">
 </picture>
 
 ## 为什么选择 `dsh-blender-studio`？
 
-用 AI 写 `bpy` 代码最常见的痛点是：**看不见几何体、改一行重发几万 Token、Blender 3.6/4.x/5.x API 报错、导出模型带影棚背景、或者想实时改机位/材质却无从下手**。
+用 AI 写 `bpy` 代码最常见的痛点是：**看不见几何体、改一行重发几万 Token、Blender 3.6/4.x/5.x API 报错、跑出一套好灯光/机位后无法一键复用到下一个项目、导出模型带影棚背景、或者想实时改机位/材质却无从下手**。
 
-`dsh-blender-studio` 为 DeepSeek Harness 提供开箱即用的 **OP-DSH 3D 工作室**、**6 个结构化智能体工具**、**9 个跨平台 Blender 3.6–5.x 技能**、**24 项 `DSH_KIT` v2 建模与 PBR 函数库**、**8 套工程模板 + 5 套实渲验证 `QC-3D 100/A` 高阶机械范本**，覆盖从起稿、白模体检、多机位棚拍、原子补丁迭代到 Cycles GPU 精渲与 3D 交付的全流程。
+`dsh-blender-studio` 为 DeepSeek Harness 提供开箱即用的 **OP-DSH 3D 工作室**、**7 个结构化智能体工具（含工作流录制与重放）**、**9 个跨平台 Blender 3.6–5.x 技能**、**24 项 `DSH_KIT` v2 建模与 PBR 函数库**、**8 套工程模板 + 5 套实渲验证 `QC-3D 100/A` 高阶机械范本**，覆盖从起稿、白模体检、多机位棚拍、原子补丁迭代、工作流配方复用到 Cycles GPU 精渲与 3D 交付的全流程。
 
-### v0.5.1 核心升级
+### v0.6.0 核心升级
 
-- **PBR 交互式 `.glb` 网格视口 v3（支持透明玻璃与闭体背面剔除）**：纯 JS 零依赖 Canvas 软光栅升级，支持 glTF 金属度/粗糙度/自发光着色、`alphaMode: "BLEND"` 与 `KHR_materials_transmission` 半透明蓝宝石表镜/玻璃罩透视分层渲染、散度定理闭体背面剔除与大三角自动细分（消除底座堆叠穿插）、余子式法线矩阵、`TRIANGLE_STRIP`/`TRIANGLE_FAN`、材质边界感知减面与 `ResizeObserver` 响应式缩放；导出 GLB 后自动聚焦 3D 网格视图，实时舞台同步响应 `lensMm` 与 `exposure` EV。
-- **Blender 3.6–5.x 引擎级画质与稳定升级**：Cycles **OPTIX/CUDA/CPU 安全白模覆写**（彻底规避 OPTIX AO 卡死）、EEVEE 4.2+/5.x 光追与无噪点半透明玻璃、360° 无缝环形影棚、透明底自动隐藏背景、Blender 5.x FFmpeg `media_type` 适配、导出自动烘焙修改器（`export_apply=True`）并剥离影棚背景（`.blend` 导出完整保留 Lookdev 覆写与打包压缩）、零依赖内置 `numpy` 高速 2×2 四视角拼图、Depsgraph 真实面数统计与 Geometry Nodes 零误报。
-- **AI 代理工作流大幅提速**：支持**原子多段 `patch_script`（`edits[]` 单次最多 50 处修改，失败整批回滚且仅留 1 份快照）**与 **`wait: true` 同步等待模式**（`inspect_scene` / `blender_render` / `run_headless` 一调即得成品路径、`QC-3D` 报告与完整失败错误诊断）；修正单帧/多机位/四视角实时采样进度映射；`bridge_sync` 与源码备份 ZIP 完整同步 Lookdev 覆写。
-- **Live Bridge (`0.5.1`) 深度材质重绘与全旋转模式对象变换直控**：跨越 `ColorRamp` / `Mix` / `Checker` / `HueSat` / 活跃 `Emission` / `Roughness MapRange` 节点链精准回读并重绘材质（含 LED 发光主色自动识别与未传 `roughness` 时准确回读链表粗糙度），原生兼容 `QUATERNION` / `AXIS_ANGLE` / 欧拉旋转模式（glTF 导入模型无缝直控），工作台新增**实时金属度滑块**与**3 轴实时对象变换（XYZ + 旋转）**直控面板。
+- **3D 生产工作流录制、配方库与跨工程一键回放（`blender_workflow` + 工作台「工作流」页签）**：自动记录模板/范本创建、Lookdev 调参、`patch_script`、渲染/导出与 Live Bridge 直控时间线；内置 4 套双语 AAA 配方（含 100% 非破坏式 `clay-silhouette-audit` 白模体检），支持一键从历史提炼配方、便携 JSON 复制/下载与导入、Dry-Run 预演、非破坏临时覆写（`accentColor`/`lensMm`/`exposure`/`clayMode`/`qualityTier`/`exportFormat`）、安全扫描防线与 `wait: true` 同步重放。
+- **真实 DeepSeek Harness 实跑驱动的引擎与 Agent 优化**：全部 7 个工具输出经 `toLosslessJson()` 净化杜绝宿主 `INVALID_TOOL_OUTPUT`；移除小尺度产品自动构图距离下限并支持 `dsh_setup_hero_studio(scale=...)` 尺度自适应；Cycles GPU 驱动异常自动无缝回退 CPU 重试；Python 报错精确映射回 `customScript` 行号；新增 `blender_project(get_exemplar)` 与 `blender_script(read)` 带行号/正则检索、`preview_still`/`contact_sheet` `qualityTier` 与 `read_image` 视觉审片对齐。
+- **PBR 交互式 `.glb` 网格视口 v3（透明玻璃 + 闭体背面剔除）**：纯 JS 零依赖 Canvas 软光栅支持 glTF 金属度/粗糙度/自发光、`alphaMode: "BLEND"` 与 `KHR_materials_transmission` 半透明蓝宝石表镜/玻璃罩透视分层渲染、散度定理闭体背面剔除、大三角细分、余子式法线矩阵与 `ResizeObserver` 响应式缩放。
+- **Blender 3.6–5.x 引擎画质与 Live Bridge (`0.5.1`) 直控**：Cycles OPTIX 安全白模、EEVEE 4.2+/5.x 光追与无噪点玻璃、360° 无缝环形影棚、`export_apply=True` 去背景洁净导出（`.blend` 保留 Lookdev）、`numpy` 2×2 四视角拼图、原子多段 `patch_script`（≤50 处）与 Live Bridge 深度节点链材质重绘 + 全旋转模式（含 `QUATERNION`）3 轴对象直控。
 
 ## 三轨工作流架构
 
@@ -73,18 +73,19 @@
 | **OP-DSH 3D 工作室、GLB 视口 v3 与分镜对比** | 零外部依赖 Canvas 3D 舞台（8 套模板轮廓、实时响应 `lensMm` 18–135mm / `exposure` -3..+3 EV / `clayMode` 白模、快捷键 `Space`/`1–6`/`R`/`Ctrl+S`）、**`.glb` 3D 网格查看器 v3**（PBR 金属/粗糙/自发光/玻璃透射三光源着色、闭体背面剔除、余子式法线矩阵、`TRIANGLE_STRIP`/`TRIANGLE_FAN`、材质边界感知减面、4 种视图模式、平移缩放、PNG 快照、导出自动聚焦及素材直览）、**多机位分镜底片条**、**A/B 卷帘对比**（适配工程画幅）与素材页分镜筛选/一键跳转 |
 | **引擎画质、单启多机位批渲与 `DSH_KIT` v2** | **`render_shots` 单进程多机位摄影包**（单启出齐 1–5 组摄影机位，单调精准采样进度，成品保留上限 20 份）；**Cycles GPU 自动加速**（`OPTIX`/`CUDA`/`METAL`/`HIP`/`ONEAPI`，安全回退 CPU）+ **OPTIX 安全白模** + **EEVEE 4.2+/5.x 光追与无噪点玻璃** + **Blender 5.x FFmpeg MP4**；**24 项 `DSH_KIT` v2 建模与 PBR 函数**、**`numpy` 2×2 四视角质检**、**`export_apply=True` 去背景洁净 3D 导出**（`.blend` 保留 Lookdev 覆写）、Depsgraph 真实面数统计与 4 阶段 **`pipeline`** |
 | **AI 精准迭代与 Live Bridge (`0.5.1`) 直控** | **原子多段 `patch_script`**（支持单处 `find`/`replace` 或批量 `edits[]` 最多 50 处修改、写前安全扫描、失败整批回滚、自动留存 10 份脚本快照）；**`wait: true` 同步等待模式**（`inspect_scene` / `blender_render` / `run_headless` 一调返回成品与 `QC-3D`）；**一键安装 `dsh_blender_bridge.py` (`0.5.1`)**，支持 Undo 安全的机位、**全旋转模式 3 轴对象变换**与**深度节点链材质（含金属度/粗糙度/自发光）**实时回读重绘 |
-| **8 模板 + 5 范本、6 工具、9 技能与安全边界** | 8 套跨版本模板（含 360° 无缝影棚、建筑展馆与 Geometry Nodes 程序化雕塑）+ 5 套实渲 `QC-3D 100/A` 范本；拖放 HDRI/3D 模型自动装配；6 个智能体工具 + 9 个开放格式技能；`256 KB` 脚本上限、13 条 `NodeSocket` 友好静态安全校验、UUID 乐观锁、默认关闭的白名单 Poly Haven CC0 客户端与 DSH v3 13 套主题 × 8 套字体 |
+| **工作流录制与配方复用、7 工具、9 技能与安全边界** | **3D 生产工作流录制/配方库/JSON 导入导出/一键复现重放**（内置 4 套 AAA 配方 + 自动时间线记录 + 非破坏覆写）；8 套跨版本模板 + 5 套实渲 `QC-3D 100/A` 范本；拖放 HDRI/3D 模型自动装配；7 个智能体工具 + 9 个开放格式技能；`256 KB` 脚本上限、13 条 `NodeSocket` 友好静态安全校验、UUID 乐观锁、默认关闭的白名单 Poly Haven CC0 客户端与 DSH v3 13 套主题 × 8 套字体 |
 
-## 6 个智能体工具与 9 个开放技能
+## 7 个智能体工具与 9 个开放技能
 
 | 智能体工具 | 核心职责 |
 | :--- | :--- |
 | **`blender_health`** | 只读自检：Blender 3.6–5.x 路径/版本、Cycles GPU 后端（OPTIX/CUDA/METAL/HIP/ONEAPI）、Live Bridge 状态、9 技能注册健康度 |
-| **`blender_project`** | 工程 CRUD、5 套高阶范本一键创建、实时 Lookdev 覆写（`accentColor`/`lensMm`/`exposure`/`clayMode`）、快照回滚与 `inspect_scene`（支持 `wait: true`） |
-| **`blender_render`** | `preview_still`、`contact_sheet`、`render_shots`、`render_animation`、`export_model`、`pipeline`（均支持 `wait: true` 同步等待直出成品路径与 `QC-3D`） |
-| **`blender_script`** | 13 条规则静态安全扫描、`patch` 单处或原子多段 `edits[]`（≤50 处）、`run_headless`（支持 `wait: true`）与 `run_bridge` |
-| **`blender_bridge`** | 一键安装 `dsh_blender_bridge.py` (`0.5.1`)、实时同步工程、`scene_info`、`viewport_capture`、Undo 安全直控（`set_camera`/`transform_object`/`set_material`）与 `open_gui` |
+| **`blender_project`** | 工程 CRUD、5 套高阶范本只读查阅（`get_exemplar`）与一键创建、实时 Lookdev 覆写（`accentColor`/`lensMm`/`exposure`/`clayMode`）、快照回滚与 `inspect_scene`（支持 `wait: true`） |
+| **`blender_render`** | `preview_still`、`contact_sheet`、`render_shots`、`pipeline`（均支持 `qualityTier`）、`render_animation`、`export_model`（全部 6 个异步动作均支持 `wait: true` 同步等待直出成品路径与 `QC-3D`） |
+| **`blender_script`** | 行号读取/正则检索（`read`）、13 条规则静态安全扫描、`patch` 单处或原子多段 `edits[]`（≤50 处）、`run_headless`（支持 `wait: true`）与 `run_bridge` |
+| **`blender_bridge`** | 一键安装 `dsh_blender_bridge.py` (`0.5.1`)、实时同步工程、`scene_info`、`viewport_capture`、Undo 安全直控（`set_camera`/`transform_object`/`set_material`，传入工程 `id` 自动入录工作流时间线）与 `open_gui` |
 | **`blender_assets`** | 工程素材管理，以及默认关闭、严格白名单限域的 Poly Haven CC0 HDRI/贴图/模型检索导入 |
+| **`blender_workflow`** | 工作流实时录制开关、工程操作时间线（`history`）、从历史一键提炼可复用配方（`save_from_history`）、自定义创建、便携 JSON 导入导出（`export`/`import`）与跨工程一键重放（`replay`，支持 `dryRun`、`overrides` 与 `wait: true`） |
 
 > **9 个跨平台开放技能（`skills/blender-*/SKILL.md`）**：`blender-production-pipeline` · `blender-scene-architecture` · `blender-bpy-scripting` · `blender-materials-lighting` · `blender-geometry-nodes` · `blender-camera-animation` · `blender-rendering-export` · `blender-grease-pencil` · `blender-visual-qc`（可直接复制到 Claude Code / Cursor / Gemini CLI / Codex 复用）。
 
@@ -105,10 +106,13 @@ dsh plugin --profile desktop add dsh-blender-studio
 3. **拖放素材自动装配与 PBR 3D 检视**：在「素材与成品」页拖放本地 HDRI（`.hdr`/`.exr` 自动打光）、贴图或 3D 模型（`.glb`/`.obj`/`.fbx`/`.stl` 自动归一化落台）；导出或上传的 `.glb` 均可一键跳转至舞台 **3D 网格 v3** 进行 PBR 旋转检视并导出 PNG 快照。
 4. **单启多机位摄影包、`QC-3D` 与 A/B 对比**：运行 **`render_shots` 多机位分镜包** 一次启动批量输出 5 套专业机位，或在「一键全流程（Pipeline）」串联 `QC-3D` 体检、2×2 四视角质检、Cycles GPU 精渲与自动去背景 GLB 导出，并在底片条与 A/B 卷帘中直接验收。
 5. **一键安装并直控 Live Bridge (`0.5.1`)**：在「桥接与环境」页点击 **「一键安装到本机 Blender」**，在 Blender `N → DSH Bridge` 点击 **Start DSH Bridge** 后，即可同步工程（自动携带 Lookdev 覆写）并通过「实时直控」面板或 `blender_bridge` 实时调相机、改 3 轴对象位置/旋转与深度重绘 PBR 材质（支持 `Ctrl+Z` 撤销）；详见 [Live Bridge 指南](https://github.com/STARDUSTLC666/dsh-blender-studio/blob/main/docs/BRIDGE.md)。
+6. **工作流录制、保存配方与跨工程一键复现**：进入「工作流」页签查看自动录制的操作时间线，将满意的调光/多机位/导出步骤一键保存为命名配方或导出便携 JSON，随时在其他 3D 工程上通过 Dry-Run 预演或带 `overrides` 一键重放（也可直接交由 `blender_workflow` 工具自动执行）。
 
 ### 常用对话示例
 
 > 从内置范本 `chronograph-tourbillon-watch` 创建陀飞轮腕表工程，把 `accentColor` 改为 `#E11D48`、`lensMm` 设为 `85`、`exposure` 设为 `0.3`，调用 `blender_render(action: 'render_shots', shots: ['hero_3q', 'macro_dof', 'low_dramatic', 'top_plan'], qualityTier: 'studio', wait: true)` 同步一次出齐 4 机位摄影包。
+
+> 先用 `blender_workflow(action: 'replay', workflowId: 'clay-silhouette-audit', id: '<projectId>', wait: true)` 做非破坏式白模四视角与轮廓审校，确认无穿插后再从当前工程历史保存可复用配方并一键重放到新配色方案。
 
 > 用 `blender_script(action: 'patch', edits: [{ find: 'roughness=0.28', replace: 'roughness=0.14' }, { find: 'lens_mm=50', replace: 'lens_mm=65' }], note: '高光与焦段微调')` 原子修改当前脚本，再用 `blender_render(action: 'pipeline', qualityTier: 'beauty', exportFormat: 'glb', wait: true)` 完成 Cycles GPU 精渲与洁净 GLB 导出。
 

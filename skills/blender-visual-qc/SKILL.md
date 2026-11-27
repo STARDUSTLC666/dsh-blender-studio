@@ -25,8 +25,8 @@ A `bpy` script that exits with code `0` can still produce a broken image: a hero
    ```
    Target **Grade `A` (`>= 90`)** with **zero `error` findings** before spending time on high-sample Cycles renders.
 2. **Generate the 2×2 Contact Sheet (`contact_sheet`)**:
-   Call `blender_render` with `action: "contact_sheet"` on the saved project (`id`, `revision`).
-   `dsh-blender-studio` automatically renders 4 calibrated angles and stitches them into one PNG:
+   Call `blender_render` with `action: "contact_sheet"` (`qualityTier: "draft"` for fast EEVEE 16spp 50% iteration) on the saved project (`id`, `revision`), then immediately inspect the returned PNG path with `read_image`.
+   `dsh-blender-studio` automatically adapts framing distance and `clip_start` from 4 cm watches/products up to 10 m vehicles, renders 4 calibrated angles, and stitches them into one PNG:
    - **Top-Left**: Front orthographic/elevation view (`-Y → +Y`) — verifies vertical alignment, symmetry, and floor grounding (`Z = 0`).
    - **Top-Right**: Three-quarter hero view — verifies overall silhouette, depth, and lighting modeling.
    - **Bottom-Left**: Top-down plan view (`+Z → -Z`) — reveals hidden interpenetration, spacing, and wall clearance.

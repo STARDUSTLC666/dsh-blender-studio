@@ -125,7 +125,7 @@ test('dsh-blender-studio exports exact Cordis metadata and all 9 bundled SKILL.m
   )
 })
 
-test('dsh-blender-studio apply(ctx) registers all 9 skills, all 6 tools including blender_health, HTTP routes, and disposes cleanly', async () => {
+test('dsh-blender-studio apply(ctx) registers all 9 skills, all 7 tools including blender_health and blender_workflow, HTTP routes, and disposes cleanly', async () => {
   const registeredSkills = new Map()
   const registeredTools = new Map()
   const registeredRoutes = []
@@ -183,7 +183,7 @@ test('dsh-blender-studio apply(ctx) registers all 9 skills, all 6 tools includin
 
   assert.deepEqual(
     [...registeredTools.keys()],
-    ['blender_health', 'blender_project', 'blender_render', 'blender_script', 'blender_bridge', 'blender_assets'],
+    ['blender_health', 'blender_project', 'blender_render', 'blender_script', 'blender_bridge', 'blender_assets', 'blender_workflow'],
   )
   assert.equal(registeredRoutes.length, 2)
   assert.equal(registeredRoutes[0].path, '/api/dsh-blender-studio/workbench')
@@ -202,7 +202,7 @@ test('dsh-blender-studio apply(ctx) registers all 9 skills, all 6 tools includin
   for (const fn of disposeListeners) fn()
   for (const fn of effectCleanups) fn()
   assert.equal(registeredSkills.size, 0, 'all 9 skills disposed')
-  assert.equal(registeredTools.size, 0, 'all 6 tools disposed')
+  assert.equal(registeredTools.size, 0, 'all 7 tools disposed')
   assert.equal(registeredRoutes.length, 0, 'both HTTP routes disposed')
 
   const postDispose = await healthTool.execute({})

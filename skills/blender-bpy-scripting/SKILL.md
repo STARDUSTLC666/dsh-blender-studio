@@ -185,10 +185,62 @@ Before executing `customScript` via `blender_script` (`validate`, `run_headless`
 
 Keep custom scripts pure and self-contained using `bpy`, `bmesh`, `mathutils`, `math`, `random`, and `json`. Use `random.Random(42)` for reproducible procedural results. Only request `allowUnsafe: true` if the user explicitly approves an advanced local workflow.
 
-## 5. Surgical Patching, `DSH_KIT` v2 & Cycles GPU Headless Diagnostics
+## 5. Surgical Reading & Patching, Exact `DSH_KIT` v2 Signatures & Cycles GPU Safety
 
-- **Surgical Patching for Large Scripts (`blender_script` `action: 'patch'`)**: When iterating on 40–256 KB engineering scripts, prefer `blender_script(action: 'patch', id, revision, find, replace, replaceAll?, note?)` over rewriting the entire script with `update_script`. Patching enforces static safety before write, fails loudly on missing (`SCRIPT_PATCH_NOT_FOUND`) or duplicate (`SCRIPT_PATCH_AMBIGUOUS`) targets, increments `revision`, and automatically saves a checkpoint of the prior script.
-- **24 Built-In `DSH_KIT` v2 Helpers**: Generated scripts and `customScript` automatically inherit `dsh_bevel`, `dsh_smooth`, `dsh_loft_profile`, `dsh_bolt_ring`, `dsh_wheel_assembly`, `dsh_louver_panel`, `dsh_array_radial`, `dsh_tube_along_points`, `dsh_ground_assembly`, `dsh_frame_camera_to_assembly`, 10 `dsh_mat_*` shaders, `dsh_setup_hero_studio`, `dsh_render_clay_override`, `dsh_setup_compositor`, and `dsh_add_dof` — plus `dsh_configure_cycles_device(scene, mode='auto')` for Cycles GPU auto-acceleration (`OPTIX` → `CUDA` → `METAL` → `HIP` → `ONEAPI` with safe `CPU` fallback controlled by `computeDevice: 'auto' | 'gpu' | 'cpu'`).
+- **Zero-Guess Script Reading (`blender_script` `action: 'read'`)**: Before patching a large script after several edits, call `blender_script(action: 'read', id, startLine?, endLine?, pattern?)` to inspect exact line-numbered slices or regex matches — never use shell/grep on `project.json`.
+- **Surgical & Atomic Multi-Hunk Patching (`blender_script` `action: 'patch'`)**: Prefer `blender_script(action: 'patch', id, revision, find/replace | edits[], note?)` over rewriting the entire script with `update_script`. Patching enforces static safety before write, fails loudly on missing (`SCRIPT_PATCH_NOT_FOUND`) or duplicate (`SCRIPT_PATCH_AMBIGUOUS`) targets, increments `revision`, and automatically saves a checkpoint.
+- **Exact `DSH_KIT` v2 Helper Signatures (injected automatically into every script preamble — no imports needed)**:
+  ```python
+  # Scene / collections / primitives (all return bpy.types.Object)
+  dsh_clear_scene()
+  dsh_ensure_collection(name)
+  dsh_link_object(obj, collection_name="DSH_Scene")
+  dsh_hex_to_rgba(hex_color, alpha=1.0)
+  dsh_coerce_rgba(color, alpha=1.0)
+  dsh_set_smooth(mesh, smooth=True)
+  dsh_smooth(obj)
+  dsh_bevel(obj, width=0.015, segments=3)
+  dsh_set_bsdf(bsdf, socket_names, value)
+  dsh_assign_material(obj, mat)
+  dsh_make_mesh_box(name, size=(1.0, 1.0, 1.0), location=(0.0, 0.0, 0.0), bevel_width=0.0, collection="DSH_Scene")
+  dsh_make_mesh_cylinder(name, radius1=0.5, radius2=0.5, depth=1.0, segments=48, location=(0.0, 0.0, 0.0), bevel_width=0.0, collection="DSH_Scene")
+  dsh_make_mesh_sphere(name, radius=0.5, location=(0.0, 0.0, 0.0), u_segments=40, v_segments=24, collection="DSH_Scene")
+  dsh_make_mesh_torus(name, major_radius=1.0, minor_radius=0.08, major_seg=48, minor_seg=18, location=(0.0, 0.0, 0.0), collection="DSH_Scene")
+
+  # Hard-surface engineering helpers
+  dsh_loft_profile(name, sections, mat=None, closed=False, cap_ends=True, collection="DSH_Hero")
+  dsh_bolt_ring(name, radius, count=12, bolt_radius=0.02, bolt_height=0.025, axis="Z", center=(0.0, 0.0, 0.0), mat=None, collection="DSH_Hero")
+  dsh_wheel_assembly(name, radius=0.35, width=0.28, spokes=10, tire_mat=None, rim_mat=None, caliper_color="#f59e0b", location=(0.0, 0.0, 0.0), collection="DSH_Hero")
+  dsh_louver_panel(name, width=0.6, height=0.25, slots=6, depth=0.04, mat=None, location=(0.0, 0.0, 0.0), collection="DSH_Hero")
+  dsh_array_radial(obj, count, axis="Z", center=(0.0, 0.0, 0.0))
+  dsh_tube_along_points(name, points, radius=0.02, mat=None, bevel_res=6, collection="DSH_Hero")
+  dsh_ground_assembly(objs, z=0.0)
+  dsh_frame_camera_to_assembly(cam, objs, azimuth_deg=35.0, elevation_deg=20.0, lens_mm=58.0, margin=1.18)  # scales accurately from 4cm watches to 10m vehicles!
+
+  # Materials (all return bpy.types.Material, Blender 3.6–5.x safe)
+  dsh_create_material(name, preset, color_rgba, emission_strength=0.0)  # presets: clay_matte, brushed_metal, frosted_glass, ceramic_gloss, toon_cel
+  dsh_mat_car_paint(name, color, metallic=0.82, clearcoat=1.0)
+  dsh_mat_carbon_fiber(name="Mat_Carbon_Fiber")
+  dsh_mat_brushed_metal(name, color=(0.74, 0.77, 0.82), roughness=0.25)
+  dsh_mat_anodized_metal(name, color="#1d4ed8", roughness=0.22)
+  dsh_mat_heat_blued_titanium(name="Mat_Heat_Blued_Titanium")
+  dsh_mat_copper_gold(name, variant="copper", roughness=0.22)  # variant: 'copper' | 'gold' | 'brass'
+  dsh_mat_tinted_glass(name, color=(0.12, 0.18, 0.24), roughness=0.04)
+  dsh_mat_rubber_tire(name="Mat_Rubber_Tire")
+  dsh_mat_emissive_led(name, color, strength=8.0)
+  dsh_mat_matte_armor(name, color=(0.24, 0.28, 0.26))
+
+  # Lighting / Studio / Camera / Post / Compute
+  dsh_add_light(name, light_type, location, energy, color=(1.0, 1.0, 1.0), size=2.0, target=(0.0, 0.0, 0.8), collection="DSH_Lights")
+  dsh_setup_lighting(preset, accent_hex)
+  dsh_setup_hero_studio(style="dark_cyclorama", accent_color="#4176e6", scale=1.0)  # pass scale=0.1 for ~15cm product photography, scale=1.0 for 2-5m vehicles
+  dsh_setup_camera(preset, frame_start, frame_end, target=(0.0, 0.0, 0.85), distance_scale=1.0)
+  dsh_add_dof(cam, target_obj, fstop=4.0)
+  dsh_setup_compositor(glare=True, glare_threshold=1.15)
+  dsh_render_clay_override(enable=True, color=(0.76, 0.77, 0.79, 1.0))
+  dsh_configure_cycles_device(scene, mode="auto")  # respects host auto GPU->CPU crash fallback when DSH_PROJECT["computeDevice"]=="cpu"
+  ```
+- **Cycles GPU Crash Auto-Fallback**: When `computeDevice` is `'auto'`, `dsh-blender-studio` automatically retries once on Cycles CPU if a GPU driver/OPTIX/CUDA crash (`Illegal address in CUDA queue`) occurs, so you do not need to hardcode `mode='cpu'` inside custom scripts.
 - In `dsh-blender-studio` runner scripts, `customScript` accepts up to `256 KB` of pure `bpy` Python code (`NodeSocket` attributes like `socket.default_value` are safely allowed by `checkScriptSafety`). Uploaded project assets live in the injected `DSH_ASSETS_DIR` / `ASSETS_DIR` (and are cataloged in `DSH_ASSETS` by role: HDRIs auto-wire into World `ShaderNodeTexEnvironment`, 3D models auto-import onto the hero pedestal, and uploaded images stay accessible by filename). Always resolve paths with `os.path.join(ASSETS_DIR, filename)` and check `os.path.isfile(...)` before calling `bpy.data.images.load(...)`.
 - Never call `bpy.ops.wm.redraw_timer()` or access `bpy.context.space_data` / `bpy.context.region_3d` without guarding `if not bpy.app.background:` — those objects are `None` in headless mode.
 - Keep `print()` logs concise and structured (the runner keeps a rolling 80-line ring buffer); avoid printing per-vertex loops.
