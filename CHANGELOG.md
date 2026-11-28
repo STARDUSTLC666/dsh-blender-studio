@@ -2,6 +2,12 @@
 
 [返回简介](README.md) · [完整说明](docs/REFERENCE.zh.md) · [Live Bridge 指南](docs/BRIDGE.md) · [验证说明](docs/VALIDATION.md)
 
+## 0.6.1 (2026-11-28)
+
+- 更新详情页现在会保留较新检查的结果，慢轮询返回时不再把版本或任务状态退回旧值。
+- Keep newer update-check results and job status when an older background request finishes later.
+- 使用共享构建器注册 Blender Studio 的独立更新入口；与 Suite 同时安装时仍可单独检查更新。
+
 ## [0.6.0] - 2026-11-28
 
 - **全新 3D 生产工作流录制、配方库与跨工程一键回放（第 7 个工具 `blender_workflow` + 第 5 工作台页签「工作流」）**：

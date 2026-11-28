@@ -1,6 +1,6 @@
 {
   "name": "dsh-blender-studio",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "DeepSeek Harness Blender 3D 创作与渲染工作台插件：7 工具与 9 技能（兼容 Blender 3.6–5.x），支持工作流录制/配方保存/JSON 导入导出/一键复现重放、Headless CLI（Cycles GPU 自动加速与崩溃回退 CPU / OPTIX 安全白模 / EEVEE 4.2+ 光追 / 产品级尺度自适应多机位分镜与 numpy 四视角质检 / MP4 / 自动去背景 GLB·FBX·OBJ·STL·.blend）、实时 Lookdev 覆写、脚本行号读取与原子多段 patch_script、wait 同步等待、可选本地回环 Live Bridge、8 模板 + 5 高阶范本、24 项 DSH_KIT、QC-3D、4 阶段流水线、PBR GLB 网格视口 v3、A/B 对比及 13 套主题 / 8 套字体。",
   "type": "module",
   "main": "lib/index.js",
@@ -75,7 +75,7 @@
     "fflate": "0.8.3",
     "proper-lockfile": "4.1.2",
     "yaml": "^2.9.0",
-    "@stardustlc/dsh-updates": "0.2.10"
+    "@stardustlc/dsh-updates": "0.2.11"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
